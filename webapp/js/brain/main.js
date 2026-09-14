@@ -1,14 +1,14 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Brain monitor — a live window into the local Gemini agent loop. Not a page:
+// Brain monitor — a live window into the local agent loop. Not a page:
 // the Agent page embeds it as its deep view (createBrainMonitor), flipped in
 // over the camera stage while the agent panel stays docked alongside.
 //
 // Deep telemetry rides /brain/trace (JSON on std_msgs/String, published by
 // brain_client's BrainAgent): turn lifecycle with every image the model was
 // sent (head camera, wrist camera, event images), the full input text and
-// system instruction, tool calls with args + outcomes, think latencies, the
+// system prompt, tool calls with args + outcomes, think latencies, the
 // event queue, and a 1 Hz snapshot heartbeat. Recent turns are kept so any
 // turn row can be opened in the inspector overlay — the complete model input
 // and output for that turn. Everything else (skill runs, pose, live camera
@@ -486,54 +486,81 @@ export function createBrainMonitor(root, opts = {}) {
     return div;
   }
 
-  /** One request `contents` entry as a card: role tag + every part rendered —
-   * text as prose, inlineData as the actual image, function calls/responses
-   * as mono lines. Nothing summarized, nothing dropped.
-   * @param {any} content @param {boolean} isNew */
-  function contentCard(content, isNew) {
+  /** A message's content as parts: a plain string is a single text part.
+   * @param {any} content @returns {any[]} */
+  function contentParts(content) {
+    if (Array.isArray(content)) return content;
+    return content ? [{ type: "text", text: String(content) }] : [];
+  }
+
+  /** A message's content flattened to prose — the system prompt, a tool result.
+   * @param {any} content */
+  function contentText(content) {
+    return contentParts(content)
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("");
+  }
+
+  /** @param {string} cls @param {string} text */
+  function cardLine(cls, text) {
+    const div = document.createElement("div");
+    div.className = cls;
+    div.textContent = text;
+    return div;
+  }
+
+  /** Every tool call's name by id, so a `tool` message reads back to its call.
+   * @param {any[]} messages @returns {Map<string, string>} */
+  function toolCallNames(messages) {
+    /** @type {Map<string, string>} */
+    const names = new Map();
+    for (const m of messages) for (const call of m.tool_calls || []) names.set(call.id, call.function?.name ?? "?");
+    return names;
+  }
+
+  /** The thought signature the assistant message (or one of its calls) carries
+   * and replays verbatim — shown by size, since it is opaque bytes.
+   * @param {HTMLElement} card @param {any} carrier */
+  function appendSignature(card, carrier) {
+    const sig = carrier.extra_content?.google?.thought_signature;
+    if (sig) card.append(cardLine("fn sig", `[thought_signature · ${String(sig).length} chars]`));
+  }
+
+  /** One request message as a card: role tag + content rendered — text as
+   * prose, image_url parts as the actual image, tool calls and their results as
+   * mono lines. Nothing summarized, nothing dropped.
+   * @param {any} message @param {boolean} isNew @param {Map<string, string>} callNames */
+  function messageCard(message, isNew, callNames) {
     const card = document.createElement("div");
-    const role = content.role || "?";
-    card.className = "br-i-turncard " + role + (isNew ? " new" : "");
-    const tag = document.createElement("div");
-    tag.className = "role";
-    tag.textContent = role + (isNew ? " · this turn" : "");
-    card.append(tag);
-    let imgs = null;
-    for (const part of content.parts || []) {
-      if (part.inlineData) {
-        if (!imgs) {
-          imgs = document.createElement("div");
-          imgs.className = "imgs";
-          card.append(imgs);
-        }
-        const img = document.createElement("img");
-        img.src = `data:${part.inlineData.mimeType || "image/jpeg"};base64,${part.inlineData.data}`;
-        imgs.append(img);
-      } else if (part.functionCall) {
-        const div = document.createElement("div");
-        div.className = "fn";
-        div.textContent = `functionCall ${part.functionCall.name}(${JSON.stringify(part.functionCall.args ?? {})})`;
-        card.append(div);
-      } else if (part.functionResponse) {
-        const div = document.createElement("div");
-        div.className = "fn";
-        div.textContent =
-          `functionResponse ${part.functionResponse.name} → ` +
-          `${JSON.stringify(part.functionResponse.response?.outcome ?? part.functionResponse.response ?? "")}`;
-        card.append(div);
-      } else {
-        const div = document.createElement("div");
-        div.className = "txt";
-        div.textContent = part.text ?? JSON.stringify(part);
-        card.append(div);
-      }
-      if (part.thoughtSignature) {
-        const sig = document.createElement("div");
-        sig.className = "fn sig";
-        sig.textContent = `[thoughtSignature · ${String(part.thoughtSignature).length} chars]`;
-        card.append(sig);
-      }
+    const role = message.role || "?";
+    // The card CSS calls the assistant's side "model".
+    card.className = "br-i-turncard " + (role === "assistant" ? "model" : role) + (isNew ? " new" : "");
+    card.append(cardLine("role", role + (isNew ? " · this turn" : "")));
+    if (role === "tool") {
+      const name = callNames.get(message.tool_call_id) || message.tool_call_id || "?";
+      card.append(cardLine("fn", `${name} → ${contentText(message.content)}`));
+      return card;
     }
+    let imgs = null;
+    for (const part of contentParts(message.content)) {
+      if (part.type !== "image_url") {
+        card.append(cardLine("txt", part.type === "text" ? part.text : JSON.stringify(part)));
+        continue;
+      }
+      if (!imgs) {
+        imgs = document.createElement("div");
+        imgs.className = "imgs";
+        card.append(imgs);
+      }
+      const img = document.createElement("img");
+      img.src = part.image_url?.url || "";
+      imgs.append(img);
+    }
+    for (const call of message.tool_calls || []) {
+      card.append(cardLine("fn", `tool_call ${call.function?.name}(${call.function?.arguments ?? ""})`));
+      appendSignature(card, call);
+    }
+    appendSignature(card, message);
     return card;
   }
 
@@ -542,13 +569,14 @@ export function createBrainMonitor(root, opts = {}) {
     if (!rec) return;
     const { start, end, request: req } = rec;
     const n = (start.frames || []).length;
+    /** @type {any[]} */
+    const messages = req?.messages || [];
     // Count history images straight from the request body when we have it.
-    const reqImgs = req
-      ? (req.contents || []).reduce(
-          (a, /** @type {any} */ c) => a + (c.parts || []).filter((/** @type {any} */ p) => p.inlineData).length,
-          0,
-        )
-      : 0;
+    const reqImgs = messages.reduce(
+      (a, /** @type {any} */ m) =>
+        a + contentParts(m.content).filter((/** @type {any} */ p) => p.type === "image_url").length,
+      0,
+    );
     const nHist = req ? reqImgs - n : (start.history_images ?? 0) * n;
     $(".br-i-title").textContent = `turn ${start.turn}`;
     $(".br-i-meta").textContent =
@@ -572,13 +600,13 @@ export function createBrainMonitor(root, opts = {}) {
     conv.innerHTML = "";
     $(".br-i-conv-h").hidden = /** @type {HTMLElement} */ (conv).hidden = !req;
     if (req) {
-      const cfg = document.createElement("div");
-      cfg.className = "br-i-cfg";
-      cfg.textContent = `generationConfig ${JSON.stringify(req.generationConfig ?? {})}`;
-      conv.append(cfg);
-      const contents = req.contents || [];
-      contents.forEach((/** @type {any} */ c, /** @type {number} */ i) =>
-        conv.append(contentCard(c, i === contents.length - 1)),
+      const knobs = Object.fromEntries(Object.entries(req).filter(([key]) => key !== "messages" && key !== "tools"));
+      conv.append(cardLine("br-i-cfg", JSON.stringify(knobs)));
+      // The system message has its own panel below; here it would bury the turn.
+      const convo = messages.filter((/** @type {any} */ m) => m.role !== "system");
+      const callNames = toolCallNames(convo);
+      convo.forEach((/** @type {any} */ m, /** @type {number} */ i) =>
+        conv.append(messageCard(m, i === convo.length - 1, callNames)),
       );
       const decl = document.createElement("details");
       decl.className = "br-i-json";
@@ -591,7 +619,8 @@ export function createBrainMonitor(root, opts = {}) {
 
     const tools = $(".br-i-tools");
     tools.innerHTML = "";
-    for (const t of start.tools || []) {
+    const armed = start.tools || (req?.tools || []).map((/** @type {any} */ t) => t.function?.name);
+    for (const t of armed) {
       const chip = document.createElement("span");
       chip.className = "br-call";
       chip.textContent = t;
@@ -613,7 +642,7 @@ export function createBrainMonitor(root, opts = {}) {
     }
 
     $(".br-i-sys pre").textContent =
-      req?.systemInstruction?.parts?.[0]?.text ||
+      contentText(messages.find((/** @type {any} */ m) => m.role === "system")?.content) ||
       start.system ||
       "(system prompt not reported by this robot's trace)";
   }

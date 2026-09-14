@@ -2,10 +2,10 @@
 # Copyright (c) 2026 Innate Inc
 """The ``/brain/search_memory`` action: spatial-memory recall as a capability.
 
-The capability server pattern (arm_sdk_server, the nav stack): the state that
-makes search fast and safe — the Gemini context cache, the transport, the
-credentials — stays in the brain process with :class:`MemorySearch`; skills
-and SDK users reach it through this action and never see any of it.
+The capability server pattern (arm_sdk_server, the nav stack): what a search
+needs — the remembered frames, the transport, the credentials — stays in the
+brain process with :class:`MemorySearch`; skills and SDK users reach it
+through this action and never see any of it.
 
 Runs on its own node and spin thread because a search blocks for seconds and
 the brain node is spun single-threaded — recall must never stall a turn.
@@ -77,7 +77,6 @@ def _to_result(verdict: SearchVerdict) -> SearchMemory.Result:
     result.explanation = verdict.explanation
     result.error = verdict.error
     result.latency_sec = float(verdict.latency_sec)
-    result.cached = verdict.cached
     if verdict.memory is not None:
         result.x = verdict.memory.x
         result.y = verdict.memory.y

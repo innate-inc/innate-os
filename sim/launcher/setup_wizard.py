@@ -10,9 +10,11 @@ from pathlib import Path
 
 from config import (
     CLI_SIM,
+    DIRECT_BACKEND,
     ENV_PATH,
     GEMINI_API_KEY,
     INNATE_SERVICE_KEY,
+    LLM_API_KEY,
     SECRET_ENV_KEYS,
     is_configured_secret_value,
     success,
@@ -413,9 +415,20 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     decides which way out it takes -- straight to Google with a Gemini key, or
     through the Innate proxy with a service key. Switching just uncomments the
     relevant key and comments out the others, so you can toggle back and forth
-    without re-pasting. Non-interactively, just report what the robot will pick.
+    without re-pasting. An OpenAI-compatible endpoint of your own outranks both
+    and brings its own key, so there is nothing here to ask about. Non-
+    interactively, just report what the robot will pick.
     """
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
+    if config["brain_backend"] == DIRECT_BACKEND:
+        key_line = (
+            f"{LLM_API_KEY} is set in {ENV_PATH.name}."
+            if is_configured_secret_value(LLM_API_KEY, user_env.get(LLM_API_KEY))
+            else f"Set its key as {LLM_API_KEY} in {ENV_PATH.name} if that server wants one."
+        )
+        success(f"The brain is pointed at your own OpenAI-compatible endpoint (llm_base_url). {key_line}")
+        return
+
     has_gemini = is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY))
     has_service_key = is_configured_secret(user_env.get(INNATE_SERVICE_KEY))
 
@@ -427,7 +440,8 @@ def configure_brain_backend(config: dict[str, object]) -> None:
         else:
             warn(
                 f"No brain key configured. Add GEMINI_API_KEY (your own Gemini key) or "
-                f"INNATE_SERVICE_KEY (Innate proxy) to {ENV_PATH}."
+                f"INNATE_SERVICE_KEY (Innate proxy) to {ENV_PATH}, or point Settings → AI "
+                "models at an OpenAI-compatible server."
             )
         report_configured_keys(config)
         return

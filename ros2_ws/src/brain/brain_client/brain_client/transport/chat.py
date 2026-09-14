@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from brain_client.brain.context import split_tool_narration
+from brain_client.brain.context import is_bare_wait, split_tool_narration
 from brain_client.common.enums import StrEnum
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
@@ -172,7 +172,7 @@ class SpeechStreamer:
         sentence, truncated = split_tool_narration(sentence.strip())
         if truncated:
             self._muted = True
-        if not re.search(r"[a-zA-Z0-9]", sentence):
+        if not re.search(r"[a-zA-Z0-9]", sentence) or is_bare_wait(sentence):
             return
         # The first sentence supersedes stale queued utterances (a reply
         # mid-playback keeps its rest, see _survives_flush in tts.py); the

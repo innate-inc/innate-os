@@ -48,7 +48,7 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
+from brain_client.brain.transport import LLM_API_KEY_ENV, Endpoint, parse_extra_body, pick_memory_wire, pick_wire
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -126,7 +126,8 @@ class BrainClientNode(Node):
         self._startup()
 
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] BrainClientNode initialized (local Gemini brain via {self.brain.backend})\033[0m"
+            f"\033[1;92m[BrainClient] BrainClientNode initialized (local brain via {self.brain.backend}, "
+            f"memory search via {self._memory_backend})\033[0m"
         )
 
     # ================= construction helpers =================
@@ -202,10 +203,24 @@ class BrainClientNode(Node):
         self.memory_store = MemoryStore(
             get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
         )
-        rest = pick_rest(self._proxy)
+        # The agent thinks over the brain's wire; the spatial memory searches
+        # over the same one unless memory_llm_base_url gives it a route of its own.
+        wire = pick_wire(self._proxy, Endpoint.parse(cfg.llm_base_url, LLM_API_KEY_ENV))
+        transport, self._backend = wire.chat, wire.backend
+        extra_body = parse_extra_body(cfg.llm_extra_body, self.get_logger())
+        memory_wire = pick_memory_wire(self._proxy, cfg.memory_llm_base_url, wire)
+        self._memory_backend = memory_wire.backend
         self.memory_search = (
-            MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
-            if rest is not None
+            MemorySearch(
+                self.memory_store,
+                memory_wire.chat,
+                model=cfg.memory_llm_model,
+                thinking=cfg.memory_llm_thinking,
+                logger=self.get_logger(),
+                extra_body=parse_extra_body(cfg.memory_llm_extra_body, self.get_logger()),
+                gemini=memory_wire.gemini,
+            )
+            if memory_wire.chat is not None
             else None
         )
         self.memory_recorder = MemoryRecorder(
@@ -247,7 +262,9 @@ class BrainClientNode(Node):
             roster=self.roster,
             chat=self.chat,
             gaze=self.gaze,
-            proxy=self._proxy,
+            transport=transport,
+            backend=self._backend,
+            extra_body=extra_body,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,
@@ -620,9 +637,7 @@ class BrainClientNode(Node):
     def _svc_clear_memories(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         cleared = self.memory_store.clear()
         if self.memory_search is not None:
-            # Forgetting must reach the server-side copies too: the context
-            # cache and the uploaded frames would otherwise keep serving the
-            # forgotten views until their own expiry.
+            # The context cache would otherwise keep serving the forgotten views until its TTL.
             self.memory_search.forget()
         self.get_logger().info(f"[BrainClient] Cleared {cleared} spatial memories on user request")
         response.success = True
@@ -638,9 +653,6 @@ class BrainClientNode(Node):
             response.message = "No such memory — the map may have been re-made; refresh and retry"
             return response
         if self.memory_search is not None:
-            # Forgetting must reach the server-side copies too (same reason as
-            # clear): the frame's upload and the cache embedding it would
-            # otherwise keep serving the forgotten view until their own expiry.
             self.memory_search.forget_frame(memory)
         self.get_logger().info(f"[BrainClient] Forgot spatial memory {memory.id} on user request")
         response.success = True

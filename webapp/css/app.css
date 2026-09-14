@@ -9077,44 +9077,6 @@ select.skill-input {
   }
 }
 
-.agent-reset {
-  flex: 0 0 36px;
-  display: inline-grid;
-  width: 36px;
-  padding: 0;
-  /* Secondary action: same material as the toggle, neutral instead of accent —
-     the colour is the only thing separating them. */
-  color: var(--ctl-text);
-  background: var(--ctl-glass);
-  border: 1px solid var(--hairline-strong);
-  border-radius: 9px;
-  box-shadow: var(--ctl-sheen);
-  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
-  place-items: center;
-}
-
-.agent-reset-icon {
-  display: block;
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  mask: url("/js/agent/icons/refresh.svg") center / contain no-repeat;
-  -webkit-mask: url("/js/agent/icons/refresh.svg") center / contain no-repeat;
-}
-
-.agent-reset:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--ctl-glass-hover);
-  border-color: rgb(255 255 255 / 26%);
-}
-
-.agent-reset:disabled {
-  color: var(--ctl-text-off);
-  background: var(--ctl-field);
-  border-color: var(--hairline);
-  box-shadow: none;
-  cursor: not-allowed;
-}
 
 .agent-stream-head {
   display: flex;
@@ -9516,7 +9478,7 @@ select.skill-input {
   top: 0;
   right: 64px;
   bottom: 0;
-  left: 18px;
+  left: 64px; /* .agent-compose padding-left 6 + reset 42 + gap 4 + input padding-left 12 */
   display: flex;
   /* Centred rather than offset to a measured line: the input centres its own
      single line too, so the two coincide whatever the padding is. */
@@ -9530,6 +9492,11 @@ select.skill-input {
   pointer-events: none;
   user-select: none;
   transition: opacity 500ms cubic-bezier(0.455, 0.03, 0.515, 0.955), transform 500ms cubic-bezier(0.455, 0.03, 0.515, 0.955);
+}
+
+/* The interface's own question hides the reset button: the prompt follows the caret. */
+.agent-compose:has(.agent-compose-reset[hidden]) .agent-compose-placeholder {
+  left: 18px; /* .agent-compose padding-left 6 + input padding-left 12 */
 }
 
 .agent-compose-placeholder.exiting {
@@ -9571,6 +9538,69 @@ select.skill-input {
   width: 42px;
   height: 42px;
   margin-bottom: 4px;
+}
+
+/* Leads the composer as a quiet ghost of the send button: the same circle,
+   no fill until hovered, so it reads as "start over here" without competing
+   with sending. */
+.agent-compose-reset {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--ctl-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  transition: transform 120ms ease-out, background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.agent-compose-reset::before {
+  position: absolute;
+  inset: -8px;
+  content: "";
+}
+
+.agent-compose-reset-icon {
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("/js/agent/icons/refresh.svg") center / contain no-repeat;
+  mask: url("/js/agent/icons/refresh.svg") center / contain no-repeat;
+}
+
+.agent-compose-reset:disabled {
+  color: var(--ctl-text-off);
+  cursor: default;
+}
+
+.agent-compose-reset:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent-compose-reset:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--ctl-glass-hover);
+    border-color: var(--hairline-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-compose-reset:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+.agent-compose-reset:focus-visible {
+  outline: 2px solid var(--agent-purple);
+  outline-offset: 2px;
 }
 
 .agent-compose-send {
@@ -9890,12 +9920,12 @@ select.skill-input {
   }
 
   .agent-compact .agent-compose-placeholder {
-    left: 16px; /* .agent-compose padding-left 4 + input padding-left 12 */
+    left: 62px; /* .agent-compose padding-left 4 + reset 42 + gap 4 + input padding-left 12 */
   }
 
   /* The buttons set the row's height here, so the nudge that lifts them off
      the taller desktop row would leave them high. */
-  .agent-compact :is(.agent-compose-mic, .agent-compose-send) {
+  .agent-compact :is(.agent-compose-reset, .agent-compose-mic, .agent-compose-send) {
     align-self: center;
     margin-bottom: 0;
   }
@@ -11115,6 +11145,7 @@ select.skill-input {
 }
 
 .mem-panel-clear {
+  margin-left: auto;
   padding: 2px 8px;
   font-size: 10px;
   color: var(--muted);

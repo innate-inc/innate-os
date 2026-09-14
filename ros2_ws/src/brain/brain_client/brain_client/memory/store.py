@@ -287,11 +287,6 @@ class MemoryStore:
         with self._lock:
             return self._dir / f"{memory_id}.jpg" if self._dir is not None else None
 
-    def files_index_path(self) -> Path | None:
-        """Where the current map's server-side-upload registry lives (brain/frame_files.py)."""
-        with self._lock:
-            return self._dir / "files.json" if self._dir is not None else None
-
     def add(self, x: float, y: float, theta: float, stamp: float, jpeg: bytes) -> Memory | None:
         """Record a new memory; None when no map is loaded."""
         with self._lock:
@@ -315,8 +310,8 @@ class MemoryStore:
             self._commit_locked()
 
     def clear(self) -> int:
-        """Forget every memory on the current map — images, index, and upload
-        registry — returning how many were forgotten."""
+        """Forget every memory on the current map — images and index — returning
+        how many were forgotten."""
         with self._lock:
             if self._dir is None or not self._memories:
                 return 0
@@ -420,13 +415,12 @@ class MemoryStore:
             for stale in self._dir.glob("*.jpg*"):  # images and any crash-orphaned .jpg.tmp
                 stale.unlink(missing_ok=True)
             (self._dir / "index.json").unlink(missing_ok=True)
-            (self._dir / "files.json").unlink(missing_ok=True)
         self._memories = []
         self._next_id = 1
 
     def _write_image_locked(self, memory_id: int, jpeg: bytes) -> None:
-        # tmp + replace like the index: the proxy and upload threads read these
-        # files without the lock and must never see a torn frame.
+        # tmp + replace like the index: the webapp proxy and the memory search
+        # read these files without the lock and must never see a torn frame.
         assert self._dir is not None
         self._dir.mkdir(parents=True, exist_ok=True)
         tmp = self._dir / f"{memory_id}.jpg.tmp"

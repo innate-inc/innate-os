@@ -202,10 +202,11 @@ def cmd_up(
             )
             return
         if config["brain_backend"] == NO_BACKEND:
-            warn("No cloud LLM key configured — the sim is running WITHOUT an agent.")
+            warn("No model configured — the sim is running WITHOUT an agent.")
             warn(
                 "Add GEMINI_API_KEY (your own Gemini key) or INNATE_SERVICE_KEY (Innate proxy) to "
-                f"{ENV_PATH}, or run `{CLI_SIM} setup`, then restart."
+                f"{ENV_PATH} (or run `{CLI_SIM} setup`), or point Settings → AI models at an "
+                "OpenAI-compatible server, then restart."
             )
         success("Innate sim runtime is up.")
         show_runtime_dashboard(config, watch=watch)

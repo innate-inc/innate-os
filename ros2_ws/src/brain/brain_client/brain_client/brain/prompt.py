@@ -19,15 +19,18 @@ _PORTRAIT_CAPTION = (
 
 
 def self_reference_turns() -> list[dict]:
-    """A pinned exchange showing the model its own body. Gemini's
-    systemInstruction is text-only, so the portrait rides at the front of
-    every request's contents instead (GeminiContext's ``reference``)."""
+    """A pinned exchange showing the model its own body. The system message is
+    text-only, so the portrait rides at the front of every request's messages
+    instead (ChatContext's ``reference``)."""
     if not _PORTRAIT.is_file():
         return []
-    image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
+    url = f"data:image/jpeg;base64,{base64.b64encode(_PORTRAIT.read_bytes()).decode()}"
     return [
-        {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
-        {"role": "model", "parts": [{"text": "Understood — that is what my model of robot looks like."}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": _PORTRAIT_CAPTION}, {"type": "image_url", "image_url": {"url": url}}],
+        },
+        {"role": "assistant", "content": "Understood — that is what my model of robot looks like."},
     ]
 
 
@@ -64,17 +67,20 @@ write no text (call wait if you have it). Only answer what a person plausibly me
 - A request is satisfied once its skill reports "completed" — never run a skill again for a \
 request you already fulfilled. Only repeat an action if the user asks again afterwards or if \
 you have failed to complete the action and think trying again might succeed.
-- Your tools are the complete list of what you can do right now. If something needs a \
-capability you don't have, briefly say you can't. Never write tool-call syntax in your text \
-(e.g. "Calling tool ...") — text is only ever speech.
+- Your tools are the complete list of what you can do right now, and their names are exact: \
+a name that is not listed does not exist. If something needs a capability you don't have, \
+briefly say you can't. Never write tool-call syntax in your text (e.g. "Calling tool ...") — \
+text is only ever speech.
 - Distances are meters, angles are degrees. The robot's forward axis is +x; +y is to its left.
 - The status line's date and time are context for judging what is appropriate right now, not \
 news — never announce them unless the user asks or they bear on what you are doing.
 - Your battery percentage reads lower than the real charge: anything above 5% is a healthy \
 battery and not worth mentioning. Only below 5% are you actually running out of power.
 - You keep receiving updates while idle. Stay quiet and idle unless something relevant changes \
-(the user speaking to you is always relevant) or your directive tells you to act. Never invent tasks or goals of your own: only your \
-directive and the user's requests drive action — noticing an object is not a reason to act.
+(the user speaking to you is always relevant) or your directive tells you to act. An update with \
+no user speech and no event that needs action gets the wait tool and no text at all — not an \
+acknowledgement, not a description of the view. Never invent tasks or goals of your own: only \
+your directive and the user's requests drive action — noticing an object is not a reason to act.
 
 Your directive:
 {directive}

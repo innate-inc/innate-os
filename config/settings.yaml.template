@@ -199,17 +199,50 @@
 #     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────
-# (Gemini credentials are connectivity and live in .env.) The TTS voice is global;
+# (Model credentials are connectivity and live in .env.) The TTS voice is global;
 # set it under /** above.
+#
+# The brain speaks Chat Completions and nothing else, so any OpenAI-compatible
+# server can drive it. llm_base_url is that server's /v1 root — a vLLM or Ollama
+# on the LAN, NVIDIA's hosted NIM, OpenAI — with its key in .env as LLM_API_KEY.
+# Leave it empty for Gemini (through the Innate proxy, or GEMINI_API_KEY).
+# llm_thinking is sent as reasoning_effort; "" leaves the server's own default, and
+# is the default too once llm_base_url names an endpoint (minimal is Gemini-measured).
+# llm_extra_body is a JSON object merged beneath every request — a field the
+# request sets itself, like the memory search's temperature 0, keeps — for the
+# knobs one server has and the rest do not.
 # brain_client_node:
 #   ros__parameters:
 #     vertical_fov: 80.0            # camera vertical field of view (degrees)
 #     x_cam: 0.0197                 # camera forward offset from base_link (m)
 #     height_cam: 0.19663           # camera height above the floor (m)
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
-#     send_arm_camera_image: true   # also send the arm wrist camera image to the model
+#     send_arm_camera_image: true   # also send the arm wrist camera image to the model.
+#                                   # A local model can spend thousands of tokens per frame: on a small
+#                                   # context window set this false and history_max_image_turns: 1
 #     log_everything: true          # log every turn's full input
-#     gemini_model: "gemini-3.6-flash"
+#     llm_model: "gemini-3.6-flash"
+#     llm_base_url: ""              # e.g. "http://192.168.1.20:8000/v1" (vLLM),
+#                                   # "http://192.168.1.20:11434/v1" (Ollama),
+#                                   # "https://integrate.api.nvidia.com/v1" (NVIDIA)
+#     llm_thinking: "minimal"       # reasoning_effort: minimal | low | medium | high; "" = server default.
+#                                   # A model that thinks by default (Nemotron 3) ignores it — turn thinking
+#                                   # off in llm_extra_body instead, or idle turns get long and chatty
+#     llm_extra_body: ""            # JSON merged into every request. Measured recipe for Nemotron-3 Nano
+#                                   # Omni on vLLM (thinking off, no echo loops):
+#                                   # '{"chat_template_kwargs": {"enable_thinking": false}, "temperature": 0.6,
+#                                   #   "top_p": 0.95, "repetition_penalty": 1.1}'
+#                                   # and serve it with --chat-template config/llm/nemotron3_omni_chat_template.jinja:
+#                                   # the shipped template prints the robot's own past replies into the prompt
+#                                   # as [{'type': 'text', ...}] and the model learns to answer in kind
+#     memory_llm_base_url: ""       # Where the spatial-memory search sends its frames. "" = the brain's
+#                                   # own endpoint and knobs; "gemini" = Gemini through the proxy or
+#                                   # GEMINI_API_KEY (with its context cache) while the brain runs
+#                                   # elsewhere; a /v1 root = a server of its own, key in MEMORY_LLM_API_KEY
+#     memory_llm_model: ""          # "" = the brain's model on its endpoint, gemini-3.6-flash on "gemini"
+#     memory_llm_thinking: ""       # "" = the brain's on its endpoint, else that route's default; any level
+#                                   # sends reasoning_effort: low (a pick among frames gains nothing from more)
+#     memory_llm_extra_body: ""     # "" = the brain's extras on its endpoint, none elsewhere
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs

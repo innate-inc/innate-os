@@ -28,7 +28,6 @@ FOUND = SearchVerdict(
     memory=Memory(id=3, x=1.5, y=-0.5, theta=1.57, stamp=1000.0),
     image=JPEG,
     latency_sec=1.2,
-    cached=True,
 )
 
 
@@ -37,7 +36,7 @@ FOUND = SearchVerdict(
 
 def test_to_result_maps_a_found_verdict_completely():
     result = _to_result(FOUND)
-    assert result.found and result.cached and result.error == ""
+    assert result.found and result.error == ""
     assert (result.x, result.y, result.theta, result.seen_stamp) == (1.5, -0.5, 1.57, 1000.0)
     assert base64.b64decode(result.image_b64) == JPEG
     assert result.message == verdict_text(FOUND)
@@ -92,12 +91,11 @@ def test_begin_delivers_a_typed_verdict_through_the_reader():
         seen_stamp=1000.0,
         image_b64=base64.b64encode(JPEG).decode(),
         latency_sec=1.2,
-        cached=True,
     )
     reader = make_accessor(result_msg).begin("the kitchen")
     verdict = reader()
     assert verdict is not None and verdict.found and verdict.image == JPEG
-    assert verdict.x == 1.5 and verdict.cached and verdict.message == "Found it."
+    assert verdict.x == 1.5 and verdict.message == "Found it."
 
 
 def test_begin_unblocks_the_waiter_on_every_failure_path():

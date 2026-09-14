@@ -2,22 +2,21 @@
 # Copyright (c) 2026 Innate Inc
 """Recall over the spatial memory: which remembered view answers a request.
 
-Mobility-VLA-style retrieval: every remembered frame goes to Gemini, labeled
-with its id, capture time, and map pose, and the model picks the one that
-best serves the query — directly ("the kitchen") or by reasoning ("I am
-hungry").
+Mobility-VLA-style retrieval: every remembered frame rides one blocking Chat
+Completions call, labeled with its id, capture time, and map pose, and the
+model picks the one that best serves the query — directly ("the kitchen") or
+by reasoning ("I am hungry"). A server that refuses that many frames in one
+request (an image cap, a small context window) gets them as a tournament of
+batches instead, the batch winners meeting in a final.
 
-Bandwidth is tiered, and every tier is a pure optimization that degrades
-without changing answers. Each frame's bytes cross the network once, at
-record time — a background chore (:mod:`frame_files`) uploads them to the
-Gemini Files API and requests reference them as ``fileData``. On top rides an
-explicit context cache: fresh → the search sends only the question; stale →
-the search *still* uses it and appends the delta (added/refreshed frames plus
-short supersede/retire notes) — a search is always exactly one round trip and
-never waits for maintenance (cache builds happen only in :meth:`warm`'s
-background thread). A frame not yet uploaded rides ``inlineData``; a backend
-without an endpoint latches that tier off, bottoming out at today's
-all-inline behavior.
+On Gemini the frames ride an explicit context cache instead of every request.
+The cache is built in the background (:meth:`warm`, on the recorder's 1 Hz
+tick, once recording has settled) through Gemini's native REST and referenced
+from the search's Chat Completions request: fresh → the search sends only the
+question; stale → it *still* rides the cache and appends the delta (added or
+refreshed frames plus short supersede/retire notes). A search is always
+exactly one round trip and never waits for maintenance; a route without the
+cache endpoints, or a memory too small to cache, answers from the frames.
 
 Every search concludes in a :class:`SearchVerdict` — one structured outcome
 for every consumer: the ``/brain/search_memory`` action server that skills
@@ -37,25 +36,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from brain_client.brain.frame_files import FrameFiles
-from brain_client.brain.transport import (
-    CACHED_CONTENTS_PATH,
-    GENERATE_PATH,
-    UNSUPPORTED_ENDPOINT_STATUSES,
-    GeminiHttpError,
-)
+from brain_client.brain.transport import CACHED_CONTENTS_PATH, UNSUPPORTED_ENDPOINT_STATUSES, ChatRejected
+from brain_client.brain.utils import merge_extras
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from rclpy.impl.rcutils_logger import RcutilsLogger
 
-    from brain_client.brain.transport import GeminiRest
+    from brain_client.brain.transport import ChatTransport, GeminiRest
     from brain_client.memory.store import Memory, MemorySnapshot, MemoryStore
 
 _TTL_SEC = 12 * 3600  # ~20k-token cache: 12h of storage costs ~$0.24, cheap insurance against cold starts
 _TTL_SAFETY_SEC = 120  # treat the cache as gone this long before Gemini actually expires it
-_MIN_FRAMES_TO_CACHE = 6  # fewer frames sit under the API's minimum cache size (and upload fast anyway)
+_MIN_FRAMES_TO_CACHE = 6  # fewer frames sit under the API's minimum cache size (and travel fast anyway)
 _WARM_AFTER_QUIET_SEC = 30.0  # let a recording burst settle before rebuilding the cache
 _MAX_STALE_FRAMES = 10  # a delta this big rides every search — rebuild even mid-burst
 _WARM_RETRY_SEC = 30.0  # after a transient cache-build failure — warm() rides a 1 Hz tick
@@ -75,24 +69,31 @@ _SYSTEM = (
     "remembered view plausibly helps, be honest and report no match."
 )
 
-_RESPONSE_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "found": {"type": "BOOLEAN"},
-        "frame": {"type": "INTEGER", "description": "id number of the best frame, 0 when found is false"},
-        "explanation": {
-            "type": "STRING",
-            "description": "one sentence: what the frame shows and why it serves the need",
+_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "memory_verdict",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "found": {"type": "boolean"},
+                "frame": {"type": "integer", "description": "id number of the best frame, 0 when found is false"},
+                "explanation": {
+                    "type": "string",
+                    "description": "one sentence: what the frame shows and why it serves the need",
+                },
+            },
+            "required": ["found", "frame", "explanation"],
         },
     },
-    "required": ["found", "frame", "explanation"],
 }
 
-_GENERATION_CONFIG = {
-    "responseMimeType": "application/json",
-    "responseSchema": _RESPONSE_SCHEMA,
-    "thinkingConfig": {"thinkingLevel": "low"},
-}
+
+Verdict = tuple[bool, int, str]
+"""The model's answer as parsed: found, frame id, explanation."""
+
+Frames = dict[int, str]
+"""A search's frames by memory id, each a JPEG as base64."""
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class _CacheHandle:
     revision: int
     map_name: str | None
     fingerprint: str
-    memories: tuple[Memory, ...]  # frame numbers resolve against what was cached, not the live store
+    memories: tuple[Memory, ...]  # frame ids resolve against what was cached, not the live store
     expires_monotonic: float
 
 
@@ -122,12 +123,24 @@ class SearchVerdict:
 
 
 class MemorySearch:
-    def __init__(self, store: MemoryStore, rest: GeminiRest, *, model: str, logger: RcutilsLogger):
+    def __init__(
+        self,
+        store: MemoryStore,
+        transport: ChatTransport,
+        *,
+        model: str,
+        thinking: str,
+        logger: RcutilsLogger,
+        extra_body: dict | None = None,
+        gemini: GeminiRest | None = None,
+    ):
         self._store = store
-        self._rest = rest
+        self._chat = transport
+        self._gemini = gemini  # None = a route without context caches: every search answers from the frames
         self._model = model
+        self._thinking = thinking
+        self._extra_body = extra_body or {}
         self._logger = logger
-        self._files = FrameFiles(store, rest, logger)
         self._cache: _CacheHandle | None = None
         self._cache_unsupported = False
         self._failed_revision: int | None = None  # the backend refused exactly this content (4xx); don't hammer
@@ -136,6 +149,7 @@ class MemorySearch:
         # Maintenance never holds _flight: a search must proceed mid-rebuild
         # (it rides the old handle — the swap is a single reference write).
         self._warming = threading.Lock()  # at most one cache rebuild
+        self._batch: int | None = None  # frames per request, once the server has refused them all at once
         # UI mirror, set by the composition root: every finished search's verdict
         # as a JSON-able dict (query, found, pose, explanation, latency, cached).
         self.on_result: Callable[[dict], None] | None = None
@@ -146,7 +160,7 @@ class MemorySearch:
         A stale-but-usable cache reports warm — the search rides it with a
         delta, so recall is still instant (rebuilds are warm()'s business).
         """
-        if self._cache_unsupported:
+        if self._gemini is None or self._cache_unsupported:
             return "unsupported"
         snapshot = self._store.snapshot()
         if len(snapshot.memories) < _MIN_FRAMES_TO_CACHE:
@@ -154,7 +168,7 @@ class MemorySearch:
         return "warm" if self._usable_cache(snapshot) is not None else "cold"
 
     def search(self, query: str) -> SearchVerdict:
-        """Blocking: ask Gemini which remembered frame serves the query.
+        """Blocking: ask the model which remembered frame serves the query.
 
         Never raises — failures come back as an ``error`` verdict every
         consumer (action result, webapp card) can render.
@@ -175,7 +189,7 @@ class MemorySearch:
 
     def _search_locked(self, query: str, started: float) -> SearchVerdict:
         """One round trip from the best context available NOW — a search never
-        builds a cache and never waits for an upload (that's warm()'s job)."""
+        builds a cache and never waits for one (that's warm()'s job)."""
         snapshot = self._store.snapshot()
         if not snapshot.memories:
             return SearchVerdict(
@@ -185,17 +199,9 @@ class MemorySearch:
             )
         cache = self._usable_cache(snapshot)
         if cache is not None:
-            # A stale cache still serves: the delta (new/refreshed frames plus
-            # supersede/retire notes) rides alongside the question.
-            body = {
-                "cachedContent": cache.name,
-                "contents": [_user([*self._delta_parts(cache, snapshot), {"text": _question(query)}])],
-                "generationConfig": _GENERATION_CONFIG,
-            }
             try:
-                response = self._rest.post(GENERATE_PATH.format(model=self._model), body)
-                return self._conclude(query, response, snapshot, started, cached=True)
-            except GeminiHttpError as error:
+                return self._conclude(query, self._ask_cached(query, cache, snapshot), snapshot, started, cached=True)
+            except ChatRejected as error:
                 if error.status >= 500:
                     raise
                 # The cache died server-side (expired early, deleted — including
@@ -203,22 +209,17 @@ class MemorySearch:
                 # mid-flight): forget the handle that failed, never a newer one.
                 if self._cache is cache:
                     self._cache = None
-                self._logger.warn(f"[Memory] cached search failed ({error}); retrying without it")
-        parts, _included = self._frame_parts(snapshot.memories)
-        body = {
-            "systemInstruction": {"parts": [{"text": _SYSTEM}]},
-            "contents": [_user([*parts, {"text": _question(query)}])],
-            "generationConfig": _GENERATION_CONFIG,
-        }
-        response = self._rest.post(GENERATE_PATH.format(model=self._model), body)
-        return self._conclude(query, response, snapshot, started, cached=False)
+                self._logger.warn(f"[Memory] cached search failed ({error}); answering from the frames")
+        frames = self._encode(snapshot.memories)
+        return self._conclude(query, self._pick(query, snapshot.memories, frames), snapshot, started, cached=False)
 
     def warm(self) -> None:
-        """All background maintenance, driven by the recorder's 1 Hz tick:
-        upload new/aging frames server-side, and rebuild the context cache once
-        the memory has settled. Returns immediately; searches never wait on it.
-        """
-        self._files.maintain()
+        """Background maintenance, driven by the recorder's 1 Hz tick: rebuild
+        the context cache once the memory has settled. Returns immediately;
+        searches never wait on it."""
+        gemini = self._gemini
+        if gemini is None:
+            return
         snapshot = self._store.snapshot()
         if not self._should_warm(snapshot):
             return
@@ -234,45 +235,30 @@ class MemorySearch:
             try:
                 fresh = self._store.snapshot()
                 if self._should_warm(fresh):
-                    self._create_cache(fresh)
+                    self._create_cache(fresh, gemini)
             finally:
                 self._warming.release()
 
         threading.Thread(target=run, name="memory-warm", daemon=True).start()
 
     def forget(self) -> None:
-        """The user forgot this map's memories: drop the cache handle and the
-        uploaded frames so the forgotten views stop being served — server-side
-        deletion is best effort, in the background."""
+        """The user forgot this map's memories: drop the cache so the forgotten
+        views stop being served — server-side deletion is best effort, in the
+        background."""
         cache, self._cache = self._cache, None
         self._failed_revision = None
-        self._files.purge()
-        if cache is None:
-            return
-
-        def run() -> None:
-            with contextlib.suppress(Exception):
-                self._rest.delete(f"/v1beta/{cache.name}")
-
-        threading.Thread(target=run, name="memory-cache-forget", daemon=True).start()
+        self._delete_later(cache)
 
     def forget_frame(self, memory: Memory) -> None:
-        """The user forgot one memory: delete its server-side upload and drop
-        the context cache embedding the frame — a retire note only shadows it,
-        and the handle would otherwise serve the view until its 12 h TTL. The
-        other uploads stay, so the next warm() rebuild references them cheaply."""
-        self._files.forget(memory.id)
+        """The user forgot one memory: drop the context cache embedding the
+        frame — a retire note only shadows it, and the handle would otherwise
+        serve the view until its 12 h TTL."""
         cache = self._cache
         if cache is None or all(m.id != memory.id for m in cache.memories):
             return
         if self._cache is cache:
             self._cache = None
-
-        def run() -> None:
-            with contextlib.suppress(Exception):
-                self._rest.delete(f"/v1beta/{cache.name}")
-
-        threading.Thread(target=run, name="memory-cache-forget", daemon=True).start()
+        self._delete_later(cache)
 
     # --- cache management (under _flight, except the read-only probes) ---
     def _cache_matches(self, snapshot: MemorySnapshot) -> bool:
@@ -312,33 +298,24 @@ class MemorySearch:
             return False
         return not self._cache_matches(snapshot)
 
-    def _create_cache(self, snapshot: MemorySnapshot) -> _CacheHandle | None:
+    def _create_cache(self, snapshot: MemorySnapshot, gemini: GeminiRest) -> _CacheHandle | None:
         started = time.monotonic()
-        # A cache built from fileData must not outlive the uploads it embeds
-        # (Gemini deletes them at 48 h): cap its life at the earliest
-        # referenced file's usable deadline, so warm() rebuilds in time — and
-        # when that deadline is already at hand, don't build at all (the handle
-        # would arrive expired and every warm would pay for another).
-        expires = started + _TTL_SEC - _TTL_SAFETY_SEC
-        for memory in snapshot.memories:
-            until = self._files.usable_until(memory)
-            if until is not None:
-                expires = min(expires, started + (until - time.time()) - _TTL_SAFETY_SEC)
-        if expires <= started:
-            return None
-        parts, included = self._frame_parts(snapshot.memories)
+        frames = self._encode(snapshot.memories)
+        included = tuple(memory for memory in snapshot.memories if memory.id in frames)
         if len(included) < _MIN_FRAMES_TO_CACHE:
             return None
         body = {
             "model": f"models/{self._model}",
             "systemInstruction": {"parts": [{"text": _SYSTEM}]},
-            "contents": [_user(parts)],
+            "contents": [
+                {"role": "user", "parts": [p for m in included for p in _native_frame_parts(m, frames[m.id])]}
+            ],
             "ttl": f"{_TTL_SEC}s",
             "displayName": f"mars-spatial-memory-{snapshot.map_name or 'unknown'}",
         }
         try:
-            name = str(self._rest.post(CACHED_CONTENTS_PATH, body).get("name") or "")
-        except GeminiHttpError as error:
+            name = str(gemini.post(CACHED_CONTENTS_PATH, body).get("name") or "")
+        except ChatRejected as error:
             if error.status in UNSUPPORTED_ENDPOINT_STATUSES:
                 self._cache_unsupported = True
                 self._logger.warn(
@@ -370,21 +347,112 @@ class MemorySearch:
                 map_name=snapshot.map_name,
                 fingerprint=snapshot.fingerprint,
                 memories=included,
-                expires_monotonic=expires,
+                expires_monotonic=started + _TTL_SEC - _TTL_SAFETY_SEC,
             ),
         )
         if old is not None:
             with contextlib.suppress(Exception):
-                self._rest.delete(f"/v1beta/{old.name}")
+                gemini.delete(f"/v1beta/{old.name}")
         self._logger.info(f"[Memory] cached {len(included)} frames for search in {time.monotonic() - started:.1f}s")
         return self._cache
 
+    def _delete_later(self, cache: _CacheHandle | None) -> None:
+        gemini = self._gemini
+        if cache is None or gemini is None:
+            return
+
+        def run() -> None:
+            with contextlib.suppress(Exception):
+                gemini.delete(f"/v1beta/{cache.name}")
+
+        threading.Thread(target=run, name="memory-cache-forget", daemon=True).start()
+
     # --- request assembly / response handling ---
+    def _pick(self, query: str, memories: tuple[Memory, ...], frames: Frames) -> Verdict | None:
+        """The model's pick among ``memories``: one request when the server takes
+        them all, else halve until a batch passes and let the batch winners meet
+        in a final (each round has fewer frames than the last, so it ends)."""
+        batch = self._batch or len(memories)
+        if len(memories) <= batch:
+            try:
+                return self._ask(query, memories, frames)
+            except ChatRejected as error:
+                if not error.too_large or len(memories) < 2:
+                    raise
+                batch = self._batch = len(memories) // 2
+                self._logger.warn(f"[Memory] {len(memories)} frames refused at once ({error}); batches of {batch}")
+        finalists: list[Memory] = []
+        explanation = ""
+        for start in range(0, len(memories), batch):
+            picked = self._pick(query, memories[start : start + batch], frames)
+            if picked is None:
+                return None
+            found, frame_id, explanation = picked
+            winner = next((m for m in memories if m.id == frame_id), None) if found else None
+            if winner is not None:
+                finalists.append(winner)
+        if not finalists:
+            return False, 0, explanation
+        if len(finalists) > 1 and batch >= 2:
+            return self._pick(query, tuple(finalists), frames)
+        # One winner, or a server taking a single frame per request, which can
+        # compare nothing: the newest finalist, as the prompt prefers among equals.
+        newest = max(finalists, key=lambda memory: memory.stamp)
+        return True, newest.id, explanation
+
+    def _ask(self, query: str, memories: tuple[Memory, ...], frames: Frames) -> Verdict | None:
+        content = [part for m in memories if m.id in frames for part in _frame_parts(m, frames[m.id])]
+        messages = [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": [*content, _text(_question(query))]},
+        ]
+        return _parse_verdict(self._chat.complete(self._request(messages), None))
+
+    def _ask_cached(self, query: str, cache: _CacheHandle, snapshot: MemorySnapshot) -> Verdict | None:
+        """One request riding the cache: the delta since it was built, then the
+        question — the frames and the system prompt live server-side."""
+        messages = [{"role": "user", "content": [*self._delta_parts(cache, snapshot), _text(_question(query))]}]
+        return _parse_verdict(self._chat.complete(self._request(messages, cached_content=cache.name), None))
+
+    def _request(self, messages: list[dict], cached_content: str | None = None) -> dict:
+        body: dict = {
+            "model": self._model,
+            "messages": messages,
+            "response_format": _RESPONSE_FORMAT,
+            "temperature": 0,
+        }
+        if self._thinking:
+            # Measured for this task on Gemini: a search is a pick among labeled
+            # frames, and full thinking only slowed it. A blank llm_thinking means
+            # the server takes no reasoning knob, so this one goes with it.
+            body["reasoning_effort"] = "low"
+        if cached_content is not None:
+            body["extra_body"] = {"google": {"cached_content": cached_content}}
+        return merge_extras(body, self._extra_body)
+
+    def _delta_parts(self, cache: _CacheHandle, snapshot: MemorySnapshot) -> list[dict]:
+        """What changed since the cache was built: new frames, re-captured
+        frames with a supersede note, and retire notes for evicted ids.
+        Empty exactly when the cache is fresh."""
+        cached = {memory.id: memory for memory in cache.memories}
+        changed = tuple(m for m in snapshot.memories if m.id not in cached or cached[m.id].stamp != m.stamp)
+        frames = self._encode(changed)
+        parts: list[dict] = []
+        for memory in changed:
+            if memory.id not in frames:
+                continue
+            if memory.id in cached:
+                parts.append(_text(f"Frame {memory.id} was re-captured — this newer view supersedes it:"))
+            parts.extend(_frame_parts(memory, frames[memory.id]))
+        current_ids = {memory.id for memory in snapshot.memories}
+        for gone in sorted(cached.keys() - current_ids):
+            parts.append(_text(f"Frame {gone} no longer exists — ignore it."))
+        return parts
+
     def _conclude(
-        self, query: str, response: dict, snapshot: MemorySnapshot, started: float, *, cached: bool
+        self, query: str, parsed: Verdict | None, snapshot: MemorySnapshot, started: float, *, cached: bool
     ) -> SearchVerdict:
         latency = round(time.monotonic() - started, 2)
-        parsed = _parse_verdict(response)
         if parsed is None:
             return SearchVerdict(
                 query=query, found=False, error="unreadable answer", latency_sec=latency, cached=cached
@@ -445,52 +513,15 @@ class MemorySearch:
         except Exception as error:  # noqa: BLE001 — the UI mirror must not break the search
             self._logger.warn(f"[Memory] search result mirror failed: {error!r}")
 
-    def _frame_parts(self, memories: tuple[Memory, ...]) -> tuple[list[dict], tuple[Memory, ...]]:
-        """Request parts for these frames, and which memories made it in
-        (an evicted-mid-read frame just drops out)."""
-        parts: list[dict] = []
-        included: list[Memory] = []
+    def _encode(self, memories: tuple[Memory, ...]) -> Frames:
+        """Every frame's pixels as base64, read once per search however many
+        rounds it takes (a frame evicted between the snapshot and the read drops out)."""
+        frames: Frames = {}
         for memory in memories:
-            frame = self._frame_part(memory)
-            if frame is None:
-                continue
-            parts.extend(frame)
-            included.append(memory)
-        return parts, tuple(included)
-
-    def _frame_part(self, memory: Memory) -> list[dict] | None:
-        """One frame as [image part, label part] — a server-side fileData
-        reference when the upload tier has one, inline bytes otherwise."""
-        uri = self._files.uri_for(memory)
-        if uri is not None:
-            image: dict = {"fileData": {"mimeType": "image/jpeg", "fileUri": uri}}
-        else:
             jpeg = self._read_image(memory)
-            if not jpeg:
-                return None
-            image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(jpeg).decode()}}
-        return [image, {"text": _frame_label(memory)}]
-
-    def _delta_parts(self, cache: _CacheHandle, snapshot: MemorySnapshot) -> list[dict]:
-        """What changed since the cache was built: new frames, re-captured
-        frames with a supersede note, and retire notes for evicted ids.
-        Empty exactly when the cache is fresh."""
-        cached = {memory.id: memory for memory in cache.memories}
-        parts: list[dict] = []
-        for memory in snapshot.memories:
-            old = cached.get(memory.id)
-            if old is not None and old.stamp == memory.stamp:
-                continue
-            frame = self._frame_part(memory)
-            if frame is None:
-                continue
-            if old is not None:
-                parts.append({"text": f"Frame {memory.id} was re-captured — this newer view supersedes it:"})
-            parts.extend(frame)
-        current_ids = {memory.id for memory in snapshot.memories}
-        for gone in sorted(cached.keys() - current_ids):
-            parts.append({"text": f"Frame {gone} no longer exists — ignore it."})
-        return parts
+            if jpeg:
+                frames[memory.id] = base64.b64encode(jpeg).decode()
+        return frames
 
     def _read_image(self, memory: Memory) -> bytes | None:
         path = self._store.image_path(memory.id)
@@ -519,8 +550,18 @@ def verdict_text(verdict: SearchVerdict) -> str:
     )
 
 
-def _user(parts: list[dict]) -> dict:
-    return {"role": "user", "parts": parts}
+def _text(text: str) -> dict:
+    return {"type": "text", "text": text}
+
+
+def _frame_parts(memory: Memory, b64: str) -> list[dict]:
+    """A frame on the chat wire: its label followed by its pixels."""
+    return [_text(_frame_label(memory)), {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}]
+
+
+def _native_frame_parts(memory: Memory, b64: str) -> list[dict]:
+    """The same frame as Gemini's native parts, for the cache body."""
+    return [{"text": _frame_label(memory)}, {"inlineData": {"mimeType": "image/jpeg", "data": b64}}]
 
 
 def _frame_label(memory: Memory) -> str:
@@ -537,13 +578,11 @@ def _question(query: str) -> str:
     return f'The robot needs: "{query}". Which frame best serves this?'
 
 
-def _parse_verdict(response: dict) -> tuple[bool, int, str] | None:
+def _parse_verdict(response: dict) -> Verdict | None:
     try:
-        parts = response["candidates"][0]["content"]["parts"]
-        text = next(part["text"] for part in parts if part.get("text") and not part.get("thought"))
-        data = json.loads(text)
+        data = json.loads(response["choices"][0]["message"]["content"])
         return bool(data["found"]), int(data["frame"]), str(data.get("explanation", ""))
-    except (KeyError, IndexError, TypeError, ValueError, StopIteration):
+    except (KeyError, IndexError, TypeError, ValueError):
         return None
 
 

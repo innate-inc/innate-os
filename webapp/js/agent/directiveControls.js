@@ -21,7 +21,7 @@ import {
  *   onBrainActive: (active: boolean, justStarted: boolean) => void,
  *   onCreate?: () => void,
  * }} opts
- * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, armedId: () => string, arm: (id: string) => void, ensureRunning: () => Promise<void>, destroy: () => void }}
+ * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, resetEl: HTMLButtonElement, armedId: () => string, arm: (id: string) => void, ensureRunning: () => Promise<void>, destroy: () => void }}
  */
 export function createDirectiveControls(agentState, opts) {
   const controls = document.createElement("div");
@@ -57,14 +57,16 @@ export function createDirectiveControls(agentState, opts) {
   toggleBtn.type = "button";
   toggleBtn.className = "agent-toggle";
 
+  // Lives in the composer (the panel places it), where a conversation is
+  // started and so where starting a new one is looked for.
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
-  resetBtn.className = "agent-reset";
-  resetBtn.title = `Reset the agent's brain / working memory — ${RESET_BRAIN_SERVICE}`;
-  resetBtn.setAttribute("aria-label", "Reset agent");
-  resetBtn.innerHTML = '<span class="agent-reset-icon" aria-hidden="true"></span>';
+  resetBtn.className = "agent-compose-reset";
+  resetBtn.title = `New conversation — MARS forgets what was said so far (${RESET_BRAIN_SERVICE})`;
+  resetBtn.setAttribute("aria-label", "New conversation");
+  resetBtn.innerHTML = '<span class="agent-compose-reset-icon" aria-hidden="true"></span>';
 
-  controls.append(directivePicker, toggleBtn, resetBtn);
+  controls.append(directivePicker, toggleBtn);
   // ---- directive roster + start/stop --------------------------------------
   // The dropdown ARMS a directive; Start activates it. While active, switching
   // the dropdown switches the running directive live. brain-active drives the
@@ -287,7 +289,7 @@ export function createDirectiveControls(agentState, opts) {
   });
 
   resetBtn.addEventListener("click", () => {
-    if (!window.confirm("Reset the agent's brain? This clears its working memory.")) return;
+    if (!window.confirm("Start a new conversation? MARS forgets everything said so far.")) return;
     agentState.resetBrain().catch(() => {});
   });
 
@@ -316,6 +318,7 @@ export function createDirectiveControls(agentState, opts) {
     },
     // The compact sheet parks this in its header; moved, not duplicated.
     toggleEl: toggleBtn,
+    resetEl: resetBtn,
     ensureRunning,
     destroy() {
       document.removeEventListener("click", onDirectiveOutsideClick);
