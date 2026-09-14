@@ -49,7 +49,13 @@ class EpisodeData {
     void add_timestep(const std::vector<double>& action, const std::vector<double>& qpos,
                       const std::vector<double>& qvel, const std::vector<cv::Mat>& images, double arm_timestamp = -1.0,
                       const std::vector<double>& image_timestamps = {},
-                      double head_command = std::numeric_limits<double>::quiet_NaN());
+                      double head_command = std::numeric_limits<double>::quiet_NaN(),
+                      const std::vector<double>& ee_pose = {});
+
+    // Configure once before the first sample. Stored with the recording so
+    // consumers can identify the exact kinematic model and joint ordering.
+    void set_kinematics(const std::string& urdf, const std::vector<std::string>& names,
+                        const std::vector<std::string>& camera_topics = {});
 
     // Write the termination columns of /action, then close the file.
     // Safe to call when no timesteps were written; in that case behaves
@@ -98,6 +104,10 @@ class EpisodeData {
     hid_t qpos_dset_;
     hid_t qvel_dset_;
     hid_t arm_ts_dset_;
+    std::string urdf_;
+    std::vector<std::string> joint_names_;
+    std::vector<std::string> camera_topics_;
+    hid_t ee_dset_;
     hid_t head_dset_;  // optional 1D /head_command (degrees); -1 when not recorded
     std::map<std::string, hid_t> image_dsets_;
     std::map<std::string, hid_t> image_ts_dsets_;

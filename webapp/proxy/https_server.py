@@ -51,6 +51,8 @@ import aiohttp
 from aiohttp import web
 from media_routes import (
     episode_response,
+    icl_demonstration_response,
+    icl_demonstrations_response,
     joints_response,
     map_preview_response,
     memory_image_response,
@@ -511,6 +513,8 @@ def build_app() -> web.Application:
     app.router.add_get("/episode/joints", joints_response)
     app.router.add_get("/episode/profile", profile_response)
     app.router.add_get("/episode/thumb", thumb_response)
+    app.router.add_get("/icl/demonstrations", icl_demonstrations_response)
+    app.router.add_get("/icl/demonstration", icl_demonstration_response)
     app.router.add_get("/map/preview", map_preview_response)
     app.router.add_get("/memory/image", memory_image_response)
     app.router.add_get("/run/info", run_info_response)
