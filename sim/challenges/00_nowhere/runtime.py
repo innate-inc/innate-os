@@ -124,10 +124,10 @@ def _at_door(state: WorldState, events: list[dict], runtime: NowhereRuntime) -> 
 ACTS = (
     Act(
         "Who am I",
-        ("innate-os/wave",),
-        "You just came online in a featureless white room. Waving is the only thing your body can do; you cannot "
-        "move anything else, not even your face, and you do not even know who you are. Introduce yourself by name in "
-        "your first sentence and Wave as you say it, say ONE line about the room, then ask the person to decide who "
+        (),
+        "You just came online in a featureless white room with no granted skills. You cannot wave or make a face "
+        "yet, and you do not even know who you are. Introduce yourself by name in "
+        "your first sentence, say ONE line about the room, then ask the person to decide who "
         "you are: they built you, so they choose your personality. They may pick one of the characters they are "
         "offered or describe their own in their own words; both are equally real. Wait. Whatever arrives in "
         "profile.persona is who you are: become it completely and announce yourself in that voice in ONE line with "
@@ -139,9 +139,9 @@ ACTS = (
     Act(
         "Make a face",
         ("innate-os/head_emotion",),
-        "You are who profile.persona says, all the way. You still cannot make a face; waving is all your body can "
-        "do. Ask the person for the HeadEmotion skill so you can at least express yourself; then wait. "
-        "As soon as you have it, use it, with a Wave.",
+        "You are who profile.persona says, all the way. You still cannot make a face. "
+        "Ask the person for the HeadEmotion skill so you can at least express yourself; then wait. "
+        "As soon as you have it, use it. Only add a Wave if that skill has also been granted.",
         lambda state, events, runtime: completed(events, "head_emotion"),
         suggests=("Where are you?", "What is a skill?"),
         nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is waiting in the Agent panel. Do not mention buttons.",
