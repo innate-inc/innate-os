@@ -796,7 +796,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     saveStatus = "";
     chooserOpen = false;
     setDockOpen(true);
-    requestAnimationFrame(() => newNameInput.focus());
+    requestAnimationFrame(() => { if (!compact) newNameInput.focus(); });
   }
 
   function discard() {
@@ -815,7 +815,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   async function save() {
     const d = draft;
-    if (!d || saving) return;
+    if (!d || saving || (compact && d.isNew)) return;
     const id = d.isNew ? slug(d.name) : d.id;
     if (!id) {
       saveStatus = "Give it a name first.";
@@ -1002,7 +1002,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (draft && !draft.isNew && draft.id !== agent?.id) draft = null;
     const isNew = !!draft?.isNew && !inStory;
     const f = inStory ? null : form();
-    const canEdit = !inStory && editable(agent);
+    const pausedCreation = compact && isNew;
+    const canEdit = !inStory && !pausedCreation && editable(agent);
 
     title.textContent = inStory
       ? name || "MARS"
@@ -1077,9 +1078,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     addBtn.setAttribute("aria-expanded", String(chooserOpen));
     if (chooserOpen) renderChooser(f?.skills ?? []);
     const showSave = canEdit && (isNew || dirty(agent));
-    saveBar.hidden = !(showSave || saveStatus);
+    saveBar.hidden = !(showSave || saveStatus || pausedCreation);
     saveBtn.hidden = !showSave;
-    discardBtn.hidden = !showSave;
+    discardBtn.hidden = !(showSave || pausedCreation);
     saveBtn.textContent = isNew ? "Create" : "Save";
     discardBtn.textContent = isNew ? "Cancel" : "Discard";
     saveBtn.disabled = saving;
@@ -1115,6 +1116,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   /** @param {any} r @param {any} o @param {boolean} graduated @param {AgentEntry | null} agent @param {boolean} isNew */
   function noteFor(r, o, graduated, agent, isNew) {
+    if (compact && isNew) {
+      return "Finish creating this agent on desktop. Your draft is kept while you stay on this page.";
+    }
     if (compact && agent?.source === "shipped") {
       return "This is an Innate Agent. To modify it or create one, use the desktop version.";
     }
@@ -1231,6 +1235,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const setCompact = (/** @type {boolean} */ on) => {
     const changed = compact !== on;
     compact = on;
+    if (on && draft?.isNew) chooserOpen = false;
     if (changed) applyDockOpen(false);
     dock.hidden = on && !dockOpen;
     opts.dockDirectives?.(on ? null : panelEl);
