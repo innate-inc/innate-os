@@ -13,7 +13,8 @@ class ArmMove(Skill):
     In xyz mode, supply x, y, z in metres relative to base_link; optional
     roll, pitch, yaw are radians. In joints mode, supply joints in motor order
     (joint1 through joint6), in radians: five angles preserve the gripper,
-    six also set it. Do not mix XYZ and joint targets. Duration is seconds.
+    six also set it (joint6 must be between -0.6 and 0.85 radians).
+    Do not mix XYZ and joint targets. Duration is seconds.
     Commands may settle off-target near joint limits; success confirms motion
     completion, not exact final pose accuracy.
     """
@@ -49,6 +50,11 @@ class ArmMove(Skill):
                 self.fail("joints mode does not accept XYZ or orientation targets")
             if not isinstance(joints, list) or len(joints) not in (5, 6) or not all(finite(j) for j in joints):
                 self.fail("joints must contain five or six finite angles in radians")
+            if len(joints) == 6:
+                minimum = Manipulation.GRIPPER_CLOSED - Manipulation.GRIPPER_MAX_STRENGTH
+                maximum = Manipulation.GRIPPER_OPEN
+                if not minimum <= joints[5] <= maximum:
+                    self.fail(f"joint6 (gripper) must be between {minimum} and {maximum} radians")
         try:
             if mode == "xyz":
                 self.manipulation.move_to(

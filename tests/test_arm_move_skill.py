@@ -22,7 +22,13 @@ def skill(monkeypatch):
             raise Rejected(message)
 
     api = types.ModuleType("innate")
-    api.Skill, api.Manipulation, api.SkillReturn = Skill, object, str
+
+    class Manipulation:
+        GRIPPER_CLOSED = 0.0
+        GRIPPER_OPEN = 0.85
+        GRIPPER_MAX_STRENGTH = 0.6
+
+    api.Skill, api.Manipulation, api.SkillReturn = Skill, Manipulation, str
     exceptions = types.ModuleType("innate.exceptions")
     exceptions.ArmFailed = type("ArmFailed", (Exception,), {})
     exceptions.ArmUnhealthy = type("ArmUnhealthy", (Exception,), {})
@@ -105,3 +111,19 @@ def test_cancellation_propagates_without_retry(skill, mode, method):
     with pytest.raises(Cancelled):
         value.execute(mode, **args)
     assert command.call_count == 1
+
+
+@pytest.mark.parametrize("target", [-0.600001, 0.850001, -10.0, 10.0])
+def test_unsafe_gripper_target_rejects_entire_motion(skill, target):
+    value, _ = skill
+    with pytest.raises(Rejected, match="joint6"):
+        value.execute("joints", joints=[0.1] * 5 + [target])
+    assert not value.manipulation.mock_calls
+
+
+@pytest.mark.parametrize("target", [-0.6, 0.0, 0.85])
+def test_gripper_boundaries_are_allowed(skill, target):
+    value, _ = skill
+    joints = [0.1] * 5 + [target]
+    value.execute("joints", joints=joints)
+    value.manipulation.move_joints.assert_called_once_with(joints, duration=3.0)
