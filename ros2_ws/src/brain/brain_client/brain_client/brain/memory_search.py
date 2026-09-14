@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from brain_client.brain.transport import ChatRejected
+from brain_client.brain.utils import merge_extras
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,12 +96,20 @@ class SearchVerdict:
 
 class MemorySearch:
     def __init__(
-        self, store: MemoryStore, transport: ChatTransport, *, model: str, thinking: str, logger: RcutilsLogger
+        self,
+        store: MemoryStore,
+        transport: ChatTransport,
+        *,
+        model: str,
+        thinking: str,
+        logger: RcutilsLogger,
+        extra_body: dict | None = None,
     ):
         self._store = store
         self._chat = transport
         self._model = model
         self._thinking = thinking
+        self._extra_body = extra_body or {}
         self._logger = logger
         self._flight = threading.Lock()  # searches run one at a time
         self._batch: int | None = None  # frames per request, once the server has refused them all at once
@@ -164,7 +173,7 @@ class MemorySearch:
                 finalists.append(winner)
         if not finalists:
             return False, 0, explanation
-        if len(finalists) > 1 and (self._batch or 2) >= 2:
+        if len(finalists) > 1 and batch >= 2:
             return self._pick(query, tuple(finalists), frames)
         # One winner, or a server taking a single frame per request, which can
         # compare nothing: the newest finalist, as the prompt prefers among equals.
@@ -187,7 +196,7 @@ class MemorySearch:
             # frames, and full thinking only slowed it. A blank llm_thinking means
             # the server takes no reasoning knob, so this one goes with it.
             body["reasoning_effort"] = "low"
-        return _parse_verdict(self._chat.complete(body, None))
+        return _parse_verdict(self._chat.complete(merge_extras(body, self._extra_body), None))
 
     def _conclude(self, query: str, parsed: Verdict | None, snapshot: MemorySnapshot, started: float) -> SearchVerdict:
         latency = round(time.monotonic() - started, 2)

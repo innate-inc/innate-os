@@ -15,6 +15,7 @@
 #   <repo>/skills/*                        -> <repo>/workspace/custom_skills/
 #   <repo>/primitives/**/*.{h5,pt,pth}     -> <repo>/workspace/innate_skills/<rel>
 #   <repo>/inputs/*                        -> <repo>/workspace/inputs/
+#   <repo>/data/spatial_memory/*/files.json -> deleted (Gemini Files API registry, retired)
 #   ~/agents/*                             -> <repo>/workspace/custom_agents/
 #   ~/skills/*                             -> <repo>/workspace/custom_skills/
 #   <repo>/maps/*                          -> <repo>/data/maps/
@@ -384,6 +385,12 @@ _migrate_stt_settings() {
     done
 }
 
+_migrate_memory_registry() {
+    local root="$1/data/spatial_memory"
+    [ -d "$root" ] || return 0
+    find "$root" -mindepth 2 -maxdepth 2 -name 'files.json*' -delete
+}
+
 run_user_data_migrations() {
     local repo="${1:?run_user_data_migrations: repo dir required}"
     _migrate_dir_into_workspace "$repo" agents     custom_agents
@@ -396,6 +403,7 @@ run_user_data_migrations() {
     _migrate_primitives_models  "$repo"
     _migrate_nav_state          "$repo"
     _migrate_stt_settings       "$repo"
+    _migrate_memory_registry    "$repo"
 }
 
 # Execute when run directly (not when sourced).

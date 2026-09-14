@@ -208,7 +208,7 @@ def test_decision_tolerates_empty_or_malformed_response():
     assert _decision_from({}).calls == []
     assert _decision_from(reply()).speech is None
     malformed = reply(tool_calls=[{"id": "c1", "function": {"name": "wave", "arguments": "{not json"}}])
-    assert _decision_from(malformed).calls[0].args == {}
+    assert _decision_from(malformed).calls[0].args is None  # refused at dispatch, never run bare
 
 
 # ---------- history / image pruning ----------

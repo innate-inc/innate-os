@@ -93,6 +93,7 @@ class BrainAgent:
         gaze: GazeController,
         transport: ChatTransport | None = None,
         backend: Backend | None = None,
+        extra_body: dict | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
@@ -129,6 +130,7 @@ class BrainAgent:
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
+                extra_body=extra_body,
             )
             if transport is not None
             else None
@@ -546,6 +548,8 @@ class BrainAgent:
             return f"failed — {error}"
 
     def _dispatch(self, call: ToolCall) -> str:
+        if call.args is None:
+            return "rejected — the arguments were not valid JSON; send a JSON object"
         if call.name == WAIT:
             return "ok"
         if call.name == STOP_SKILL:

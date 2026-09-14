@@ -15,7 +15,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
@@ -50,23 +50,6 @@ class ChatTransport:
 
     stream: Callable[[dict], Chunks]
     complete: Callable[[dict, float | None], dict]
-    # The same extras both forms merge in, readable so a caller can trace the
-    # body that will actually go on the wire (brain/context.py:generate).
-    extra_body: dict = field(default_factory=dict)
-
-    def with_extras(self, body: dict) -> dict:
-        """The body as it goes on the wire."""
-        return merge_extras(body, self.extra_body)
-
-
-def merge_extras(body: dict, extras: dict) -> dict:
-    """The extras filled in beneath the request's own fields, nested objects merged:
-    a call's ``temperature`` or ``stream_options`` keeps, whatever an operator sets."""
-    merged = dict(extras)
-    for key, value in body.items():
-        under = extras.get(key)
-        merged[key] = merge_extras(value, under) if isinstance(value, dict) and isinstance(under, dict) else value
-    return merged
 
 
 # How servers word a request that outgrew their window or image cap — vLLM/NIM,
@@ -115,9 +98,7 @@ class Endpoint:
         return cls(base_url, os.environ.get(LLM_API_KEY_ENV, "").strip())
 
 
-def pick_chat(
-    proxy: ProxyClient | None, endpoint: Endpoint | None = None, extra_body: dict | None = None
-) -> tuple[ChatTransport | None, Backend]:
+def pick_chat(proxy: ProxyClient | None, endpoint: Endpoint | None = None) -> tuple[ChatTransport | None, Backend]:
     """The way to reach a model: a configured endpoint, the Innate proxy, or GEMINI_API_KEY.
 
     sim/launcher/config.py:resolve_brain_backend predicts this choice from the
@@ -125,64 +106,57 @@ def pick_chat(
     precedence here and change it there.
     """
     if endpoint is not None:
-        return direct_chat(endpoint, extra_body), Backend.DIRECT
+        return direct_chat(endpoint), Backend.DIRECT
     if proxy is not None and proxy.is_available():
-        return proxy_chat(proxy, extra_body), Backend.PROXY
+        return proxy_chat(proxy), Backend.PROXY
     api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
     if api_key:
-        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key), extra_body), Backend.GEMINI_DIRECT
+        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key)), Backend.GEMINI_DIRECT
     return None, Backend.UNCONFIGURED
 
 
-def direct_chat(endpoint: Endpoint, extra_body: dict | None = None) -> ChatTransport:
+def direct_chat(endpoint: Endpoint) -> ChatTransport:
     """Reach an OpenAI-compatible server with its own key."""
-    # One client for the process: reuses the TLS connection across turns
-    # instead of a fresh handshake per call. Single-threaded use by
-    # construction (one turn at a time on the agent's worker thread).
+    # One client for the process: reuses the TLS connection across calls. The agent's
+    # worker thread and the memory search's spin thread share it — httpx.Client is thread-safe.
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     client = httpx.Client(headers=headers, timeout=STREAM_TIMEOUT_SECS)
     url = endpoint.base_url + CHAT_COMPLETIONS_PATH
-    extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        with client.stream("POST", url, json=merge_extras(body, extras)) as resp:
+        with client.stream("POST", url, json=body) as resp:
             if resp.status_code != 200:
                 resp.read()
                 raise ChatRejected("chat direct", resp.status_code, resp.text)
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        resp = client.post(
-            url, json=merge_extras(body, extras), timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout
-        )
+        resp = client.post(url, json=body, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout)
         if resp.status_code != 200:
             raise ChatRejected("chat direct", resp.status_code, resp.text)
         return resp.json() if resp.content else {}
 
-    return ChatTransport(stream=stream, complete=complete, extra_body=extras)
+    return ChatTransport(stream=stream, complete=complete)
 
 
-def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransport:
+def proxy_chat(proxy: ProxyClient) -> ChatTransport:
     """Reach Gemini through the Innate proxy (the proxy holds the upstream key)."""
-    extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        request = merge_extras(body, extras)
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=request, timeout=STREAM_TIMEOUT_SECS) as resp:
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=STREAM_TIMEOUT_SECS) as resp:
             if resp.status_code != 200:
                 raise ChatRejected("chat via proxy", resp.status_code, repr(resp.read()[:200]))
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        request = merge_extras(body, extras)
         deadline = COMPLETE_TIMEOUT_SECS if timeout is None else timeout
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=request, timeout=deadline) as resp:
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=deadline) as resp:
             payload = resp.read()
             if resp.status_code != 200:
                 raise ChatRejected("chat via proxy", resp.status_code, repr(payload[:200]))
             return json.loads(payload) if payload else {}
 
-    return ChatTransport(stream=stream, complete=complete, extra_body=extras)
+    return ChatTransport(stream=stream, complete=complete)
 
 
 def parse_extra_body(raw: str, logger: RcutilsLogger) -> dict:

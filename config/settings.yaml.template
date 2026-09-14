@@ -206,7 +206,8 @@
 # server can drive it. llm_base_url is that server's /v1 root — a vLLM or Ollama
 # on the LAN, NVIDIA's hosted NIM, OpenAI — with its key in .env as LLM_API_KEY.
 # Leave it empty for Gemini (through the Innate proxy, or GEMINI_API_KEY).
-# llm_thinking is sent as reasoning_effort; "" leaves the server's own default.
+# llm_thinking is sent as reasoning_effort; "" leaves the server's own default, and
+# is the default too once llm_base_url names an endpoint (minimal is Gemini-measured).
 # llm_extra_body is a JSON object merged beneath every request — a field the
 # request sets itself, like the memory search's temperature 0, keeps — for the
 # knobs one server has and the rest do not.

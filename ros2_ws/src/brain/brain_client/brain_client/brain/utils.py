@@ -143,3 +143,13 @@ def adjust_nav_goal(inputs: dict, *, capture_pose: Pose | None, current_pose: Po
     if not is_mapfree or current_pose is None:
         return inputs
     return pose_math.absolute_to_local_nav_command(inputs, current_pose)
+
+
+def merge_extras(body: dict, extras: dict) -> dict:
+    """``llm_extra_body`` filled in beneath a request's own fields, nested objects merged:
+    a call's ``temperature`` or ``stream_options`` keeps, whatever an operator sets."""
+    merged = dict(extras)
+    for key, value in body.items():
+        under = extras.get(key)
+        merged[key] = merge_extras(value, under) if isinstance(value, dict) and isinstance(under, dict) else value
+    return merged

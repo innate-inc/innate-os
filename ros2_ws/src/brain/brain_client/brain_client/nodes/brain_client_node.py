@@ -204,14 +204,16 @@ class BrainClientNode(Node):
         )
         # One wire for the whole node: the agent thinks over it and the spatial
         # memory searches over it, so a robot can never have them disagree.
-        transport, self._backend = pick_chat(
-            self._proxy,
-            Endpoint.from_config(cfg),
-            parse_extra_body(cfg.llm_extra_body, self.get_logger()),
-        )
+        transport, self._backend = pick_chat(self._proxy, Endpoint.from_config(cfg))
+        extra_body = parse_extra_body(cfg.llm_extra_body, self.get_logger())
         self.memory_search = (
             MemorySearch(
-                self.memory_store, transport, model=cfg.llm_model, thinking=cfg.llm_thinking, logger=self.get_logger()
+                self.memory_store,
+                transport,
+                model=cfg.llm_model,
+                thinking=cfg.llm_thinking,
+                logger=self.get_logger(),
+                extra_body=extra_body,
             )
             if transport is not None
             else None
@@ -255,6 +257,7 @@ class BrainClientNode(Node):
             gaze=self.gaze,
             transport=transport,
             backend=self._backend,
+            extra_body=extra_body,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,

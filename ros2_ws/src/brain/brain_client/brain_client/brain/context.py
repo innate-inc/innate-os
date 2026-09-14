@@ -30,6 +30,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from brain_client.brain.utils import merge_extras
+
 if TYPE_CHECKING:
     from brain_client.brain.transport import ChatTransport, Chunks
 
@@ -41,7 +43,7 @@ _FINISHED = ("stop", "tool_calls")
 @dataclass
 class ToolCall:
     name: str
-    args: dict
+    args: dict | None  # None: the server's argument JSON was unparseable — refuse, never run bare
     id: str = ""
 
 
@@ -66,10 +68,12 @@ class ChatContext:
         max_history: int,
         max_image_turns: int,
         reference: list[dict] | None = None,
+        extra_body: dict | None = None,
     ):
         self._transport = transport
         self._model = model
         self._thinking = thinking
+        self._extra_body = extra_body or {}
         self._max_history = max_history
         self._max_image_turns = max_image_turns
         # Pinned turns (the robot's self-portrait) prepended to every request
@@ -134,9 +138,7 @@ class ChatContext:
         calls, by which point an abandoned turn's orphaned request has already
         serialized its body.
         """
-        # Merged here, not left to the transport, so the observability tap below
-        # sees the body that actually goes out (the transport's merge is a no-op on it).
-        body = self._transport.with_extras(self._request(user_message, tools, system, latest_only_images))
+        body = merge_extras(self._request(user_message, tools, system, latest_only_images), self._extra_body)
         if self.on_request is not None:
             self.on_request(body)
         # Usage rides the reply and is committed by absorb, on the loop thread:
@@ -383,19 +385,19 @@ class _EchoGate:
 def _echoes(reply: str, observation: str) -> bool:
     # Digits are masked: the model continues the pattern rather than copying it
     # (the input's "t+8s" comes back as "t+9s", the pose drifts a centimetre).
-    head = _shape(re.sub(r'"[^"]*"', '""', reply))[:_ECHO_HEAD]
+    head = _shape(reply)[:_ECHO_HEAD]
     return len(head) >= _ECHO_MIN and head in observation
 
 
-_EVENT_PAYLOAD = re.compile(r"^(- [^:\n]*:).*$", re.MULTILINE)
+_EVENT_LINE = re.compile(r"^- .*$", re.MULTILINE)
 
 
 def _scaffold(user_message: dict) -> str:
-    """The observation's skeleton: the status line and the event lines with what
-    they carry removed — the user's quoted words, a skill's result. A reply that
-    restates those is an answer; one that reproduces the skeleton is an echo."""
+    """The observation's skeleton — the status line and the fixed notes, no event
+    lines: a reply that restates what the user said or a skill reported is an
+    answer; one that reads the status line back is an echo."""
     text = " ".join(p["text"] for p in _parts(user_message) if p.get("type") == "text")
-    return _shape(re.sub(r'"[^"]*"', '""', _EVENT_PAYLOAD.sub(r"\1", text)))
+    return _shape(_EVENT_LINE.sub("", text))
 
 
 def _shape(text: str) -> str:
@@ -443,7 +445,7 @@ def _decision_from(response: dict) -> Decision:
     )
 
 
-def _parse_args(arguments: object) -> dict:
+def _parse_args(arguments: object) -> dict | None:
     if isinstance(arguments, dict):
         return arguments  # a few servers hand back an object instead of a JSON string
     if not isinstance(arguments, str) or not arguments.strip():
@@ -451,7 +453,7 @@ def _parse_args(arguments: object) -> dict:
     try:
         parsed = json.loads(arguments)
     except json.JSONDecodeError:
-        return {}
+        return None
     return parsed if isinstance(parsed, dict) else {}
 
 
