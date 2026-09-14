@@ -141,8 +141,9 @@ class ChatContext:
         # Usage rides the reply and is committed by absorb, on the loop thread:
         # writing self.last_usage here would let an abandoned turn's orphaned
         # request overwrite the committed turn's counts.
-        response = _assemble(self._transport.stream(body), on_speech)
-        if _echoes(response["message"]["content"], user_message):
+        gate = _EchoGate(user_message, on_speech)
+        response = _assemble(self._transport.stream(body), gate.feed)
+        if gate.finish():
             # A small model under greedy decoding can read the turn's input back
             # as its reply; committed, it teaches the next turn to do the same.
             raise RuntimeError("the model echoed its input instead of answering")
@@ -319,13 +320,64 @@ def _merge_call(calls: dict[int, dict], fragment: dict) -> None:
         call["extra_content"] = fragment["extra_content"]
 
 
-def _echoes(reply: str, user_message: dict) -> bool:
+_ECHO_HEAD = 60
+"""Shaped characters of a reply that decide whether it is the observation read back."""
+_ECHO_MIN = 12
+"""Below this a head proves nothing ("Hi!" is in any observation with a greeting)."""
+_FIRST_SENTENCE = re.compile(r"[.!?…]\s")
+
+
+class _EchoGate:
+    """Holds speech only until an echo can be told from an answer — the first
+    sentence boundary or the first 60 characters, whichever comes first — so an
+    echo is never voiced, and a real reply is released exactly when the sentence
+    streamer would have spoken it (a turn that has spoken holds the floor)."""
+
+    def __init__(self, user_message: dict, on_speech: Callable[[str], None] | None):
+        self._observation = _scaffold(user_message)
+        self._on_speech = on_speech
+        self._held: list[str] = []
+        self._decided = False
+        self._echo = False
+
+    def feed(self, delta: str) -> None:
+        if self._decided:
+            if not self._echo and self._on_speech is not None:
+                self._on_speech(delta)
+            return
+        self._held.append(delta)
+        held = "".join(self._held)
+        if _FIRST_SENTENCE.search(held) or len(_shape(held)) >= _ECHO_HEAD:
+            self._decide()
+
+    def finish(self) -> bool:
+        """Whether the reply was an echo; a short reply is judged and released here."""
+        if not self._decided:
+            self._decide()
+        return self._echo
+
+    def _decide(self) -> None:
+        self._decided = True
+        self._echo = _echoes("".join(self._held), self._observation)
+        if not self._echo and self._on_speech is not None:
+            for delta in self._held:
+                self._on_speech(delta)
+        self._held.clear()
+
+
+def _echoes(reply: str, observation: str) -> bool:
     # Digits are masked: the model continues the pattern rather than copying it
     # (the input's "t+8s" comes back as "t+9s", the pose drifts a centimetre).
-    head = _shape(reply)[:60]
-    return len(head) >= 20 and head in _shape(
-        " ".join(p["text"] for p in _parts(user_message) if p.get("type") == "text")
-    )
+    head = _shape(re.sub(r'"[^"]*"', '""', reply))[:_ECHO_HEAD]
+    return len(head) >= _ECHO_MIN and head in observation
+
+
+def _scaffold(user_message: dict) -> str:
+    """The observation's own text with the user's quoted words removed: a reply
+    that restates what the user said is an answer, one that reproduces the
+    status line or event lines is an echo."""
+    text = " ".join(p["text"] for p in _parts(user_message) if p.get("type") == "text")
+    return _shape(re.sub(r'"[^"]*"', '""', text))
 
 
 def _shape(text: str) -> str:
