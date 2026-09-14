@@ -156,7 +156,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   send.innerHTML = '<span class="agent-compose-send-icon" aria-hidden="true"></span>';
   send.setAttribute("aria-label", "Send message");
   send.title = "Send message";
-  form.append(input, placeholder, focusHint);
+  form.append(directives.resetEl, input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
   /** Non-null while the interface wants the answer, not the robot: the placeholder says where
@@ -172,6 +172,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     send.disabled = empty || locked;
     send.hidden = empty || locked;
     micMount.hidden = !opts.enableMic || !empty || ask !== null;
+    // A draft in progress is not the moment to start over; nor is a question the interface is asking.
+    directives.resetEl.hidden = !empty || ask !== null;
     focusHint.hidden = !empty || locked;
     placeholder.classList.toggle("hidden", !empty);
   }
