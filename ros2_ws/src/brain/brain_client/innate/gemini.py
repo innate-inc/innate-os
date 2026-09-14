@@ -43,10 +43,8 @@ def _proxy_client(proxy: ProxyClient) -> Client:
 
 
 def _direct_client(api_key: str) -> Client:
-    client = httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0)
-
     def complete(body: dict) -> dict:
-        resp = client.post(DIRECT_URL, json=body)
+        resp = httpx.post(DIRECT_URL, json=body, headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0)
         resp.raise_for_status()
         return resp.json()
 
