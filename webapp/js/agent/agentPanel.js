@@ -54,7 +54,8 @@ const THINKING_STALE_MS = 10_000;
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
  *   setOffers: (offers: import("./offerDeck.js").Offer[], title?: string) => void,
- *   submitText: (text: string) => Promise<boolean>,
+ *   submitText: (text: string, how?: { replyContext?: string }) => Promise<boolean>,
+ *   replyContext: () => string,
  *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
  *   setDisplayName: (name: string | null) => void,
  *   isBusy: () => boolean
@@ -233,6 +234,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   let currentOfferTitle = "";
   let lastUserAt = 0;
   let lastRobotAt = 0;
+  let replyContext = "";
   function renderOffers() {
     const visible = currentOffers.filter((offer) => offer.kind !== "reply" || lastRobotAt > lastUserAt);
     const key = keyOf(visible, currentOfferTitle);
@@ -243,7 +245,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   /** Only actual conversation turns renew reply suggestions; history and echoes cannot
    * resurrect them after a newer user message. @param {string} sender @param {number} timestamp */
   function offerTurn(sender, timestamp) {
-    if (sender === "user") lastUserAt = Math.max(lastUserAt, timestamp);
+    if (sender === "user") {
+      if (timestamp > lastUserAt) replyContext = "";
+      lastUserAt = Math.max(lastUserAt, timestamp);
+    }
     if (sender === "robot") lastRobotAt = Math.max(lastRobotAt, timestamp);
     renderOffers();
   }
@@ -253,13 +258,16 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   /** When this page sent each text: the brain echoes user lines on chat_out, and one bubble is enough.
    * @type {Map<string, number>} */
   const sentTexts = new Map();
-  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
+  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean, replyContext?: string }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
   async function submitText(text, how = {}) {
     if (!text || sending) return false;
     sending = true;
     // The bubble lands the moment the person acts, not after the round trip.
     const timestamp = Date.now() / 1000;
-    if (!how.narrator) offerTurn("user", Math.max(timestamp, lastRobotAt));
+    if (!how.narrator) {
+      offerTurn("user", Math.max(timestamp, lastRobotAt));
+      replyContext = how.replyContext ?? "";
+    }
     sentTexts.set(text.trim(), Date.now());
     if (how.narrator) chat.addMessage("system", text, timestamp, "narrator");
     else chat.addMessage("user", text, timestamp);
@@ -279,6 +287,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
       return true;
     } catch (error) {
+      replyContext = "";
       const detail = error instanceof Error ? error.message : "The message could not be sent.";
       if (!root.classList.contains("story-active") && !how.narrator && !how.quiet) chat.addMessage("system", detail, Date.now() / 1000);
       return false;
@@ -478,6 +487,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       renderOffers();
       historyFloor = startedAt / 1000;
       lastSnapshot = "";
+      replyContext = "";
       chat.clear();
       sheet.open();
       if (!fresh) void loadHistory();
@@ -488,6 +498,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       renderOffers();
     },
     submitText,
+    replyContext: () => lastRobotAt > lastUserAt ? replyContext : "",
     /** @param {string} text */
     narrate: (text, how = {}) => submitText(text, { ...how, narrator: true }),
     /** @param {string | null} name */

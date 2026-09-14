@@ -562,8 +562,12 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     }, 500);
   }
 
+  /** Bind post-grant guidance to this attempt, act and conversation turn. @param {string} skill */
+  const grantReplyContext = (skill) => JSON.stringify([story()?.attempt_id, runtime()?.act, skill]);
+
   /** @param {string} skill @param {boolean} [announce] */
   async function grant(skill, announce = true) {
+    const replyContext = grantReplyContext(skill);
     const next = new Set(agentState.get().activeSkills);
     next.add(skill);
     agentState.setActiveSkills([...next], STORY_AGENT);
@@ -575,7 +579,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     landed = { skill, at: Date.now() };
     render(true);
     setTimeout(() => render(true), LANDED_MS);
-    void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
+    void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`, {
+      replyContext,
+    });
   }
 
   /** @param {string} skill */
@@ -675,11 +681,16 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       ...(!wants.length ? r.suggests_after_grant ?? [] : []),
       ...(r.suggests ?? []),
     ];
-    // These are prompts for the current robot request, not permanent shortcuts for
-    // the act. A reply on another subject should not revive the old suggestions.
+    // The response to a grant carries its act's action guidance regardless of wording.
+    // Any subsequent user turn consumes that context; other suggestions still require
+    // an explicit mention so unrelated replies cannot revive old prompts.
     const line = opts.lastLine().toLowerCase().replace(/[^a-z0-9]/g, "");
     const askingForAct = (r.wants ?? []).some((/** @type {string} */ skill) => mentions(opts.lastLine(), skill));
+    const grantReply = (r.wants ?? []).some((/** @type {string} */ skill) =>
+      panel.replyContext() === grantReplyContext(skill),
+    );
     const replies = suggestions.filter((/** @type {string} */ text) =>
+      (!wants.length && grantReply && (r.suggests_after_grant ?? []).includes(text)) ||
       askingForAct || line.includes(text.toLowerCase().replace(/[^a-z0-9]/g, "")),
     ).map((/** @type {string} */ text) => ({
       text,
@@ -930,10 +941,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const env = envId();
     // World frames arrive at physics rate; touch the DOM only when something shown here changed.
     const key = JSON.stringify([
-      s.currentDirective, [...s.activeSkills].sort(), agent, r && { ...r, brief: undefined },
+      s.currentDirective, [...s.activeSkills].sort(), agent, story()?.attempt_id, r && { ...r, brief: undefined },
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
       graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0, opts.navigating?.(),
-      opts.recalledAt(), opts.turnedAt(), opts.lastLine(),
+      opts.recalledAt(), opts.turnedAt(), opts.lastLine(), panel.replyContext(),
       draft, saving, saveStatus, chooserOpen, tab, roster.length,
     ]);
     if (!force && key === renderedKey) return;
