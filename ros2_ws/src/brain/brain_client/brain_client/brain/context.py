@@ -213,27 +213,45 @@ class ChatContext:
         to half the cap and masks old frames in the same step — a single cache
         miss per window instead of one per turn.
         """
-        history = self._history
-        keep = max(self._max_image_turns, 0)
-        if len(history) > self._max_history:
-            del history[: len(history) - self._max_history // 2]
-            # The history must start with a plain user turn: a leading assistant
-            # message or an orphaned tool result (whose call was just evicted) is rejected.
-            while history and history[0].get("role") != "user":
-                history.pop(0)
-            # An evicted turn must not stay pinned as the latest-only holder: absorb
-            # would "prune" an orphan dict nothing reads, and the reference would
-            # keep its base64 wrist frame alive for as long as the arm feed is stale.
-            if self._latest_only_turn is not None and not any(m is self._latest_only_turn[0] for m in history):
-                self._latest_only_turn = None
-        elif self.image_turn_count <= 2 * keep:
+        if len(self._history) > self._max_history:
+            self._evict()
+        elif self.image_turn_count <= 2 * max(self._max_image_turns, 0):
             return  # under both budgets: stay append-only, the cache is warm
+        self._mask_frames()
+
+    def compact(self) -> bool:
+        """The compaction a tripped budget triggers, on demand: the answer to a
+        server refusing the request as too long for its window (a local model
+        can spend thousands of tokens per frame). Returns whether anything shrank."""
+        evicted = self._evict()
+        return self._mask_frames() or evicted
+
+    def _evict(self) -> bool:
+        history = self._history
+        if len(history) <= self._max_history // 2:
+            return False
+        del history[: len(history) - self._max_history // 2]
+        # The history must start with a plain user turn: a leading assistant
+        # message or an orphaned tool result (whose call was just evicted) is rejected.
+        while history and history[0].get("role") != "user":
+            history.pop(0)
+        # An evicted turn must not stay pinned as the latest-only holder: absorb
+        # would "prune" an orphan dict nothing reads, and the reference would
+        # keep its base64 wrist frame alive for as long as the arm feed is stale.
+        if self._latest_only_turn is not None and not any(m is self._latest_only_turn[0] for m in history):
+            self._latest_only_turn = None
+        return True
+
+    def _mask_frames(self) -> bool:
         # Mask down to the newest few frame turns (none at all if the keep-count
         # is zero or nonsensical). Until a compaction, older frames ride the
         # cached prefix at a tenth of the input price — cheap to carry.
-        frame_turns = [message for message in history if _is_frame_turn(message)]
-        for message in frame_turns[:-keep] if keep else frame_turns:
+        keep = max(self._max_image_turns, 0)
+        frame_turns = [message for message in self._history if _is_frame_turn(message)]
+        stale = frame_turns[:-keep] if keep else frame_turns
+        for message in stale:
             message["content"] = [dict(_FRAME_REMOVED) if _is_image(p) else p for p in _parts(message)]
+        return bool(stale)
 
 
 def _assemble(chunks: Chunks, on_speech: Callable[[str], None] | None) -> dict:
@@ -350,6 +368,13 @@ def _parse_args(arguments: object) -> dict:
 
 
 _TOOL_NARRATION = re.compile(r"Calling tool\b")
+_BARE_WAIT = re.compile(r"[\W_]*wait(\(\))?[\W_]*", re.IGNORECASE)
+
+
+def is_bare_wait(text: str) -> bool:
+    """Text that is only the wait tool's name — some models write "wait" or
+    "wait()" instead of calling it, and it must not reach the speaker."""
+    return _BARE_WAIT.fullmatch(text) is not None
 
 
 def split_tool_narration(text: str) -> tuple[str, bool]:
@@ -371,4 +396,4 @@ def _clean_speech(speech: str | None) -> str | None:
     if not speech:
         return None
     speech, _ = split_tool_narration(speech.strip())
-    return speech if re.search(r"[a-zA-Z0-9]", speech) else None
+    return speech if re.search(r"[a-zA-Z0-9]", speech) and not is_bare_wait(speech) else None

@@ -54,6 +54,15 @@ class ChatTransport:
     extra_body: dict = field(default_factory=dict)
 
 
+class ChatRejected(RuntimeError):
+    """The server answered with an error status. ``status`` lets a caller tell a
+    request it must change (4xx: too long, too many images) from an outage."""
+
+    def __init__(self, where: str, status: int, text: str):
+        super().__init__(f"{where}: HTTP {status}: {text[:200]}")
+        self.status = status
+
+
 class Backend(StrEnum):
     """Which way the brain reaches its model (surfaced in health and telemetry)."""
 
@@ -112,13 +121,13 @@ def direct_chat(endpoint: Endpoint, extra_body: dict | None = None) -> ChatTrans
         with client.stream("POST", url, json=body | extras) as resp:
             if resp.status_code != 200:
                 resp.read()
-                raise RuntimeError(f"chat direct: HTTP {resp.status_code}: {resp.text[:200]}")
+                raise ChatRejected("chat direct", resp.status_code, resp.text)
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
         resp = client.post(url, json=body | extras, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout)
         if resp.status_code != 200:
-            raise RuntimeError(f"chat direct: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise ChatRejected("chat direct", resp.status_code, resp.text)
         return resp.json() if resp.content else {}
 
     return ChatTransport(stream=stream, complete=complete, extra_body=extras)
@@ -131,14 +140,14 @@ def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransp
     def stream(body: dict) -> Chunks:
         with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras) as resp:
             if resp.status_code != 200:
-                raise RuntimeError(f"chat via proxy: HTTP {resp.status_code}: {resp.read()[:200]!r}")
+                raise ChatRejected("chat via proxy", resp.status_code, repr(resp.read()[:200]))
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
         with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras, timeout=timeout) as resp:
             payload = resp.read()
             if resp.status_code != 200:
-                raise RuntimeError(f"chat via proxy: HTTP {resp.status_code}: {payload[:200]!r}")
+                raise ChatRejected("chat via proxy", resp.status_code, repr(payload[:200]))
             return json.loads(payload) if payload else {}
 
     return ChatTransport(stream=stream, complete=complete, extra_body=extras)

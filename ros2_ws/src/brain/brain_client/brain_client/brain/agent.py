@@ -34,6 +34,7 @@ from brain_client.brain.context import ChatContext, Decision, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
+from brain_client.brain.transport import ChatRejected
 from brain_client.brain.utils import (
     Event,
     EventKind,
@@ -295,7 +296,7 @@ class BrainAgent:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=self._elapsed())
             raise
         except Exception as error:
-            await self._back_off(error, seen=len(events))
+            await self._back_off(error, context, seen=len(events))
 
     async def _think(self, context: ChatContext, events: list[Event], speaker: SpeechStreamer) -> None:
         text, frames = self._look(events)
@@ -366,7 +367,7 @@ class BrainAgent:
         self._error_streak = 0
         self._chat.emit_system("✅ Brain recovered.")
 
-    async def _back_off(self, error: Exception, seen: int) -> None:
+    async def _back_off(self, error: Exception, context: ChatContext, seen: int) -> None:
         """Inference failures and turn-level bugs alike: retry, never die.
 
         Events stay queued; only the user speaking ends the backoff early
@@ -377,6 +378,12 @@ class BrainAgent:
         self._logger.error(f"[Brain] Turn failed ({self._error_streak}x): {error!r}")
         if self._error_streak == 1:
             self._chat.emit_system(f"⚠️ Brain turn failed: {error} — retrying.")
+        # A request the server refused (4xx) will not pass verbatim; shrinking the
+        # history is the one thing the brain controls — a small-window local model
+        # otherwise stays wedged behind "exceeds maximum context length" forever.
+        compacted = isinstance(error, ChatRejected) and 400 <= error.status < 500 and context.compact()
+        if compacted:
+            self._logger.warn("[Brain] Compacted the history for the retry")
         backoff = min(5.0 * self._error_streak, 30.0)
         if self._error_streak >= _DROP_EVENTS_AFTER and seen:
             # The batch itself may be what fails (e.g. an oversized request):
@@ -385,7 +392,12 @@ class BrainAgent:
             del self._events[:seen]
             seen = 0
         self._trace(
-            TraceEvent.TURN_ERROR, turn=self._turn_count, error=str(error), streak=self._error_streak, backoff=backoff
+            TraceEvent.TURN_ERROR,
+            turn=self._turn_count,
+            error=str(error),
+            streak=self._error_streak,
+            backoff=backoff,
+            compacted=compacted,
         )
         await self._pause(backoff, seen=seen, user_only=True)
 

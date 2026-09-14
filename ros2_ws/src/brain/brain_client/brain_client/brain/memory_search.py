@@ -5,7 +5,9 @@
 Mobility-VLA-style retrieval: every remembered frame rides one blocking Chat
 Completions call, labeled with its id, capture time, and map pose, and the
 model picks the one that best serves the query — directly ("the kitchen") or
-by reasoning ("I am hungry").
+by reasoning ("I am hungry"). A server that refuses that many frames in one
+request (an image cap, a small context window) gets them as a tournament of
+batches instead, the batch winners meeting in a final.
 
 Every search concludes in a :class:`SearchVerdict` — one structured outcome
 for every consumer: the ``/brain/search_memory`` action server that skills
@@ -23,6 +25,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
+
+from brain_client.brain.transport import ChatRejected
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,6 +71,10 @@ _RESPONSE_FORMAT = {
 }
 
 
+Verdict = tuple[bool, int, str]
+"""The model's answer as parsed: found, frame id, explanation."""
+
+
 @dataclass(frozen=True)
 class SearchVerdict:
     """One search's structured outcome. ``error`` non-empty means the search
@@ -92,6 +100,7 @@ class MemorySearch:
         self._thinking = thinking
         self._logger = logger
         self._flight = threading.Lock()  # searches run one at a time
+        self._batch: int | None = None  # frames per request, once the server has refused them all at once
         # UI mirror, set by the composition root: every finished search's verdict
         # as a JSON-able dict (query, found, pose, explanation, latency).
         self.on_result: Callable[[dict], None] | None = None
@@ -124,11 +133,46 @@ class MemorySearch:
                 found=False,
                 explanation="The robot has no memories of this map yet — drive around in navigation mode to build them.",
             )
+        return self._conclude(query, self._pick(query, snapshot.memories), snapshot, started)
+
+    def _pick(self, query: str, memories: tuple[Memory, ...]) -> Verdict | None:
+        """The model's pick among ``memories``: one request when the server takes
+        them all, else halve until a batch passes and let the batch winners meet
+        in a final (each round has fewer frames than the last, so it ends)."""
+        batch = self._batch or len(memories)
+        if len(memories) <= batch:
+            try:
+                return self._ask(query, memories)
+            except ChatRejected as error:
+                if not 400 <= error.status < 500 or len(memories) < 2:
+                    raise
+                batch = self._batch = len(memories) // 2
+                self._logger.warn(f"[Memory] {len(memories)} frames refused at once ({error}); batches of {batch}")
+        finalists: list[Memory] = []
+        explanation = ""
+        for start in range(0, len(memories), batch):
+            picked = self._pick(query, memories[start : start + batch])
+            if picked is None:
+                return None
+            found, frame_id, explanation = picked
+            winner = next((m for m in memories if m.id == frame_id), None) if found else None
+            if winner is not None:
+                finalists.append(winner)
+        if not finalists:
+            return False, 0, explanation
+        if len(finalists) > 1 and (self._batch or 2) >= 2:
+            return self._pick(query, tuple(finalists))
+        # One winner, or a server taking a single frame per request, which can
+        # compare nothing: the newest finalist, as the prompt prefers among equals.
+        newest = max(finalists, key=lambda memory: memory.stamp)
+        return True, newest.id, explanation
+
+    def _ask(self, query: str, memories: tuple[Memory, ...]) -> Verdict | None:
         body = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": [*self._frame_content(snapshot.memories), _text(_question(query))]},
+                {"role": "user", "content": [*self._frame_content(memories), _text(_question(query))]},
             ],
             "response_format": _RESPONSE_FORMAT,
             "temperature": 0,
@@ -138,11 +182,10 @@ class MemorySearch:
             # frames, and full thinking only slowed it. A blank llm_thinking means
             # the server takes no reasoning knob, so this one goes with it.
             body["reasoning_effort"] = "low"
-        return self._conclude(query, self._chat.complete(body, None), snapshot, started)
+        return _parse_verdict(self._chat.complete(body, None))
 
-    def _conclude(self, query: str, response: dict, snapshot: MemorySnapshot, started: float) -> SearchVerdict:
+    def _conclude(self, query: str, parsed: Verdict | None, snapshot: MemorySnapshot, started: float) -> SearchVerdict:
         latency = round(time.monotonic() - started, 2)
-        parsed = _parse_verdict(response)
         if parsed is None:
             return SearchVerdict(query=query, found=False, error="unreadable answer", latency_sec=latency)
         found, frame_id, explanation = parsed
@@ -254,7 +297,7 @@ def _question(query: str) -> str:
     return f'The robot needs: "{query}". Which frame best serves this?'
 
 
-def _parse_verdict(response: dict) -> tuple[bool, int, str] | None:
+def _parse_verdict(response: dict) -> Verdict | None:
     try:
         data = json.loads(response["choices"][0]["message"]["content"])
         return bool(data["found"]), int(data["frame"]), str(data.get("explanation", ""))

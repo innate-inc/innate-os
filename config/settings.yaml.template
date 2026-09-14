@@ -215,15 +215,19 @@
 #     x_cam: 0.0197                 # camera forward offset from base_link (m)
 #     height_cam: 0.19663           # camera height above the floor (m)
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
-#     send_arm_camera_image: true   # also send the arm wrist camera image to the model
+#     send_arm_camera_image: true   # also send the arm wrist camera image to the model.
+#                                   # A local model can spend thousands of tokens per frame: on a small
+#                                   # context window set this false and history_max_image_turns: 1
 #     log_everything: true          # log every turn's full input
 #     llm_model: "gemini-3.6-flash"
 #     llm_base_url: ""              # e.g. "http://192.168.1.20:8000/v1" (vLLM),
 #                                   # "http://192.168.1.20:11434/v1" (Ollama),
 #                                   # "https://integrate.api.nvidia.com/v1" (NVIDIA)
-#     llm_thinking: "minimal"       # reasoning_effort: minimal | low | medium | high; "" = server default
+#     llm_thinking: "minimal"       # reasoning_effort: minimal | low | medium | high; "" = server default.
+#                                   # A model that thinks by default (Nemotron 3) ignores it — turn thinking
+#                                   # off in llm_extra_body instead, or idle turns get long and chatty
 #     llm_extra_body: ""            # JSON merged into every request, e.g.
-#                                   # '{"chat_template_kwargs": {"enable_thinking": false}}'
+#                                   # '{"chat_template_kwargs": {"enable_thinking": false}, "temperature": 0.2}'
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs
