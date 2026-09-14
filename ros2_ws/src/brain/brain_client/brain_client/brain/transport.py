@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -54,13 +55,26 @@ class ChatTransport:
     extra_body: dict = field(default_factory=dict)
 
 
+# How servers word a request that outgrew their window or image cap — vLLM/NIM
+# ("exceeds model's maximum context length", "At most N image(s)"), OpenAI
+# ("maximum context length"), Google's compat layer ("input token count ...
+# exceeds the maximum number of input tokens") and any 413.
+_TOO_LARGE = re.compile(
+    r"context (?:length|window)|maximum number of (?:input )?tokens|token count|too many (?:tokens|images)"
+    r"|at most \d+ image|payload too large|request entity too large",
+    re.IGNORECASE,
+)
+
+
 class ChatRejected(RuntimeError):
-    """The server answered with an error status. ``status`` lets a caller tell a
-    request it must change (4xx: too long, too many images) from an outage."""
+    """The server answered with an error status. ``too_large`` singles out the one
+    rejection a smaller request can fix, from auth, model and field errors that
+    no shrinking will."""
 
     def __init__(self, where: str, status: int, text: str):
         super().__init__(f"{where}: HTTP {status}: {text[:200]}")
         self.status = status
+        self.too_large = status == 413 or (status == 400 and _TOO_LARGE.search(text) is not None)
 
 
 class Backend(StrEnum):

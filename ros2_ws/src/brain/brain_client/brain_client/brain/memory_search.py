@@ -144,7 +144,7 @@ class MemorySearch:
             try:
                 return self._ask(query, memories)
             except ChatRejected as error:
-                if not 400 <= error.status < 500 or len(memories) < 2:
+                if not error.too_large or len(memories) < 2:
                     raise
                 batch = self._batch = len(memories) // 2
                 self._logger.warn(f"[Memory] {len(memories)} frames refused at once ({error}); batches of {batch}")

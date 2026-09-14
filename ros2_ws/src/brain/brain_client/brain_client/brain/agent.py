@@ -378,10 +378,10 @@ class BrainAgent:
         self._logger.error(f"[Brain] Turn failed ({self._error_streak}x): {error!r}")
         if self._error_streak == 1:
             self._chat.emit_system(f"⚠️ Brain turn failed: {error} — retrying.")
-        # A request the server refused (4xx) will not pass verbatim; shrinking the
+        # A request refused as too large will not pass verbatim; shrinking the
         # history is the one thing the brain controls — a small-window local model
         # otherwise stays wedged behind "exceeds maximum context length" forever.
-        compacted = isinstance(error, ChatRejected) and 400 <= error.status < 500 and context.compact()
+        compacted = isinstance(error, ChatRejected) and error.too_large and context.compact()
         if compacted:
             self._logger.warn("[Brain] Compacted the history for the retry")
         backoff = min(5.0 * self._error_streak, 30.0)
