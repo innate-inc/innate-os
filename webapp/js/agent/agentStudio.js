@@ -63,7 +63,6 @@ function held(ready, timeoutMs) {
 
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
-  "innate-os/wave": "Granted: the Wave skill. Wave as requested.",
   "innate-os/arm_move": "Granted: the ArmMove skill. Use it for the arm movement I requested; ask me for a target if needed.",
   "innate-os/head_emotion": "Granted: the HeadEmotion skill. Use it.",
   "innate-os/turn_in_place": "Granted: the TurnInPlace skill. Have a look around.",
@@ -632,9 +631,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
       return { chips: [] };
     }
-    // A request made by the robot for the visitor's wave, arm or pickup target overrides the scripted
+    // A request made by the robot for the visitor's arm or pickup target overrides the scripted
     // grant, including persona selection and the final memory step. Never auto-grant it.
-    const requested = [WAVE, ARM_MOVE, PICK_UP].filter((skill) =>
+    const requested = [ARM_MOVE, PICK_UP].filter((skill) =>
       !agentState.get().activeSkills.has(skill) && mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
     );
     if ((r || o) && requested.length) {
@@ -674,7 +673,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       };
     }
     const wants = (r.wants ?? []).filter(
-      (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill),
+      (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill) && skill !== WAVE,
     );
     // What the act says the person might say next: the story's own words, not a tool call.
     const suggestions = [
