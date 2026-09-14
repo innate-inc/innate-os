@@ -11975,3 +11975,22 @@ body.sim-edge-to-edge .agent-cockpit.agent-sim .agent-feed-frame > .video-stage 
     -webkit-user-select: text;
   }
 }
+
+/* Reply suggestions occupy a single, scrollable line on the phone. */
+.agent-try-mobile { display: none; }
+.agent-compact .agent-offers.replies-only {
+  flex-direction: row; align-items: center; gap: 8px;
+  padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
+}
+.agent-compact .replies-only .agent-offers-head { flex: 0 0 auto; padding: 0; }
+.agent-compact .replies-only .agent-offers-kicker { font: inherit; font-size: 12px; letter-spacing: normal; text-transform: none; }
+.agent-compact .replies-only .agent-try-desktop { display: none; }
+.agent-compact .replies-only .agent-try-mobile { display: inline; }
+.agent-compact .replies-only .agent-offers-row {
+  flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto;
+  scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.agent-compact .replies-only .agent-offers-row::-webkit-scrollbar { display: none; }
+.agent-compact .replies-only .agent-offer-chip { flex: 0 0 auto; white-space: nowrap; }
+
+.agent-compact .agent-stream-wrap.with-offers { touch-action: pan-x pan-y; }

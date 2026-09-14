@@ -60,13 +60,17 @@ try {
    block.active.runtime.wants=[skill];
    block.active.runtime.suggests=question?[question]:[];
    block.active.runtime.suggests_after_grant=[action];
-   onChallenge(block); say('Please grant the next skill.');
+   onChallenge(block); say('Please grant '+skill+'.');
    check(!offers.some(o=>o.text===action),`${action} hidden before grant`);
    check(!question || offers.some(o=>o.text===question),'Informational question stays available');
    state.activeSkills.add(skill);onState();
    check(offers.some(o=>o.text===action),`${action} appears after grant`);
    offers.find(o=>o.text===action).onSelect(action);
    check(submitted===action,'Action suggestion submits the intended message');
+   say('Here is a joke about cats.');
+   check(!offers.some(o=>o.kind==='reply'),'Unrelated robot response does not revive story suggestions');
+   say(action);
+   check(offers.some(o=>o.text===action),'Explicit robot suggestion appears');
    state.activeSkills.delete(skill);onState();
    check(!offers.some(o=>o.text===action),'Revoking permission hides the action again');
  }

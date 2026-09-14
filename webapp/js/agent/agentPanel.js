@@ -228,6 +228,25 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   /** What the deck shows; the world calls on every frame, so only a change touches the DOM. */
   let offersKey = "";
+  /** @type {import("./offerDeck.js").Offer[]} */
+  let currentOffers = [];
+  let currentOfferTitle = "";
+  let lastUserAt = 0;
+  let lastRobotAt = 0;
+  function renderOffers() {
+    const visible = currentOffers.filter((offer) => offer.kind !== "reply" || lastRobotAt > lastUserAt);
+    const key = keyOf(visible, currentOfferTitle);
+    if (key === offersKey) return;
+    offersKey = key;
+    deck.set(visible, currentOfferTitle);
+  }
+  /** Only actual conversation turns renew reply suggestions; history and echoes cannot
+   * resurrect them after a newer user message. @param {string} sender @param {number} timestamp */
+  function offerTurn(sender, timestamp) {
+    if (sender === "user") lastUserAt = Math.max(lastUserAt, timestamp);
+    if (sender === "robot") lastRobotAt = Math.max(lastRobotAt, timestamp);
+    renderOffers();
+  }
   /** @param {import("./offerDeck.js").Offer[]} list @param {string} title */
   const keyOf = (list, title) => `${title}|${list.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
   let sending = false;
@@ -240,6 +259,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     sending = true;
     // The bubble lands the moment the person acts, not after the round trip.
     const timestamp = Date.now() / 1000;
+    if (!how.narrator) offerTurn("user", Math.max(timestamp, lastRobotAt));
     sentTexts.set(text.trim(), Date.now());
     if (how.narrator) chat.addMessage("system", text, timestamp, "narrator");
     else chat.addMessage("user", text, timestamp);
@@ -271,6 +291,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = input.value.trim();
     if (!text) return;
     if (ask?.submit) {
+      offerTurn("user", Math.max(Date.now() / 1000, lastRobotAt));
       ask.submit(text);
       input.value = "";
       input.style.height = "auto";
@@ -321,9 +342,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       chat.replay(shown);
       // A reloaded page must know the robot has spoken: the story's chips wait on it.
       for (const entry of shown) {
-        if (String(entry?.sender ?? "") === "robot") {
-          opts.onRobotMessage?.(String(entry.text ?? ""), Number(entry.timestamp) || Date.now() / 1000);
+        const sender = String(entry?.sender ?? "");
+        const timestamp = Number(entry?.timestamp) || 0;
+        if (sender === "robot" && timestamp > lastRobotAt) {
+          opts.onRobotMessage?.(String(entry.text ?? ""), timestamp);
         }
+        offerTurn(sender, timestamp);
       }
     } catch (err) {
       console.warn("[chat] reconcile failed:", err);
@@ -356,7 +380,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (String(payload?.sender ?? "") !== "user") return;
     const text = String(payload?.text ?? "");
     if (!text) return;
-    chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
+    const timestamp = Number(payload?.timestamp) || Date.now() / 1000;
+    offerTurn("user", timestamp);
+    chat.addMessage("user", text, timestamp);
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -375,11 +401,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       const sentAt = sentTexts.get(text.trim());
       if (sentAt !== undefined && Date.now() - sentAt < 60_000) return; // already on screen
     }
-    chat.routeChatOut(sender, text, ts);
-    if (sender === "robot") {
+    if (sender === "robot" && ts > lastRobotAt) {
       clearThinking(); // the reply is here; a lit "Thinking…" beside fresh chips reads as frozen
       opts.onRobotMessage?.(text, ts);
     }
+    offerTurn(sender, ts);
+    chat.routeChatOut(sender, text, ts);
   }, undefined, "std_msgs/msg/String");
 
   /** Skills the brain has started and not yet finished, by run id. */
@@ -446,6 +473,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       chat.addMessage("system", text, Date.now() / 1000);
     },
     beginOnboarding(fresh, startedAt) {
+      lastUserAt = 0;
+      lastRobotAt = 0;
+      renderOffers();
       historyFloor = startedAt / 1000;
       lastSnapshot = "";
       chat.clear();
@@ -453,10 +483,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (!fresh) void loadHistory();
     },
     setOffers(next, title = "") {
-      const key = keyOf(next, title);
-      if (key === offersKey) return;
-      offersKey = key;
-      deck.set(next, title);
+      currentOffers = next;
+      currentOfferTitle = title;
+      renderOffers();
     },
     submitText,
     /** @param {string} text */

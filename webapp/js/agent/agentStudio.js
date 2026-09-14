@@ -659,7 +659,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       ...(!wants.length ? r.suggests_after_grant ?? [] : []),
       ...(r.suggests ?? []),
     ];
-    const replies = suggestions.map((/** @type {string} */ text) => ({
+    // These are prompts for the current robot request, not permanent shortcuts for
+    // the act. A reply on another subject should not revive the old suggestions.
+    const line = opts.lastLine().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const askingForAct = (r.wants ?? []).some((/** @type {string} */ skill) => mentions(opts.lastLine(), skill));
+    const replies = suggestions.filter((/** @type {string} */ text) =>
+      askingForAct || line.includes(text.toLowerCase().replace(/[^a-z0-9]/g, "")),
+    ).map((/** @type {string} */ text) => ({
       text,
       kind: /** @type {const} */ ("reply"),
       onSelect: (/** @type {string} */ said) => void panel.submitText(said),

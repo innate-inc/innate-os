@@ -1,0 +1,51 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../css/app.css">
+<style>body{background:#4b4b4d}#root{position:relative;width:375px;height:700px}.agent-thoughts-panel{width:350px!important;position:relative!important;inset:auto!important}#result{white-space:pre-wrap}</style>
+<div id="root" class="agent-compact"></div><pre id="result">Running…</pre>
+<script type="module">
+import {createAgentPanel} from '../js/agent/agentPanel.js';
+import {CHAT_IN_TOPIC,CHAT_OUT_TOPIC} from '../js/constants.js';
+const noop=()=>{}, subs=new Map(), root=document.querySelector('#root'), checks=[];
+let history=[], connection, panel;
+const check=(ok,text)=>{if(!ok)throw Error(text);checks.push(text)};
+const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+const ros={subscribe:(t,cb)=>(subs.set(t,cb),noop),onStateChange:cb=>(connection=cb,noop),callService:async()=>({history:JSON.stringify(history)}),publish:()=>true};
+const state={get:()=>({agents:[{id:'demo',name:'Demo',skills:[]}],broken:[],currentDirective:'demo',brainActive:true}),subscribe:()=>noop};
+const reply={kind:'reply',text:'Is anyone else here?',onSelect:()=>panel.submitText('Is anyone else here?')};
+const grant={kind:'grant',text:'TurnInPlace',onSelect:noop};
+const shown=()=>!!root.querySelector('.replies-only:not([hidden])');
+const emit=(sender,text,timestamp,topic=CHAT_OUT_TOPIC)=>subs.get(topic)({data:JSON.stringify({sender,text,timestamp})});
+try{
+ panel=createAgentPanel(root,ros,state,{});
+ panel.setOffers([grant,reply]);
+ check(!shown(),'Replies wait for a robot response');
+ const t=Date.now()/1000;
+ emit('robot','Grant TurnInPlace.',t-1);
+ check(shown(),'Robot response exposes current suggestions');
+ await panel.submitText('Tell me a joke');
+ check(!shown(),'Typing a different message dismisses suggestions immediately');
+ panel.setOffers([grant,reply]);
+ check(!shown(),'Repeated story updates cannot resurrect stale suggestions');
+ check(!!root.querySelector('.agent-offer-card.grant'),'Pending grant remains available');
+ history=[{sender:'robot',text:'Grant TurnInPlace.',timestamp:t-1}];connection('connected');await frame();
+ check(!shown(),'Old history cannot resurrect dismissed suggestions');
+ emit('robot','Here is another reply.',t+1);
+ check(shown(),'New robot response renews suggestions');
+ emit('user','A voice transcript',t+2,CHAT_IN_TOPIC);
+ check(!shown(),'Voice or remote user input dismisses suggestions');
+ emit('robot','Delayed old reply',t+1);
+ check(!shown(),'Out-of-order robot output stays dismissed');
+ emit('robot','New reply',t+3);
+ root.querySelector('.reply').click();
+ check(!shown(),'Selecting a suggestion dismisses it too');
+ emit('robot','Latest reply',Date.now()/1000+5);
+ panel.setOffers([reply,{...reply,text:'What is a skill?'},{...reply,text:'A much longer suggested question'}]);
+ await frame();
+ const row=root.querySelector('.replies-only'), chips=row.querySelector('.agent-offers-row'), heading=row.querySelector('.agent-offers-head');
+ check(row.getBoundingClientRect().height<42,'Mobile suggestions use one compact line');
+ check(Math.abs(heading.getBoundingClientRect().top-chips.getBoundingClientRect().top)<12,'Try label and chips share the row');
+ check(chips.scrollWidth>chips.clientWidth,'Extra suggestions scroll inside their row');
+ check(root.scrollWidth<=root.clientWidth,'Suggestions do not widen the page');
+ document.querySelector('#result').textContent='PASS '+checks.length+'\n'+checks.join('\n');
+}catch(e){document.querySelector('#result').textContent='FAIL '+e.stack}
+</script>

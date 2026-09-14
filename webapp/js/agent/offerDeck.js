@@ -86,6 +86,7 @@ export function createOfferDeck(opts = {}) {
     const cards = offers.filter((o) => CARD_KINDS.has(o.kind));
     const chips = offers.filter((o) => !CARD_KINDS.has(o.kind));
     el.hidden = !offers.length;
+    el.classList.toggle("replies-only", offers.length > 0 && offers.every((o) => o.kind === "reply"));
     const ask = cards.map((o) => `${o.kind}:${o.text}`).join("|");
     if (ask !== asking) {
       uncue?.();
@@ -94,7 +95,7 @@ export function createOfferDeck(opts = {}) {
     }
     if (el.hidden) return;
     kicker.hidden = cards.length > 0;
-    kicker.textContent = "Try asking";
+    kicker.innerHTML = '<span class="agent-try-desktop">Try asking</span><span class="agent-try-mobile">Try:</span>';
     title.textContent = heading;
     title.hidden = !heading;
     grid.replaceChildren(...cards.map(card));
