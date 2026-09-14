@@ -18,7 +18,6 @@ from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, p
 
 if TYPE_CHECKING:
     from innate import MainImage, Mobility, Odometry, Overlay
-    from innate_proxy import ProxyClient
 
 Pixel = tuple[float, float]
 FloorXY = tuple[float, float]
@@ -103,7 +102,7 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, proxy: "ProxyClient | None", question: str, settle_s: float):
+def ask_head(host: ApproachHost, gemini: "gemlib.Client | None", question: str, settle_s: float):
     """Settle the base, then put the current head frame to Gemini.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
@@ -111,7 +110,7 @@ def ask_head(host: ApproachHost, proxy: "ProxyClient | None", question: str, set
     img = host.main_image
     if not img:
         return None, None
-    return gemlib.ask_image(proxy, img, question, logger=host.logger), img
+    return gemlib.ask_image(gemini, img, question, logger=host.logger), img
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":
