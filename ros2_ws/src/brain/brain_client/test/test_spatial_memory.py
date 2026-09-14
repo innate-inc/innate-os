@@ -10,6 +10,8 @@ import json
 import math
 import os
 import shutil
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +22,7 @@ import pytest
 
 from brain_client.brain import memory_search as memory_search_module
 from brain_client.brain.memory_search import MemorySearch, verdict_text
-from brain_client.brain.transport import ChatTransport
+from brain_client.brain.transport import CACHED_CONTENTS_PATH, ChatRejected, ChatTransport, GeminiRest
 from brain_client.memory import recorder as recorder_module
 from brain_client.memory import selection as selection_module
 from brain_client.memory.coverage import Coverage, wedge_mask
@@ -747,7 +749,7 @@ def clock(monkeypatch):
     return state
 
 
-def make_recorder(data_dir, published: list | None = None, pose: SimpleNamespace | None = None):
+def make_recorder(data_dir, published: list | None = None, pose: SimpleNamespace | None = None, cache_state=None):
     logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
     node = SimpleNamespace(
         get_logger=lambda: logger,
@@ -769,6 +771,8 @@ def make_recorder(data_dir, published: list | None = None, pose: SimpleNamespace
         config,
         store=store,
         pose_tracker=SimpleNamespace(map_pose_xyt=lambda: pose.xyt),
+        warm_search=None,
+        cache_state=cache_state,
         positions_pub=SimpleNamespace(publish=(published if published is not None else []).append),
     )
     return recorder, store
@@ -897,17 +901,17 @@ def test_a_stale_frame_blocks_capture(data_dir, clock):
     assert store.snapshot().memories == ()
 
 
-def test_positions_mirror_publishes_map_poses(data_dir, clock):
+def test_positions_mirror_publishes_map_poses_and_cache_state(data_dir, clock):
     published: list = []
     pose = SimpleNamespace(xyt=(1.23456789, -2.98765432, 0.87654321))
-    recorder, store = make_recorder(data_dir, published, pose=pose)
+    recorder, store = make_recorder(data_dir, published, pose=pose, cache_state=lambda: "warm")
     see_confident_world(recorder, clock)
     recorder.tick()
     clock.now += 3.1
     recorder._on_image(SimpleNamespace(data=GOOD_JPEG))
     recorder.tick()
     payload = json.loads(published[-1].data)
-    assert payload["map"] == "A.yaml"
+    assert payload["map"] == "A.yaml" and payload["cache"] == "warm"
     (position,) = payload["positions"]
     assert position["id"] == 1
     # Display precision, not the store's: full floats bloat the JSON by half.
@@ -1325,23 +1329,50 @@ def chat_answer(payload: dict | None) -> dict:
     return {"choices": [{"message": {"role": "assistant", "content": json.dumps(payload)}}]}
 
 
+class FakeGemini:
+    """A scriptable GeminiRest: records every cache creation and deletion."""
+
+    def __init__(self):
+        self.creates: list[dict] = []
+        self.deletes: list[str] = []
+        self.create_error: Exception | None = None
+        self.rest = GeminiRest(post=self._post, delete=self._delete)
+
+    def _post(self, path: str, body: dict) -> dict:
+        assert path == CACHED_CONTENTS_PATH
+        self.creates.append(body)
+        if self.create_error is not None:
+            raise self.create_error
+        return {"name": f"cachedContents/c{len(self.creates)}"}
+
+    def _delete(self, path: str) -> dict:
+        self.deletes.append(path)
+        return {}
+
+
 class FakeChat:
     """A scriptable ChatTransport: records every request body, answers with a verdict."""
 
     def __init__(self, verdict: dict | None = None):
         self.requests: list[dict] = []
         self.verdict: dict | None = verdict if verdict is not None else MATCHES_FRAME_1
+        self.cached_error: ChatRejected | None = None  # raised by a request riding a cache
+        self.gemini = FakeGemini()
         self.transport = ChatTransport(stream=self._stream, complete=self._complete)
 
     def _complete(self, body: dict, timeout: float | None) -> dict:
         self.requests.append(body)
+        if cached_content(body) is not None and self.cached_error is not None:
+            raise self.cached_error
         return chat_answer(self.verdict)
 
     def _stream(self, body: dict) -> Iterator[dict]:
         raise AssertionError("a memory search never streams")
 
 
-def make_search(data_dir, frames: int, verdict: dict | None = None) -> tuple[MemorySearch, FakeChat, MemoryStore]:
+def make_search(
+    data_dir, frames: int, verdict: dict | None = None, *, cache: bool = False
+) -> tuple[MemorySearch, FakeChat, MemoryStore]:
     (data_dir / "maps").mkdir(parents=True, exist_ok=True)
     map_file = data_dir / "maps" / "A.pgm"
     if not map_file.exists():
@@ -1352,7 +1383,33 @@ def make_search(data_dir, frames: int, verdict: dict | None = None) -> tuple[Mem
         store.add(float(3 * i), 0.0, 0.0, 1000.0 + i, f"jpg-{i + 1}".encode())
     fake = FakeChat(verdict)
     logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
-    return MemorySearch(store, fake.transport, model="test-model", thinking="low", logger=logger), fake, store
+    search = MemorySearch(
+        store,
+        fake.transport,
+        model="test-model",
+        thinking="low",
+        logger=logger,
+        gemini=fake.gemini.rest if cache else None,
+    )
+    return search, fake, store
+
+
+def build_cache(search: MemorySearch) -> None:
+    """Synchronous stand-in for warm()'s background cache rebuild."""
+    snapshot = search._store.snapshot()
+    assert search._gemini is not None
+    if search._should_warm(snapshot):
+        search._create_cache(snapshot, search._gemini)
+
+
+def wait_until(condition, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def cached_content(body: dict) -> str | None:
+    return body.get("extra_body", {}).get("google", {}).get("cached_content")
 
 
 def question_content(body: dict) -> list[dict]:
@@ -1456,6 +1513,7 @@ def test_search_mirrors_verdicts_to_the_ui(data_dir):
         "explanation": "no such view",
         "latency_sec": reports[-1]["latency_sec"],
         "stamp": reports[-1]["stamp"],
+        "cached": False,
     }
 
 
@@ -1503,6 +1561,267 @@ def test_an_eviction_mid_search_misses_cleanly(data_dir):
     mutate_after_answer(search, fake, lambda: store.evict(memory_with_id(store, 1)))
     verdict = search.search("the kitchen")
     assert not verdict.found and not verdict.error
+
+
+# ================= context cache =================
+
+
+def test_search_rides_a_fresh_cache_with_only_the_question(data_dir):
+    search, fake, _ = make_search(
+        data_dir, frames=6, verdict={"found": True, "frame": 2, "explanation": "the kitchen"}, cache=True
+    )
+    build_cache(search)
+    verdict = search.search("the kitchen")
+    search.search("the kitchen again")
+    assert len(fake.gemini.creates) == 1
+    assert [cached_content(body) for body in fake.requests] == ["cachedContents/c1", "cachedContents/c1"]
+    body = fake.requests[0]
+    assert [message["role"] for message in body["messages"]] == ["user"]  # the system prompt lives in the cache
+    assert content_kinds(body) == ["text"]  # fresh cache: no frame bytes at all
+    assert body["model"] == "test-model" and body["response_format"]["json_schema"]["name"] == "memory_verdict"
+    assert verdict.found and verdict.cached and verdict.image == b"jpg-2"
+    assert verdict.memory is not None and verdict.memory.x == 3.0
+
+
+def test_the_cache_holds_every_labeled_frame_and_the_system_prompt(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    (body,) = fake.gemini.creates
+    assert body["model"] == "models/test-model" and body["ttl"].endswith("s")
+    assert "spatial memory" in body["systemInstruction"]["parts"][0]["text"]
+    parts = body["contents"][0]["parts"]
+    assert [next(iter(part)) for part in parts] == ["text", "inlineData"] * 6
+    assert parts[0]["text"].startswith("Frame 1 —")
+    assert parts[1]["inlineData"] == {"mimeType": "image/jpeg", "data": base64.b64encode(b"jpg-1").decode()}
+
+
+def test_operator_extras_ride_beneath_the_cache_reference(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    search._extra_body = {"extra_body": {"google": {"thinking_config": {"thinking_budget": 0}}}}
+    build_cache(search)
+    search.search("anything")
+    google = fake.requests[-1]["extra_body"]["google"]
+    assert google == {"thinking_config": {"thinking_budget": 0}, "cached_content": "cachedContents/c1"}
+
+
+def test_a_search_never_builds_the_cache(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    search.search("anything")
+    assert fake.gemini.creates == []  # a cold search answers from frames; rebuilds belong to warm()
+    assert cached_content(fake.requests[-1]) is None and content_kinds(fake.requests[-1]).count("image_url") == 6
+
+
+def test_without_a_native_route_every_search_answers_from_the_frames(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6)
+    search.warm()
+    search.search("anything")
+    assert search.cache_state() == "unsupported" and fake.gemini.creates == []
+    assert cached_content(fake.requests[-1]) is None
+
+
+def test_a_stale_cache_serves_with_a_delta_of_new_frames(data_dir):
+    search, fake, store = make_search(
+        data_dir, frames=6, verdict={"found": True, "frame": 7, "explanation": "new"}, cache=True
+    )
+    build_cache(search)
+    store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")  # id 7
+    verdict = search.search("the new spot")
+    assert len(fake.gemini.creates) == 1  # the search path never rebuilds
+    body = fake.requests[-1]
+    assert cached_content(body) == "cachedContents/c1"
+    assert content_kinds(body) == ["text", "image_url", "text"]  # the new frame's label, its pixels, the question
+    assert content_texts(body)[0].startswith("Frame 7 —")
+    assert verdict.found and verdict.cached
+    assert verdict.memory is not None and verdict.memory.id == 7 and verdict.image == b"jpg-late"
+
+
+def test_delta_notes_supersede_and_retire_frames(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    store.replace(memory_with_id(store, 2), 3.0, 0.0, 0.0, 5000.0, b"jpg-2-new")
+    store.evict(memory_with_id(store, 3))
+    search.search("anything")
+    body = fake.requests[-1]
+    texts = content_texts(body)
+    assert any("Frame 2 was re-captured" in text for text in texts)
+    assert any("Frame 3 no longer exists" in text for text in texts)
+    assert content_kinds(body).count("image_url") == 1  # only the re-captured frame's bytes travel
+
+
+def test_warm_rebuilds_a_stale_cache_and_deletes_the_old(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")
+    build_cache(search)
+    assert len(fake.gemini.creates) == 2
+    assert fake.gemini.deletes == ["/v1beta/cachedContents/c1"]
+
+
+def test_unsupported_backend_disables_caching_permanently(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    fake.gemini.create_error = ChatRejected("gemini", 404, "no such endpoint")
+    build_cache(search)
+    build_cache(search)
+    assert len(fake.gemini.creates) == 1  # latched after the first answer
+    verdict = search.search("first")
+    assert cached_content(fake.requests[-1]) is None and verdict.image == b"jpg-1"
+    assert search.cache_state() == "unsupported"
+
+
+def test_failed_cache_creation_retries_only_after_the_memory_changes(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    fake.gemini.create_error = ChatRejected("gemini", 400, "cache too small")
+    build_cache(search)
+    build_cache(search)
+    assert len(fake.gemini.creates) == 1
+    fake.gemini.create_error = None
+    store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")
+    build_cache(search)
+    assert len(fake.gemini.creates) == 2
+
+
+def test_a_transient_cache_failure_backs_off_instead_of_latching(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    fake.gemini.create_error = ChatRejected("gemini", 503, "overloaded")
+    build_cache(search)
+    build_cache(search)
+    assert len(fake.gemini.creates) == 1  # backed off — warm() rides a 1 Hz tick
+    assert search._failed_revision is None  # a 5xx is the backend's fault, not this content's
+    fake.gemini.create_error = None
+    search._retry_at = 0.0  # the backoff window elapses
+    build_cache(search)
+    assert len(fake.gemini.creates) == 2  # same content retries once the backend recovers
+
+
+def test_a_network_error_during_warm_backs_off_instead_of_raising(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    fake.gemini.create_error = RuntimeError("connection reset")
+    build_cache(search)
+    assert search._retry_at > time.monotonic() and search._failed_revision is None
+
+
+def test_a_dead_cache_falls_back_and_is_forgotten(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    fake.cached_error = ChatRejected("chat", 400, "cache expired")
+    verdict = search.search("second")
+    assert verdict.image == b"jpg-1" and not verdict.cached and verdict.error == ""
+    assert cached_content(fake.requests[-1]) is None  # answered from frames within the same search
+    fake.cached_error = None
+    build_cache(search)
+    assert len(fake.gemini.creates) == 2  # the dead handle was dropped; warm rebuilt
+
+
+def test_an_outage_on_a_cached_search_keeps_the_cache(data_dir):
+    search, fake, _ = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    fake.cached_error = ChatRejected("chat", 503, "overloaded")
+    verdict = search.search("second")
+    assert verdict.error and len(fake.requests) == 1  # no retry from the frames: the server, not the cache, is down
+    assert search.cache_state() == "warm"
+
+
+def test_warm_builds_the_cache_in_the_background(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    store.last_change_monotonic = time.monotonic() - 60.0
+    search.warm()
+    wait_until(lambda: search._cache is not None)
+    assert search._cache is not None and len(fake.gemini.creates) == 1
+    assert fake.requests == []  # warming never asks a question
+
+
+def test_warm_waits_for_recording_to_settle(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    store.last_change_monotonic = time.monotonic()  # just changed
+    search.warm()
+    time.sleep(0.05)
+    assert fake.gemini.creates == []
+
+
+def test_warm_rebuilds_mid_burst_once_the_delta_grows_too_big(data_dir):
+    # The quiet window must not let the stale-cache delta grow without bound
+    # during a long recording tour — past the threshold, rebuild anyway.
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    for i in range(10):
+        store.add(40.0 + i, 0.0, 0.0, 3000.0 + i, b"jpg-burst")
+    assert time.monotonic() - store.last_change_monotonic < 1.0  # mid-burst
+    search.warm()
+    wait_until(lambda: len(fake.gemini.creates) >= 2)
+    assert len(fake.gemini.creates) == 2
+
+
+def test_a_search_proceeds_while_a_rebuild_is_on_the_wire(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")
+    store.last_change_monotonic = time.monotonic() - 60.0
+    gate = threading.Event()
+    creating = fake.gemini._post
+
+    def slow_create(path: str, body: dict) -> dict:
+        gate.wait(timeout=5)
+        return creating(path, body)
+
+    fake.gemini.rest = GeminiRest(post=slow_create, delete=fake.gemini._delete)
+    search._gemini = fake.gemini.rest
+    search.warm()
+    verdict = search.search("meanwhile")  # rides the stale handle with its delta, never the rebuild
+    gate.set()
+    assert verdict.cached and cached_content(fake.requests[-1]) == "cachedContents/c1"
+    wait_until(lambda: len(fake.gemini.creates) >= 2)
+
+
+def test_cache_state_reflects_the_lifecycle(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    assert search.cache_state() == "cold"
+    build_cache(search)
+    assert search.cache_state() == "warm"
+    store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")
+    assert search.cache_state() == "warm"  # stale-but-usable: the delta keeps recall instant
+
+    small, _, _ = make_search(data_dir / "small", frames=0, cache=True)
+    assert small.cache_state() == "inline"
+
+
+def test_forget_drops_the_cache(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    store.clear()
+    search.forget()
+    wait_until(lambda: fake.gemini.deletes != [])
+    assert fake.gemini.deletes == ["/v1beta/cachedContents/c1"] and search._cache is None
+
+
+def test_forget_frame_drops_the_cache_embedding_it(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    gone = memory_with_id(store, 2)
+    store.forget(2)
+    search.forget_frame(gone)
+    wait_until(lambda: fake.gemini.deletes != [])
+    assert fake.gemini.deletes == ["/v1beta/cachedContents/c1"]
+    search.search("anything")
+    assert cached_content(fake.requests[-1]) is None  # a retire note would only shadow the forgotten view
+
+
+def test_forget_frame_keeps_a_cache_that_never_embedded_it(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    late = store.add(30.0, 0.0, 0.0, 2000.0, b"jpg-late")
+    assert late is not None
+    store.forget(late.id)
+    search.forget_frame(late)
+    time.sleep(0.05)
+    assert fake.gemini.deletes == [] and search.cache_state() == "warm"
+
+
+def test_a_same_name_remap_disqualifies_the_cache(data_dir):
+    search, fake, store = make_search(data_dir, frames=6, cache=True)
+    build_cache(search)
+    remap_in_place(data_dir, store)
+    search.search("the kitchen")
+    assert cached_content(fake.requests[-1]) is None  # old-map frames must not vouch for reused ids
 
 
 def remap_in_place(data_dir, store: MemoryStore) -> None:

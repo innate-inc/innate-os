@@ -502,7 +502,7 @@ def resolve_brain_backend(env: dict[str, str], settings_endpoint: str = "") -> s
 
     An endpoint of the operator's own wins: they asked for that server by name.
     Then the service key, which also buys voice a Gemini key does not, then the
-    Gemini key. brain_client's `pick_chat` (brain/transport.py) makes the real
+    Gemini key. brain_client's `pick_wire` (brain/transport.py) makes the real
     choice and owns this precedence; the launcher runs on the host and cannot
     import it, so this restates the rule. Change one and change the other.
     """

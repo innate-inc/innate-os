@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+GEMINI_ROUTE = "gemini"
+"""The ``memory_llm_base_url`` value naming the managed Gemini route — the proxy
+or ``GEMINI_API_KEY`` — rather than an endpoint of the operator's own."""
+
 
 @dataclass(frozen=True)
 class BrainConfig:
@@ -46,6 +50,11 @@ class BrainConfig:
     llm_model: str
     llm_thinking: str  # sent as reasoning_effort; "" = server default
     llm_extra_body: str  # JSON object merged into every request
+    # --- Memory search (its own wire, or the brain's) ---
+    memory_llm_base_url: str  # "" = the brain's wire; "gemini" = the managed Gemini route; else a ".../v1" root
+    memory_llm_model: str
+    memory_llm_thinking: str
+    memory_llm_extra_body: str
     idle_turn_interval: float  # seconds between looks when no skill is running
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model
@@ -89,7 +98,25 @@ class BrainConfig:
             values["llm_model"] = DEFAULT_MODEL
         if values["llm_thinking"] in _ABSENT_VALUES["llm_thinking"]:
             values["llm_thinking"] = "" if values["llm_base_url"].strip() else GEMINI_THINKING
+        _resolve_memory_wire(values)
         return cls(**values)
+
+
+def _resolve_memory_wire(values: dict) -> None:
+    """Fill the memory search's blank knobs: on the brain's wire they are the
+    brain's; on a route of their own they are that route's defaults, since the
+    brain's model, thinking level and extras belong to another server."""
+    route = values["memory_llm_base_url"].strip()
+    if not route:
+        for knob in ("model", "thinking", "extra_body"):
+            if values[f"memory_llm_{knob}"] in _ABSENT_VALUES[f"memory_llm_{knob}"]:
+                values[f"memory_llm_{knob}"] = values[f"llm_{knob}"]
+        return
+    gemini = route == GEMINI_ROUTE
+    if values["memory_llm_model"] in _ABSENT_VALUES["memory_llm_model"]:
+        values["memory_llm_model"] = DEFAULT_MODEL if gemini else values["llm_model"]
+    if values["memory_llm_thinking"] in _ABSENT_VALUES["memory_llm_thinking"]:
+        values["memory_llm_thinking"] = GEMINI_THINKING if gemini else ""
 
 
 UNSET = "<unset>"
@@ -112,7 +139,13 @@ GEMINI_THINKING = "minimal"
 # What counts as "nobody set this". An empty llm_thinking is explicit — it asks for the
 # server's own thinking default — while an empty model name never is (the launch passes
 # "" when LLM_MODEL is absent from the environment).
-_ABSENT_VALUES = {"llm_model": (UNSET, ""), "llm_thinking": (UNSET,)}
+_ABSENT_VALUES = {
+    "llm_model": (UNSET, ""),
+    "llm_thinking": (UNSET,),
+    "memory_llm_model": (UNSET, ""),
+    "memory_llm_thinking": (UNSET,),
+    "memory_llm_extra_body": ("",),
+}
 
 # One default per BrainConfig field, in field order; a value's type must match
 # its field's (it selects the ROS parameter accessor in ``load``).
@@ -146,6 +179,15 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # Server-specific request fields, e.g. {"chat_template_kwargs": {"enable_thinking": false}}
     # for Nemotron 3 / Qwen3 under vLLM, or {"google": {...}} on Google's compat layer.
     "llm_extra_body": "",
+    # --- Memory search ---
+    # Blank = the brain's own wire and knobs. "gemini" keeps recall on Gemini (with its
+    # context cache) while the brain runs elsewhere; a ".../v1" root is a server of its
+    # own, keyed by MEMORY_LLM_API_KEY. The three knobs below then default like the
+    # brain's do on that route — resolved in load(), after the brain's own.
+    "memory_llm_base_url": "",
+    "memory_llm_model": UNSET,
+    "memory_llm_thinking": UNSET,
+    "memory_llm_extra_body": "",
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     # Compaction evicts to half the cap, so depth rides 1000-2000 entries. A silent

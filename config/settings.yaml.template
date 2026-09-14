@@ -232,6 +232,14 @@
 #                                   # Omni on vLLM (thinking off, no echo loops):
 #                                   # '{"chat_template_kwargs": {"enable_thinking": false}, "temperature": 0.6,
 #                                   #   "top_p": 0.95, "repetition_penalty": 1.1}'
+#     memory_llm_base_url: ""       # Where the spatial-memory search sends its frames. "" = the brain's
+#                                   # own endpoint and knobs; "gemini" = Gemini through the proxy or
+#                                   # GEMINI_API_KEY (with its context cache) while the brain runs
+#                                   # elsewhere; a /v1 root = a server of its own, key in MEMORY_LLM_API_KEY
+#     memory_llm_model: ""          # "" = the brain's model on its endpoint, gemini-3.6-flash on "gemini"
+#     memory_llm_thinking: ""       # "" = the brain's on its endpoint, else that route's default; any level
+#                                   # sends reasoning_effort: low (a pick among frames gains nothing from more)
+#     memory_llm_extra_body: ""     # "" = the brain's extras on its endpoint, none elsewhere
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs

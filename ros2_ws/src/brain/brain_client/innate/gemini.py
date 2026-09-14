@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
-from brain_client.brain.transport import pick_chat
+from brain_client.brain.transport import pick_wire
 from brain_client.skills.types import cancellable_sleep
 from innate_proxy import ProxyClient
 
@@ -32,7 +32,7 @@ class _Logger(Protocol):
 
 def make_client() -> ChatTransport | None:
     """A transport for vision calls, or None when nothing is configured."""
-    return pick_chat(ProxyClient())[0]
+    return pick_wire(ProxyClient()).chat
 
 
 def ask_image(

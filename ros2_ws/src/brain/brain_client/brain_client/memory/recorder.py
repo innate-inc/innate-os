@@ -27,7 +27,8 @@ a pause, and that instant keeps its own heading even though the tick is 1 Hz.
 
 Also mirrors the memory positions on the latched ``/brain/memory_positions``
 (the topic the webapp and mobile map overlays watch) — published only when the
-payload changes, so an idle robot costs one replayed message, not 6 KB/s.
+payload changes, so an idle robot costs one replayed message, not 6 KB/s —
+and nudges the search's context cache to re-warm once recording quiets down.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ from brain_client.memory.store import StaleStageError
 from brain_client.state.map import Map
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from rclpy.node import Node
     from rclpy.publisher import Publisher
 
@@ -99,11 +102,15 @@ class MemoryRecorder:
         *,
         store: MemoryStore,
         pose_tracker: PoseTracker,
+        warm_search: Callable[[], None] | None,
+        cache_state: Callable[[], str] | None,
         positions_pub: Publisher,
     ):
         self._logger = node.get_logger()
         self._store = store
         self._pose = pose_tracker
+        self._warm_search = warm_search
+        self._cache_state = cache_state
         self._positions_pub = positions_pub
 
         self._candidate: _Candidate | None = None
@@ -259,6 +266,8 @@ class MemoryRecorder:
                 self._store.switch_map(self._map_name or None)
             self._maybe_record()
             self._publish_positions()
+            if self._warm_search is not None:
+                self._warm_search()
         except Exception as error:  # noqa: BLE001 — a full disk must not take the brain node down
             self._logger.error(f"[Memory] tick failed: {error!r}")
 
@@ -314,8 +323,11 @@ class MemoryRecorder:
             # re-map wipes the store and restarts ids, and only the fingerprint
             # betrays that to a client watching the name.
             "fingerprint": snapshot.fingerprint[:12],
+            "cache": self._cache_state() if self._cache_state is not None else "off",
             "positions": snapshot.positions(),
         }
+        # Gate on the whole payload, not store.revision: `cache` flips by wall
+        # clock (a warm() completing, a handle expiring) without a store change.
         if payload == self._last_published:
             return
         self._last_published = payload
