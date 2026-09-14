@@ -89,7 +89,7 @@ def write(workspace, relpath: str, content: str) -> None:
 
 
 def test_agents_load_with_source_stamping(workspace):
-    write(workspace, "innate_agents/alpha.py", agent_src("Alpha"))
+    write(workspace, "innate_agents/alpha.py", agent_src("Alpha", body="idle_turn_interval = 0.01"))
     write(workspace, "custom_agents/beta.py", agent_src("Beta"))
 
     agents, default_agent, broken = initialize_agents(LOGGER)
@@ -99,6 +99,9 @@ def test_agents_load_with_source_stamping(workspace):
     assert agents["alpha"].source == "shipped"
     assert agents["beta"].source == "user"
     assert default_agent is agents["alpha"]  # no intro_agent -> first loaded
+    assert agents["beta"]._turn_intervals == (None, None)
+    agents["alpha"].idle_turn_interval = float("nan")  # runtime reads the validated load-time snapshot
+    assert agents["alpha"]._turn_intervals == (0.01, None)
 
 
 def test_intro_agent_is_default(workspace):
@@ -210,12 +213,18 @@ def test_probe_failure_rosters_broken(workspace):
         "innate_agents/lazy.py",
         agent_src("Lazy", body='def get_inputs(self):\n    raise ValueError("no input device")'),
     )
+    write(
+        workspace,
+        "innate_agents/bad_cadence.py",
+        agent_src("BadCadence", body='supervision_turn_interval = float("nan")'),
+    )
 
     agents, _default, broken = initialize_agents(LOGGER)
 
     assert set(agents) == {"alpha"}
-    assert list(broken) == ["lazy"]
+    assert set(broken) == {"lazy", "bad_cadence"}
     assert "ValueError: no input device" in broken["lazy"]
+    assert "supervision_turn_interval must be a finite positive number or None" in broken["bad_cadence"]
 
 
 def test_function_local_agent_rosters_broken(workspace):

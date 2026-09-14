@@ -128,7 +128,7 @@ class DropInBox(Skill):
     _p = PARAMS
 
     @resource
-    def _proxy(self):
+    def _gemini(self):
         return gemlib.make_client()
 
     # Two scalars, not the box tuple: a subscripted generic in a class-level
@@ -148,7 +148,7 @@ class DropInBox(Skill):
         self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
-            self._proxy,
+            self._gemini,
             f"Find '{prompt}' in this image — an open container (box, bin, basket, crate) "
             "standing on the floor. Ignore the robot's own gripper and anything it is "
             "holding. Return ONLY a JSON list of matches, each "
@@ -232,7 +232,7 @@ class DropInBox(Skill):
         if not img:
             return None
         text = gemlib.ask_image(
-            self._proxy,
+            self._gemini,
             img,
             "Wrist camera mounted beside a robot gripper's fingers (the view is mirrored). "
             "Are the fingers holding an object right now? Answer only YES or NO.",
@@ -394,7 +394,7 @@ class DropInBox(Skill):
         # (below the rim, behind the near wall) — affirming "inside" produced
         # false misses on tall boxes. Only seeing the object outside counts.
         text = gemlib.ask_image(
-            self._proxy,
+            self._gemini,
             images,
             f"The robot just dropped an object into '{prompt}'. {' '.join(labels)} "
             "Can you SEE the dropped object OUTSIDE the container — lying on the floor "
@@ -412,8 +412,8 @@ class DropInBox(Skill):
 
     def execute(self, prompt: str = "the box") -> SkillReturn:
         """Drop whatever the gripper holds into `prompt`."""
-        if self._proxy is None:
-            self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
+        if self._gemini is None:
+            self.fail("No Gemini access: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
 
         self._box_u = self._box_top_v = None
         self._near_rim_v = None
