@@ -419,14 +419,25 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   // The story's agent arms itself; nobody should have to find a switch. A just-started
   // attempt arms fresh (resetting chat, memory and skills); one already under way is
   // resumed as it stands, so a reload changes nothing.
+  let repairingStoryAgent = false;
   function autoArm() {
     const s = story();
-    if (!s || armedAttempt === s.attempt_id || !storyAgent()) return;
+    if (!s || !storyAgent()) return;
+    // The attempt marker survives page/service restarts; the hidden picker does not.
+    // Keep idle chat/Start bound to the intro without undoing an explicit Stop.
+    if (!agentState.get().brainActive && opts.armedAgent?.() !== STORY_AGENT) {
+      opts.armAgent?.(STORY_AGENT);
+    }
+    if (agentState.get().brainActive && agentState.get().currentDirective !== STORY_AGENT && !repairingStoryAgent) {
+      repairingStoryAgent = true;
+      void agentState.setDirective(STORY_AGENT).finally(() => { repairingStoryAgent = false; });
+    }
+    if (armedAttempt === s.attempt_id) return;
     armedAttempt = s.attempt_id;
     write(sessionStorage, ARMED_KEY, armedAttempt);
     const elapsedMs = Math.max(0, Number(s.elapsed_s) || 0) * 1000;
     const fresh = elapsedMs < 8000 || agentState.get().currentDirective !== STORY_AGENT;
-    if (fresh) void agentState.setDirective(STORY_AGENT);
+    if (fresh && !repairingStoryAgent) void agentState.setDirective(STORY_AGENT);
     panel.beginOnboarding(fresh, Date.now() - elapsedMs);
     seenAct = -1;
     actSpoke = spoken();
@@ -1331,7 +1342,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       opts.showView?.("orbit"); // the grasp was watched on a camera; the story continues in the scene
     }
   });
-  const unsubAgent = agentState.subscribe(() => render());
+  const unsubAgent = agentState.subscribe(() => {
+    autoArm(); // the roster may arrive after the first challenge snapshot
+    render();
+  });
   const unsubChallenge = session?.onChallenge?.((/** @type {any} */ block) => {
     challenge = block;
     settled?.();

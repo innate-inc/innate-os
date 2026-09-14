@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><title>Intro resume checks</title>
+<div id="root"></div><pre id="result">Running…</pre>
+<script type="module">
+import {createAgentStudio} from '../js/agent/agentStudio.js';
+import {createDirectiveControls} from '../js/agent/directiveControls.js';
+const noop=()=>{}, checks=[], check=(ok,text)=>{if(!ok)throw Error(text);checks.push(text)};
+const key='innate.nowhere.armed', previous=sessionStorage.getItem(key);
+let onChallenge,starts=[],studio,controls;
+const listeners=[],onState=()=>listeners.forEach(cb=>cb());
+const intro={id:'void_agent',name:'MARS',skills:['innate-os/wave'],prompt:'Intro',listed:false};
+const state={currentDirective:'',brainActive:false,activeSkills:new Set(),agents:[],broken:[]};
+const agentState={get:()=>state,subscribe:cb=>(listeners.push(cb),noop),setDirective:async id=>{starts.push(id);state.currentDirective=id;state.brainActive=true;}};
+try{
+ sessionStorage.setItem(key,'resumed-attempt');
+ controls=createDirectiveControls(agentState,{listId:'resume-agents',onAgentName:noop,onBrainActive:noop});
+ studio=createAgentStudio(document.querySelector('#root'),agentState,{onChallenge:cb=>(onChallenge=cb,noop)},
+ {setDisplayName:noop,setOffers:noop,setComposerAsk:noop,beginOnboarding:noop},
+ {armedAgent:controls.armedId,armAgent:controls.arm,spokenCount:()=>0,motionAt:()=>0,recalledAt:()=>0,turnedAt:()=>0,lastLine:()=>'',overlay:()=>noop,resetMotion:noop});
+ onChallenge({active:{id:'nowhere',attempt_id:'resumed-attempt',elapsed_s:30,runtime:{story:'nowhere',act:0,label:'Who am I',personas:['Rocky']}}});
+ check(starts.length===0,'No activation before agent roster arrives');
+ state.agents=[intro];onState();
+ check(controls.armedId()==='void_agent','Late roster restores the intro selection for a remembered attempt');
+ check(starts.length===0,'Restoring the picker does not restart a stopped brain');
+ // This is what the real composer/Start does with the restored picker.
+ await controls.ensureRunning();onState();
+ check(starts.join()==='void_agent','Next interaction starts the intro instead of Demo Agent');
+ state.currentDirective='';state.brainActive=false;onState();onState();
+ check(starts.length===1,'Stop stays stopped across repeated status updates');
+ state.currentDirective='demo_agent';state.brainActive=true;onState();await Promise.resolve();
+ check(starts.at(-1)==='void_agent' && state.currentDirective==='void_agent','Already-running wrong agent is corrected');
+ const count=starts.length;onState();check(starts.length===count,'Correct agent is not restarted');
+ document.querySelector('#result').textContent='PASS '+checks.length+'\n'+checks.join('\n');
+}catch(e){document.querySelector('#result').textContent='FAIL '+e.stack}
+finally{studio?.destroy();controls?.destroy();if(previous===null)sessionStorage.removeItem(key);else sessionStorage.setItem(key,previous)}
+</script>
