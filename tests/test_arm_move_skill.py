@@ -127,3 +127,30 @@ def test_gripper_boundaries_are_allowed(skill, target):
     joints = [0.1] * 5 + [target]
     value.execute("joints", joints=joints)
     value.manipulation.move_joints.assert_called_once_with(joints, duration=3.0)
+
+
+@pytest.mark.parametrize("offset", [0.05, -0.05])
+def test_relative_vertical_move_uses_current_pose_and_keeps_orientation(skill, offset):
+    value, _ = skill
+    value.manipulation.pose = types.SimpleNamespace(
+        x=0.2, y=-0.05, z=0.35, position=(0.2, -0.05, 0.35), rpy=(0.1, 0.3, -0.2)
+    )
+    value.execute("xyz", x=0, y=0, z=offset, relative=True)
+    value.manipulation.move_to.assert_called_once_with(
+        0.2, -0.05, 0.35 + offset, roll=0.1, pitch=0.3, yaw=-0.2, duration=3.0, tolerance_xy=None, tolerance_z=None
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"mode": "joints", "joints": [0] * 5, "relative": True},
+        {"mode": "xyz", "x": 0, "y": 0, "z": 0.05, "relative": True, "pitch": 1},
+        {"mode": "xyz", "x": 0, "y": 0, "z": 0.05, "relative": "true"},
+    ],
+)
+def test_incompatible_relative_inputs_do_not_move(skill, args):
+    value, _ = skill
+    with pytest.raises(Rejected):
+        value.execute(**args)
+    assert not value.manipulation.mock_calls
