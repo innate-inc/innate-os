@@ -232,6 +232,9 @@
 #                                   # Omni on vLLM (thinking off, no echo loops):
 #                                   # '{"chat_template_kwargs": {"enable_thinking": false}, "temperature": 0.6,
 #                                   #   "top_p": 0.95, "repetition_penalty": 1.1}'
+#                                   # and serve it with --chat-template config/llm/nemotron3_omni_chat_template.jinja:
+#                                   # the shipped template prints the robot's own past replies into the prompt
+#                                   # as [{'type': 'text', ...}] and the model learns to answer in kind
 #     memory_llm_base_url: ""       # Where the spatial-memory search sends its frames. "" = the brain's
 #                                   # own endpoint and knobs; "gemini" = Gemini through the proxy or
 #                                   # GEMINI_API_KEY (with its context cache) while the brain runs
