@@ -205,3 +205,20 @@ def test_kinematic_props_use_mocap_pose_without_a_freejoint():
     assert registry.drop_at(data, prop.name, 1.0, 2.0, math.pi / 2)
     assert data.mocap_pos[0] == [1.0, 2.0, 0.0]
     assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
+
+
+def test_intro_publishes_action_suggestions_separately():
+    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
+    expected = {
+        "Look around": ["Take a look around."],
+        "Pick up the cube": ["Pick up the cube.", "Try again."],
+        "Go through the door": ["Go to the door."],
+    }
+    for index, act in enumerate(runtime.acts):
+        runtime.act = index
+        public = runtime.public()
+        assert public["suggests_after_grant"] == expected.get(act.label, [])
+        assert not set(public["suggests"]) & set(public["suggests_after_grant"])
+        if public["suggests_after_grant"]:
+            assert public["wants"]  # The UI needs a permission to gate these actions on.
+    runtime.reset()

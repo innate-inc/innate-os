@@ -50,6 +50,26 @@ try {
  check(offers[0]?.text==='ArmMove','Arm request also overrides the memory step');
  say('Give me SearchMemory.');
  check(offers[0]?.text==='SearchMemory','A different request restores the memory grant');
+ // Action suggestions are gated by permissions, including a later revocation.
+ const steps=[
+   [TURN,'Take a look around.','Is anyone else here?'],
+   ['innate-os/pick_any_object','Pick up the cube.',null],
+   ['innate-os/navigate_to_position','Go to the door.','What is behind it?'],
+ ];
+ for(const [skill,action,question] of steps){
+   block.active.runtime.wants=[skill];
+   block.active.runtime.suggests=question?[question]:[];
+   block.active.runtime.suggests_after_grant=[action];
+   onChallenge(block); say('Please grant the next skill.');
+   check(!offers.some(o=>o.text===action),`${action} hidden before grant`);
+   check(!question || offers.some(o=>o.text===question),'Informational question stays available');
+   state.activeSkills.add(skill);onState();
+   check(offers.some(o=>o.text===action),`${action} appears after grant`);
+   offers.find(o=>o.text===action).onSelect(action);
+   check(submitted===action,'Action suggestion submits the intended message');
+   state.activeSkills.delete(skill);onState();
+   check(!offers.some(o=>o.text===action),'Revoking permission hides the action again');
+ }
  onChallenge({active:null}); say('Give me ArmMove.');
  check(offers.length===0,'No intro grant is injected outside the story');
  document.querySelector('#result').textContent=`PASS ${checks.length}\n`+checks.join('\n');

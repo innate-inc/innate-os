@@ -655,7 +655,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill) && skill !== WAVE,
     );
     // What the act says the person might say next: the story's own words, not a tool call.
-    const replies = (r.suggests ?? []).map((/** @type {string} */ text) => ({
+    const suggestions = [
+      ...(!wants.length ? r.suggests_after_grant ?? [] : []),
+      ...(r.suggests ?? []),
+    ];
+    const replies = suggestions.map((/** @type {string} */ text) => ({
       text,
       kind: /** @type {const} */ ("reply"),
       onSelect: (/** @type {string} */ said) => void panel.submitText(said),

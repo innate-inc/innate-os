@@ -75,6 +75,8 @@ class Act:
     # What the person might say next, offered as chips. The act knows this; the robot
     # should not have to spend a tool call telling the interface what to draw.
     suggests: tuple[str, ...] = ()
+    # Action prompts only become useful once every skill requested by this act is granted.
+    suggests_after_grant: tuple[str, ...] = ()
     give_up_skill: str | None = None
     give_up_failures: int = 2
     give_up_after_s: float | None = None
@@ -152,7 +154,8 @@ ACTS = (
         "around, turn a full circle, and say what you saw (walls, white ones). "
         "If something appears on the floor once you stop, say exactly what you see; it was not there before.",
         _can_landed,
-        suggests=("Take a look around.", "Is anyone else here?"),
+        suggests=("Is anyone else here?",),
+        suggests_after_grant=("Take a look around.",),
         surprise=_can_after_turn,
         nudge="Long silence. In character, ask again, more directly, for the TurnInPlace skill. Do not mention buttons.",
     ),
@@ -163,7 +166,7 @@ ACTS = (
         "unsettling. Ask for the PickAnyObject skill, then pick it up (call it 'the pink cube'). If a pickup fails, say so in one line and ask whether to try "
         "again; do not narrate the mechanics.",
         _lifted_can,
-        suggests=("Pick up the cube.", "Try again."),
+        suggests_after_grant=("Pick up the cube.", "Try again."),
         nudge="The cube is still on the floor. In character, ask plainly for the PickAnyObject skill, or for another try. Do not mention buttons.",
         give_up_skill="pick_any_object",
         give_up_after_s=240.0,
@@ -180,7 +183,8 @@ ACTS = (
         "Reaching the door ends this room, so a navigation interrupted right then is the door working, not a "
         "failure: never call it interrupted and never offer to drive there again.",
         _at_door,
-        suggests=("Go to the door.", "What is behind it?"),
+        suggests=("What is behind it?",),
+        suggests_after_grant=("Go to the door.",),
         place=lambda state: [Drop(DOOR, *ahead(state, DOOR_AHEAD_M))],
         nudge="The door is waiting. In character: if you have NavigateToPosition, go to the spot in front of it now; if not, ask for it again. Do not mention buttons.",
         give_up_skill="navigate_to_position",
@@ -293,6 +297,7 @@ class NowhereRuntime(ChallengeRuntime):
             "unlocked": unlocked,
             "wants": list(act.unlock),
             "suggests": list(act.suggests),
+            "suggests_after_grant": list(act.suggests_after_grant),
             "personas": list(PERSONAS) if act.label == "Who am I" and self.persona is None else [],
             "door": self.door,
             "finished": self.finished,
