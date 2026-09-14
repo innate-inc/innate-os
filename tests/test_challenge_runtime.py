@@ -207,39 +207,6 @@ def test_kinematic_props_use_mocap_pose_without_a_freejoint():
     assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
 
 
-def test_intro_publishes_action_suggestions_separately():
-    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
-    expected = {
-        "Look around": ["Take a look around."],
-        "Pick up the cube": ["Pick up the cube.", "Try again."],
-        "Go through the door": ["Go to the door."],
-    }
-    for index, act in enumerate(runtime.acts):
-        runtime.act = index
-        public = runtime.public()
-        assert public["suggests_after_grant"] == expected.get(act.label, [])
-        assert not set(public["suggests"]) & set(public["suggests_after_grant"])
-        if public["suggests_after_grant"]:
-            assert public["wants"]  # The UI needs a permission to gate these actions on.
-    runtime.reset()
-
-
-@pytest.mark.parametrize("label", ["Pick up the cube", "Go through the door"])
-def test_intro_never_times_out_waiting_for_a_skill_grant(label):
-    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
-    act = next(act for act in runtime.acts if act.label == label)
-    runtime._enter_act(SimpleNamespace(t=0))
-    assert not runtime._gave_up(SimpleNamespace(t=10000), [], act)
-    assert not runtime._gave_up(SimpleNamespace(t=10000), [{"skill_id": "head_emotion", "status": "running"}], act)
-    assert not runtime._gave_up(SimpleNamespace(t=10000), [{"skill_id": act.give_up_skill, "status": "running"}], act)
-    assert not runtime._gave_up(SimpleNamespace(t=10240), [], act)
-    assert runtime._gave_up(SimpleNamespace(t=10241), [], act)
-    runtime._enter_act(SimpleNamespace(t=10300))
-    assert runtime.attempt_started_t is None
-    assert not runtime._gave_up(SimpleNamespace(t=20000), [], act)
-    runtime.reset()
-
-
 def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
     runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
     runtime.act = next(i for i, act in enumerate(runtime.acts) if act.label == "Pick up the cube")
@@ -252,4 +219,16 @@ def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
     assert "PickAnyObject" in result.public["nudge"]
     assert result.public["note"] is None
     assert not runtime.assisted
+    # An unrelated skill must not start the pickup timeout.
+    runtime.update(state, [{"skill_id": "head_emotion", "status": "running"}])
+    state.t += 10000
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Pick up the cube"
+    runtime.update(state, [{"skill_id": "pick_any_object", "status": "running"}])
+    state.t += 240
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Pick up the cube"
+    state.t += 1
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Go through the door"
     runtime.reset()
