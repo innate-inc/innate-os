@@ -15,8 +15,25 @@ import { ICONS } from "./storyCards.js";
 const CARD_KINDS = new Set(["persona", "custom", "grant"]);
 const CHIP_ICONS = /** @type {Partial<Record<OfferKind, string>>} */ ({ random: ICONS.dice });
 
-/** @returns {{ el: HTMLElement, set: (offers: Offer[], title?: string) => void }} */
-export function createOfferDeck() {
+/** @param {{ splitReplies?: boolean }} [opts]
+ * @returns {{ el: HTMLElement, set: (offers: Offer[], title?: string) => void }} */
+export function createOfferDeck(opts = {}) {
+  if (opts.splitReplies) {
+    const el = document.createElement("div");
+    el.className = "agent-offer-stack";
+    el.hidden = true;
+    const ask = createOfferDeck();
+    const replies = createOfferDeck();
+    el.append(ask.el, replies.el);
+    return {
+      el,
+      set(offers, heading = "") {
+        ask.set(offers.filter((offer) => offer.kind !== "reply"), heading);
+        replies.set(offers.filter((offer) => offer.kind === "reply"));
+        el.hidden = !offers.length;
+      },
+    };
+  }
   const el = document.createElement("div");
   el.className = "agent-offers";
   el.hidden = true;

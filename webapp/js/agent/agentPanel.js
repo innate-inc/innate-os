@@ -96,7 +96,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   });
 
   // ---- live stream (thoughts + chat + skill runs) -------------------------
-  const deck = createOfferDeck();
+  const deck = createOfferDeck({ splitReplies: true });
   const chat = createChatStream({ footer: deck.el });
 
   // ---- composer -----------------------------------------------------------

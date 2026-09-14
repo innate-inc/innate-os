@@ -11736,10 +11736,12 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
   margin-right: 0;
   padding-right: 0;
 }
-.agent-stream-wrap.with-offers > .agent-offers {
+.agent-stream-wrap.with-offers > :is(.agent-offers, .agent-offer-stack) {
   flex: 0 0 auto;
   margin: 36px 0 12px 2px;
 }
+.agent-offer-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.agent-offer-stack[hidden] { display: none; }
 .agent-offers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
 .agent-offers-kicker { color: rgb(255 255 255 / 48%); }
 .agent-offers-kicker[hidden] { display: none; }
