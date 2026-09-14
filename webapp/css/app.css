@@ -9494,6 +9494,11 @@ select.skill-input {
   transition: opacity 500ms cubic-bezier(0.455, 0.03, 0.515, 0.955), transform 500ms cubic-bezier(0.455, 0.03, 0.515, 0.955);
 }
 
+/* The interface's own question hides the reset button: the prompt follows the caret. */
+.agent-compose:has(.agent-compose-reset[hidden]) .agent-compose-placeholder {
+  left: 18px; /* .agent-compose padding-left 6 + input padding-left 12 */
+}
+
 .agent-compose-placeholder.exiting {
   opacity: 0;
   transform: translateY(-1px);

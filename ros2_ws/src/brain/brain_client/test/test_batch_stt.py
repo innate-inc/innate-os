@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 
-from brain_client.brain.transport import ChatTransport, proxy_chat
+from brain_client.brain.transport import COMPLETE_TIMEOUT_SECS, ChatTransport, proxy_chat
 from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
     NO_SPEECH,
@@ -88,10 +88,10 @@ def test_proxy_chat_threads_a_per_call_timeout_to_the_wire():
     assert proxy.calls[0][2]["timeout"] == 12.5
 
 
-def test_proxy_chat_defaults_to_the_client_timeout():
+def test_proxy_chat_defaults_to_the_blocking_deadline():
     proxy = FakeProxy()
     proxy_chat(proxy).complete({}, None)
-    assert proxy.calls[0][2]["timeout"] is None
+    assert proxy.calls[0][2]["timeout"] == COMPLETE_TIMEOUT_SECS
 
 
 def test_elevenlabs_proxy_passes_the_transcribe_timeout():

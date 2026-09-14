@@ -74,6 +74,9 @@ _RESPONSE_FORMAT = {
 Verdict = tuple[bool, int, str]
 """The model's answer as parsed: found, frame id, explanation."""
 
+Frames = dict[int, str]
+"""A search's frames by memory id, each a JPEG data URI."""
+
 
 @dataclass(frozen=True)
 class SearchVerdict:
@@ -133,16 +136,17 @@ class MemorySearch:
                 found=False,
                 explanation="The robot has no memories of this map yet — drive around in navigation mode to build them.",
             )
-        return self._conclude(query, self._pick(query, snapshot.memories), snapshot, started)
+        frames = self._encode(snapshot.memories)
+        return self._conclude(query, self._pick(query, snapshot.memories, frames), snapshot, started)
 
-    def _pick(self, query: str, memories: tuple[Memory, ...]) -> Verdict | None:
+    def _pick(self, query: str, memories: tuple[Memory, ...], frames: Frames) -> Verdict | None:
         """The model's pick among ``memories``: one request when the server takes
         them all, else halve until a batch passes and let the batch winners meet
         in a final (each round has fewer frames than the last, so it ends)."""
         batch = self._batch or len(memories)
         if len(memories) <= batch:
             try:
-                return self._ask(query, memories)
+                return self._ask(query, memories, frames)
             except ChatRejected as error:
                 if not error.too_large or len(memories) < 2:
                     raise
@@ -151,7 +155,7 @@ class MemorySearch:
         finalists: list[Memory] = []
         explanation = ""
         for start in range(0, len(memories), batch):
-            picked = self._pick(query, memories[start : start + batch])
+            picked = self._pick(query, memories[start : start + batch], frames)
             if picked is None:
                 return None
             found, frame_id, explanation = picked
@@ -161,18 +165,19 @@ class MemorySearch:
         if not finalists:
             return False, 0, explanation
         if len(finalists) > 1 and (self._batch or 2) >= 2:
-            return self._pick(query, tuple(finalists))
+            return self._pick(query, tuple(finalists), frames)
         # One winner, or a server taking a single frame per request, which can
         # compare nothing: the newest finalist, as the prompt prefers among equals.
         newest = max(finalists, key=lambda memory: memory.stamp)
         return True, newest.id, explanation
 
-    def _ask(self, query: str, memories: tuple[Memory, ...]) -> Verdict | None:
+    def _ask(self, query: str, memories: tuple[Memory, ...], frames: Frames) -> Verdict | None:
+        content = [part for m in memories if m.id in frames for part in _frame_parts(m, frames[m.id])]
         body = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": [*self._frame_content(memories), _text(_question(query))]},
+                {"role": "user", "content": [*content, _text(_question(query))]},
             ],
             "response_format": _RESPONSE_FORMAT,
             "temperature": 0,
@@ -235,22 +240,15 @@ class MemorySearch:
         except Exception as error:  # noqa: BLE001 — the UI mirror must not break the search
             self._logger.warn(f"[Memory] search result mirror failed: {error!r}")
 
-    def _frame_content(self, memories: tuple[Memory, ...]) -> list[dict]:
-        """Every frame as its label followed by its pixels (a frame evicted
-        between the snapshot and the read just drops out)."""
-        content: list[dict] = []
+    def _encode(self, memories: tuple[Memory, ...]) -> Frames:
+        """Every frame's pixels as a data URI, read once per search however many
+        rounds it takes (a frame evicted between the snapshot and the read drops out)."""
+        frames: Frames = {}
         for memory in memories:
             jpeg = self._read_image(memory)
-            if not jpeg:
-                continue
-            content.append(_text(_frame_label(memory)))
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()},
-                }
-            )
-        return content
+            if jpeg:
+                frames[memory.id] = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+        return frames
 
     def _read_image(self, memory: Memory) -> bytes | None:
         path = self._store.image_path(memory.id)
@@ -281,6 +279,11 @@ def verdict_text(verdict: SearchVerdict) -> str:
 
 def _text(text: str) -> dict:
     return {"type": "text", "text": text}
+
+
+def _frame_parts(memory: Memory, url: str) -> list[dict]:
+    """A frame as its label followed by its pixels."""
+    return [_text(_frame_label(memory)), {"type": "image_url", "image_url": {"url": url}}]
 
 
 def _frame_label(memory: Memory) -> str:

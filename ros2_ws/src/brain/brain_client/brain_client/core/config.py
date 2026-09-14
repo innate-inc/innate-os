@@ -96,10 +96,9 @@ UNSET = "<unset>"
 told from an absent one — a value-only comparison would let ``GEMINI_MODEL`` from the
 environment outrank the robot's own ``gemini_model`` in settings.yaml."""
 
-# Old parameter name -> its replacement. A deployed robot may still carry the old name
-# in settings.yaml, or in .env as GEMINI_MODEL — which the launch file feeds to the
-# retired parameter, so settings.yaml still outranks it. Ignoring either would silently
-# revert that robot to the default model.
+# Old parameter name -> its replacement, honoured from settings.yaml and from .env
+# (GEMINI_MODEL, which the launch feeds to the retired parameter so settings.yaml
+# still outranks it); ignoring either would silently revert a robot's model.
 _RENAMED_PARAMS = {"gemini_model": "llm_model", "gemini_thinking_level": "llm_thinking"}
 
 # Resolved after the carry above, so a retired name still decides the value.

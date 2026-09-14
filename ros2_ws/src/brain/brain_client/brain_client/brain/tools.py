@@ -16,41 +16,37 @@ GO_TO_POINT_IN_VIEW = "go_to_point_in_view"
 # no-argument tool declares an empty object schema.
 _NO_PARAMETERS = {"type": "object", "properties": {}, "required": []}
 
+
+def _tool(name: str, description: str, parameters: dict | None = None) -> dict:
+    return {
+        "type": "function",
+        "function": {"name": name, "description": description, "parameters": parameters or _NO_PARAMETERS},
+    }
+
+
 # An explicit no-op keeps idle turns clean: without it, models tend to emit
 # placeholder text ("[]", "Empty response") rather than returning nothing.
-_WAIT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": WAIT,
-        "description": "Do nothing until the next update. Use when there is nothing new to do or say.",
-        "parameters": _NO_PARAMETERS,
-    },
-}
+_WAIT_TOOL = _tool(WAIT, "Do nothing until the next update. Use when there is nothing new to do or say.")
 
 # Visual navigation grounding: the model points at a floor pixel and the robot
 # projects it into a local navigation goal (brain/grounding.py). Declared only
 # when navigate_to_position is among the active skills — it is the actuator.
-_GO_TO_POINT_IN_VIEW_TOOL = {
-    "type": "function",
-    "function": {
-        "name": GO_TO_POINT_IN_VIEW,
-        "description": (
-            "Drive toward a point you can see in the CURRENT camera frame. Give normalized image "
-            "coordinates (0-1000) of a point ON THE FLOOR: y from the top, x from the left. For an "
-            "object, point at the floor at its base. The robot drives to about 0.35 m short of that "
-            "spot and turns to face it. Prefer this over navigate_to_position for anything you can "
-            "see. Far targets are approached in capped steps — call it again after arriving."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "y": {"type": "integer", "description": "0-1000 from image top"},
-                "x": {"type": "integer", "description": "0-1000 from image left"},
-            },
-            "required": ["y", "x"],
+_GO_TO_POINT_IN_VIEW_TOOL = _tool(
+    GO_TO_POINT_IN_VIEW,
+    "Drive toward a point you can see in the CURRENT camera frame. Give normalized image "
+    "coordinates (0-1000) of a point ON THE FLOOR: y from the top, x from the left. For an "
+    "object, point at the floor at its base. The robot drives to about 0.35 m short of that "
+    "spot and turns to face it. Prefer this over navigate_to_position for anything you can "
+    "see. Far targets are approached in capped steps — call it again after arriving.",
+    {
+        "type": "object",
+        "properties": {
+            "y": {"type": "integer", "description": "0-1000 from image top"},
+            "x": {"type": "integer", "description": "0-1000 from image left"},
         },
+        "required": ["y", "x"],
     },
-}
+)
 
 # Skill input "type" strings (python annotation names from skill introspection)
 # -> JSON Schema types. Anything else is passed as a string with the expected
@@ -129,13 +125,6 @@ def build_tools(
         tools.append(_GO_TO_POINT_IN_VIEW_TOOL)
     tools.append(_WAIT_TOOL)
     return tools
-
-
-def _tool(name: str, description: str, parameters: dict | None = None) -> dict:
-    return {
-        "type": "function",
-        "function": {"name": name, "description": description, "parameters": parameters or _NO_PARAMETERS},
-    }
 
 
 def _skill_tool(name: str, meta: SkillMeta) -> dict:

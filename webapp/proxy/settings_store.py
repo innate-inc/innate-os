@@ -201,6 +201,27 @@ def _find(root, path):
     return node
 
 
+def _deepest_ancestor(root, path):
+    """The lowest template node on *path* that holds children, with its depth in
+    the path; None when only the root does (a top-level scalar goes to Extra)."""
+    for depth in range(len(path) - 1, 0, -1):
+        node = _find(root, path[:depth])
+        if node is not None and node.children:
+            return node, depth
+    return None
+
+
+def _render_lines(level: int, tree: dict) -> list:
+    lines = []
+    for key, value in tree.items():
+        if isinstance(value, dict):
+            lines.append(f"{'  ' * level}{key}:")
+            lines.extend(_render_lines(level + 1, value))
+        else:
+            lines.append(f"{'  ' * level}{key}: {_fmt(value)}")
+    return lines
+
+
 def _fmt(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -233,7 +254,7 @@ def _regenerate(overrides: dict) -> str:
     tree = _build_tree(lines)
     uncomment = set()
     value_at = {}
-    after = {}  # template line -> hand-added leaves that belong inside that node
+    after = {}  # template line -> (level, subtree) of hand-added keys that belong inside that node
     extras = []
     for path, value in _flatten(overrides):
         node = _find(tree, path)
@@ -241,16 +262,17 @@ def _regenerate(overrides: dict) -> str:
             value_at[node.line] = value
             _uncomment_chain(node, uncomment)
             continue
-        parent = _find(tree, path[:-1])
-        if parent is None:
+        ancestor = _deepest_ancestor(tree, path)
+        if ancestor is None:
             extras.append((path, value))
             continue
         # A hand-added key under a node the template DOES write goes inside that
-        # node. In the Extra block it would open a SECOND `<node>:` mapping, and
-        # PyYAML keeps only the last duplicate — every override the template
-        # wrote for that node would be gone on the next read.
+        # node, however deep: in the Extra block it would open a SECOND `<node>:`
+        # mapping, and PyYAML keeps only the last duplicate.
+        parent, depth = ancestor
         _uncomment_chain(parent, uncomment)
-        after.setdefault(parent.line, []).append(f"{'  ' * (parent.level + 1)}{path[-1]}: {_fmt(value)}")
+        _, subtree = after.setdefault(parent.line, (parent.level + 1, {}))
+        _set_path(subtree, list(path[depth:]), value)
 
     out = []
     for i, raw in enumerate(lines):
@@ -259,7 +281,8 @@ def _regenerate(overrides: dict) -> str:
             out.append(_replace_value(line, value_at[i]) if i in value_at else line)
         else:
             out.append(raw)
-        out.extend(after.get(i, ()))
+        if i in after:
+            out.extend(_render_lines(*after[i]))
     text = "\n".join(out)
 
     if extras:

@@ -54,11 +54,24 @@ class ChatTransport:
     # body that will actually go on the wire (brain/context.py:generate).
     extra_body: dict = field(default_factory=dict)
 
+    def with_extras(self, body: dict) -> dict:
+        """The body as it goes on the wire."""
+        return merge_extras(body, self.extra_body)
 
-# How servers word a request that outgrew their window or image cap — vLLM/NIM
-# ("exceeds model's maximum context length", "At most N image(s)"), OpenAI
-# ("maximum context length"), Google's compat layer ("input token count ...
-# exceeds the maximum number of input tokens") and any 413.
+
+def merge_extras(body: dict, extras: dict) -> dict:
+    """The extras filled in beneath the request's own fields, nested objects merged:
+    a call's ``temperature`` or ``stream_options`` keeps, whatever an operator sets."""
+    merged = dict(extras)
+    for key, value in body.items():
+        under = extras.get(key)
+        merged[key] = merge_extras(value, under) if isinstance(value, dict) and isinstance(under, dict) else value
+    return merged
+
+
+# How servers word a request that outgrew their window or image cap — vLLM/NIM,
+# OpenAI ("maximum context length"), Google's compat layer ("input token count
+# ... exceeds the maximum number of input tokens") and any 413.
 _TOO_LARGE = re.compile(
     r"context (?:length|window)|maximum number of (?:input )?tokens|token count|too many (?:tokens|images)"
     r"|at most \d+ image|payload too large|request entity too large",
@@ -132,14 +145,16 @@ def direct_chat(endpoint: Endpoint, extra_body: dict | None = None) -> ChatTrans
     extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        with client.stream("POST", url, json=body | extras) as resp:
+        with client.stream("POST", url, json=merge_extras(body, extras)) as resp:
             if resp.status_code != 200:
                 resp.read()
                 raise ChatRejected("chat direct", resp.status_code, resp.text)
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        resp = client.post(url, json=body | extras, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout)
+        resp = client.post(
+            url, json=merge_extras(body, extras), timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout
+        )
         if resp.status_code != 200:
             raise ChatRejected("chat direct", resp.status_code, resp.text)
         return resp.json() if resp.content else {}
@@ -152,13 +167,16 @@ def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransp
     extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras) as resp:
+        request = merge_extras(body, extras)
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=request, timeout=STREAM_TIMEOUT_SECS) as resp:
             if resp.status_code != 200:
                 raise ChatRejected("chat via proxy", resp.status_code, repr(resp.read()[:200]))
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras, timeout=timeout) as resp:
+        request = merge_extras(body, extras)
+        deadline = COMPLETE_TIMEOUT_SECS if timeout is None else timeout
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=request, timeout=deadline) as resp:
             payload = resp.read()
             if resp.status_code != 200:
                 raise ChatRejected("chat via proxy", resp.status_code, repr(payload[:200]))

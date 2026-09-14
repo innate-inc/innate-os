@@ -121,7 +121,8 @@ class ChatContext:
         """Blocking network call — safe on a worker thread (history is only read).
 
         The reply streams in; every plain-text delta is handed to ``on_speech``
-        as it arrives, which is what lets the robot start talking at the first
+        as it arrives — held only until :class:`_EchoGate` has judged the first
+        sentence — which is what lets the robot start talking at the first
         sentence boundary. Returns the assembled reply for :meth:`absorb`.
 
         ``latest_only_images`` mirrors :meth:`absorb`'s: when this message
@@ -135,7 +136,7 @@ class ChatContext:
         """
         # Merged here, not left to the transport, so the observability tap below
         # sees the body that actually goes out (the transport's merge is a no-op on it).
-        body = self._request(user_message, tools, system, latest_only_images) | self._transport.extra_body
+        body = self._transport.with_extras(self._request(user_message, tools, system, latest_only_images))
         if self.on_request is not None:
             self.on_request(body)
         # Usage rides the reply and is committed by absorb, on the loop thread:
@@ -219,24 +220,29 @@ class ChatContext:
         to half the cap and masks old frames in the same step — a single cache
         miss per window instead of one per turn.
         """
+        keep = max(self._max_image_turns, 0)
         if len(self._history) > self._max_history:
-            self._evict()
-        elif self.image_turn_count <= 2 * max(self._max_image_turns, 0):
+            self._evict(self._max_history // 2)
+        elif self.image_turn_count <= 2 * keep:
             return  # under both budgets: stay append-only, the cache is warm
-        self._mask_frames()
+        self._mask_frames(keep)
 
     def compact(self) -> bool:
         """The compaction a tripped budget triggers, on demand: the answer to a
         server refusing the request as too long for its window (a local model
-        can spend thousands of tokens per frame). Returns whether anything shrank."""
-        evicted = self._evict()
-        return self._mask_frames() or evicted
+        can spend thousands of tokens per frame). Returns whether anything shrank;
+        once the budgets' own step has nothing left to give, each call goes
+        further — every frame, then half of what remains."""
+        evicted = self._evict(self._max_history // 2)
+        if self._mask_frames(max(self._max_image_turns, 0)) or evicted:
+            return True
+        return self._mask_frames(0) or self._evict(len(self._history) // 2)
 
-    def _evict(self) -> bool:
+    def _evict(self, target: int) -> bool:
         history = self._history
-        if len(history) <= self._max_history // 2:
+        if len(history) <= target:
             return False
-        del history[: len(history) - self._max_history // 2]
+        del history[: len(history) - target]
         # The history must start with a plain user turn: a leading assistant
         # message or an orphaned tool result (whose call was just evicted) is rejected.
         while history and history[0].get("role") != "user":
@@ -248,11 +254,10 @@ class ChatContext:
             self._latest_only_turn = None
         return True
 
-    def _mask_frames(self) -> bool:
-        # Mask down to the newest few frame turns (none at all if the keep-count
-        # is zero or nonsensical). Until a compaction, older frames ride the
-        # cached prefix at a tenth of the input price — cheap to carry.
-        keep = max(self._max_image_turns, 0)
+    def _mask_frames(self, keep: int) -> bool:
+        # Mask down to the newest ``keep`` frame turns (none at all for zero).
+        # Until a compaction, older frames ride the cached prefix at a tenth of
+        # the input price — cheap to carry.
         frame_turns = [message for message in self._history if _is_frame_turn(message)]
         stale = frame_turns[:-keep] if keep else frame_turns
         for message in stale:
@@ -285,11 +290,9 @@ def _assemble(chunks: Chunks, on_speech: Callable[[str], None] | None) -> dict:
             if delta.get("extra_content"):
                 extra = delta["extra_content"]
     if calls and finish_reason not in _FINISHED:
-        # A cut-off stream (length cap, filter, dropped connection) may hold half a
-        # tool call: committing it would replay a call the model never finished
-        # asking for. Text alone is committed as it stands — on_speech has already
-        # voiced it, and failing the turn would drop it from history and say it
-        # again on the retry.
+        # Half a tool call from a cut-off stream must not be replayed as one the
+        # model asked for. Cut-off text is committed as it stands: on_speech has
+        # voiced it, and a retry would say it again.
         raise RuntimeError(f"the model stopped early: finish_reason={finish_reason or 'missing'}")
     message: dict = {"role": "assistant", "content": "".join(speech)}
     if calls:
@@ -305,9 +308,9 @@ def _assemble(chunks: Chunks, on_speech: Callable[[str], None] | None) -> dict:
 
 
 def _merge_call(calls: dict[int, dict], fragment: dict) -> None:
-    """Fold one streamed tool-call fragment into the call at its index."""
+    """Fold one streamed tool-call fragment into the call it belongs to."""
     call = calls.setdefault(
-        fragment.get("index", 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+        _slot(calls, fragment), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
     )
     if fragment.get("id"):
         call["id"] = fragment["id"]
@@ -318,6 +321,18 @@ def _merge_call(calls: dict[int, dict], fragment: dict) -> None:
         call["function"]["arguments"] += function["arguments"]
     if fragment.get("extra_content"):
         call["extra_content"] = fragment["extra_content"]
+
+
+def _slot(calls: dict[int, dict], fragment: dict) -> int:
+    """The call a fragment continues: its index, or — from a server that streams
+    none — the call with its id, a new call when it opens one, else the latest."""
+    if fragment.get("index") is not None:
+        return fragment["index"]
+    call_id = fragment.get("id")
+    for index, call in calls.items():
+        if call_id and call["id"] == call_id:
+            return index
+    return len(calls) if call_id or not calls else max(calls)
 
 
 _ECHO_HEAD = 60
@@ -372,12 +387,15 @@ def _echoes(reply: str, observation: str) -> bool:
     return len(head) >= _ECHO_MIN and head in observation
 
 
+_EVENT_PAYLOAD = re.compile(r"^(- [^:\n]*:).*$", re.MULTILINE)
+
+
 def _scaffold(user_message: dict) -> str:
-    """The observation's own text with the user's quoted words removed: a reply
-    that restates what the user said is an answer, one that reproduces the
-    status line or event lines is an echo."""
+    """The observation's skeleton: the status line and the event lines with what
+    they carry removed — the user's quoted words, a skill's result. A reply that
+    restates those is an answer; one that reproduces the skeleton is an echo."""
     text = " ".join(p["text"] for p in _parts(user_message) if p.get("type") == "text")
-    return _shape(re.sub(r'"[^"]*"', '""', text))
+    return _shape(re.sub(r'"[^"]*"', '""', _EVENT_PAYLOAD.sub(r"\1", text)))
 
 
 def _shape(text: str) -> str:
