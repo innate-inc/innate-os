@@ -145,6 +145,31 @@ serial driver.
   pose immediately, so hold the leader in a sane position first. Disengaging
   (or hiding the tab, or losing rosbridge) stops new commands and the arm
   holds its last pose.
+- **Limits** holds the leader inside the follower's reach. The leader turns
+  freely, but the follower's `joint_1` stops at ±90° where the arm meets the
+  body, so past that edge the leader servo energizes and walks back to the
+  boundary — a soft wall you can always overpower — and the joint track shades
+  the travel the robot cannot follow. Limits come from `mars_arm`'s live
+  `position_limits`, so the wall follows a retune rather than a copied number,
+  and the guard arms only once rosbridge is up. Ticks on the wire are clamped
+  to the same band whether or not the servo hold is winning.
+- **The band is not just per-joint.** `arm_control.cpp` drives joints 2, 3, 4
+  and 6 in the opposite sense to the command it receives, so their bands mirror
+  to `[-hi, -lo]` here (`joint_1` is symmetric, which is why it reads correctly
+  either way). More importantly, `joint_2`'s floor tightens to −0.5 rad while
+  `joint_1` is in the front arc and ramps back as it swings clear — the real
+  anti-self-collision rule, and the reason independent per-joint limits let the
+  arm reach the frame. The guard mirrors both, so `joint_2`'s shaded zone grows
+  and shrinks as you rotate `joint_1`, and you feel the restriction the follower
+  would otherwise apply by silently clamping you. Those constants live in
+  `arm_control.cpp`, not `arm_config.yaml`; the copies must change together.
+- **Current budget.** Holding costs power, and the arm draws from *this*
+  machine's USB, so the total across all six servos is capped (default 750 mA,
+  900 mA hard ceiling) and split across whatever is being held. A watchdog on
+  the servos' own Present Current backs the allocation off if real draw
+  disagrees, and cuts torque at the ceiling. Set it under
+  **Settings → Safety & hardware → Leader arm**; it is stored per device, not
+  on the robot, because a laptop port and a phone port differ.
 - Chrome/Edge only (WebSerial). Protocol layer is tested headlessly:
   `node tests/dynamixel.test.js`.
 

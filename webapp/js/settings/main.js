@@ -12,7 +12,14 @@
 // *unsaved* edit (differs from what's saved) shows blue. Save is enabled only
 // while there are unsaved changes.
 
-import { ROBOT_INFO_TOPIC, SET_VOLUME_SERVICE, SHUTDOWN_SERVICE } from "../constants.js";
+import {
+  LEADER_CURRENT_BUDGET_MIN_MA,
+  LEADER_CURRENT_CEILING_MA,
+  ROBOT_INFO_TOPIC,
+  SET_VOLUME_SERVICE,
+  SHUTDOWN_SERVICE,
+} from "../constants.js";
+import { readBudget, writeBudget } from "../leaderBudget.js";
 import { ros } from "../rosClient.js";
 import { SETTINGS_PAGES } from "./catalog.js";
 import { GROUP_EXPAND_MS, SETTINGS_STYLE } from "./styles.js";
@@ -415,6 +422,64 @@ function buildVolumeSection() {
   return { section, row, label: labelText, description: descriptionText };
 }
 
+/**
+ * Leader-arm current budget. The odd one out on this page: every other control
+ * edits the robot, but the leader arm draws from whatever machine it is plugged
+ * into, and a laptop port and a phone port do not have the same headroom. So it
+ * is stored in this browser rather than settings.yaml, needs no robot to change,
+ * and applies to the next hold with no save step.
+ */
+function buildLeaderBudgetSection() {
+  const labelText = "Leader-arm current budget";
+  const descriptionText =
+    "Total draw allowed across the leader arm's six servos while it holds a joint at the " +
+    "follower's limit. Stored on this device, not the robot — the arm is powered by the " +
+    "machine it is plugged into.";
+  const section = textEl("section", "set-card-volume");
+
+  const row = textEl("div", "set-row");
+  const controlContainer = textEl("div", "set-ctl");
+  const controlGroup = textEl("div", "set-ctl-main is-wide");
+
+  const slider = inputEl("range", "set-slider");
+  slider.title = "Applies to the next hold — the guard re-splits this across whatever it holds";
+  slider.min = String(LEADER_CURRENT_BUDGET_MIN_MA);
+  slider.max = String(LEADER_CURRENT_CEILING_MA);
+  slider.step = "25";
+  initSlider(slider);
+
+  const valueLabel = textEl("span", "set-slider-read");
+  const sliderContainer = textEl("div", "set-slider-wrap");
+  sliderContainer.append(valueLabel, slider);
+
+  const status = textEl("span", "set-card-volume-status set-status muted");
+  controlGroup.append(textEl("span", "set-validation-slot"), sliderContainer, status);
+  controlContainer.appendChild(controlGroup);
+
+  row.append(buildRowText(labelText, descriptionText), controlContainer);
+  enableRowClick(row);
+  section.appendChild(row);
+
+  const renderValue = (/** @type {number} */ mA) => {
+    slider.value = String(mA);
+    syncSliderFill(slider);
+    valueLabel.textContent = `${mA} mA`;
+  };
+  renderValue(readBudget());
+
+  slider.addEventListener("input", () => {
+    valueLabel.textContent = `${slider.value} mA`;
+  });
+
+  slider.addEventListener("change", () => {
+    renderValue(writeBudget(Number(slider.value)));
+    status.textContent = "Saved on this device.";
+    status.className = "set-card-volume-status set-status ok";
+  });
+
+  return { section, row, label: labelText, description: descriptionText };
+}
+
 const GROUP_CHEV =
   '<svg class="set-group-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9,6 15,12 9,18"/></svg>';
 
@@ -506,6 +571,13 @@ function buildSettingsPage() {
       groupInner.appendChild(speaker);
     }
 
+    const budgetControl = settingsPage.hasLeaderCurrentBudget ? buildLeaderBudgetSection() : null;
+    if (budgetControl) {
+      const leader = textEl("section", "set-page-section");
+      leader.append(textEl("h2", "set-section-title", "Leader arm"), budgetControl.section);
+      groupInner.appendChild(leader);
+    }
+
     /** @type {GroupUI} */
     const ui = { section, dot, entries: [] };
     header.addEventListener("click", () => setGroupOpen(ui, !section.classList.contains("open")));
@@ -518,6 +590,17 @@ function buildSettingsPage() {
         row: volumeControl.row,
         group: ui,
         breadcrumb: `${settingsPage.title} · Speaker`,
+        extraSearchSources: [pageSearchSource],
+      });
+    }
+
+    if (budgetControl) {
+      addSearchTarget({
+        label: budgetControl.label,
+        description: budgetControl.description,
+        row: budgetControl.row,
+        group: ui,
+        breadcrumb: `${settingsPage.title} · Leader arm`,
         extraSearchSources: [pageSearchSource],
       });
     }

@@ -212,6 +212,81 @@ export const WEBRTC_ACTIVE_STREAMS_TOPIC = "/webrtc/active_streams"; // robot ->
 // Same topic the mobile app uses for its non-UDP fallback path.
 export const LEADER_POSITIONS_TOPIC = "/leader_positions";
 
+// ---- Leader-arm reachability guard ----------------------------------------
+// The leader arm turns freely; the follower does not — joint_1 stops at ±90°
+// where the arm meets the body. The guard reads the follower's real
+// position_limits off mars_arm and holds the leader at that boundary, so the
+// operator feels the wall instead of commanding a pose the robot cannot reach.
+//
+// Limits are read live rather than copied: arm_config.yaml is retuned, and a
+// stale copy here would either fence off reachable travel or fail to fence off
+// unreachable travel. rcl_interfaces/srv/GetParameters, one call per joint
+// name; position_limits comes back as PARAMETER_DOUBLE_ARRAY.
+export const ARM_PARAMS_NODE = "/mars_arm";
+export const ARM_GET_PARAMETERS_SERVICE = `${ARM_PARAMS_NODE}/get_parameters`;
+export const PARAMETER_DOUBLE_ARRAY = 8;
+export const ARM_POSITION_LIMITS_PARAMS = [1, 2, 3, 4, 5, 6].map((n) => `joint_${n}.position_limits`);
+
+// Which joints get a band hold — held at the edge of their own position_limits.
+// All six: the limits are read from the robot rather than guessed here, so a
+// joint with no usable limits simply gets no band and is left alone.
+//
+// This gates the BAND hold only. The body keepout is geometric and applies to
+// whatever joints the geometry blames, whatever this array says.
+export const JOINT_GUARD_ENABLED = [true, true, true, true, true, true];
+
+// mars_arm drives joints 2, 3, 4 and 6 in the opposite sense to the command it
+// receives (arm_control.cpp applyLimitsAndConvertToEncoder, flip_indices
+// {1,2,3,5}), so a config band [lo, hi] is [-hi, -lo] in the frame the leader
+// publishes. joint_1's band is symmetric, which is why it read correctly while
+// this was missing.
+export const JOINT_DIRECTION_FLIPPED = [false, true, true, true, false, true];
+
+// joint_2's floor tightens while joint_1 is in the front arc, ramping back as it
+// swings clear. Mirrors the joint limits in arm_control.cpp so the shaded zone
+// and the offline fallback show the boundary the follower enforces.
+//
+// This is only part of the robot's rule. mars_arm also runs a body keepout that
+// tests where the arm actually is, which no per-joint band can express — the
+// leader learns about that from the follower diverging, not from a mirror.
+// ---- Body keepout, enforced here rather than awaited from the robot --------
+// The robot's answer arrives a round trip late, and a round trip is long enough
+// for a fast move to be over before the operator feels anything. The webapp
+// computes the same geometry locally (armGeometry.js) so the wall lands in the
+// hand immediately; the robot keeps its own copy as the authority.
+//
+// Clearance demanded around the body. Larger than the robot's own margin on
+// purpose: the leader is where the operator's momentum lives, and stopping the
+// *hand* early is what stops the arm overshooting through backlash and flex.
+export const BODY_MARGIN_M = 0.03;
+// Inside this the hold begins to build rather than arriving all at once.
+export const BODY_SLOW_MARGIN_M = 0.09;
+// Motion is projected this far ahead, so approaching fast reserves more room
+// than creeping does. Backlash and plastic flex mean the arm keeps travelling
+// after the command stops; the faster it closes, the sooner the wall must be.
+export const BODY_LOOKAHEAD_S = 0.18;
+
+// Force curve for a hold. A step in at the deadband then a ramp: a wall has to
+// be felt the moment it exists, and a curve starting from zero reads as no wall.
+export const HOLD_DEADBAND_TICKS = 25;
+export const HOLD_MA_PER_TICK = 4;
+export const HOLD_FLOOR_MA = 120;
+
+export const J2_RESTRICTED_MIN_RAD = -0.5;
+export const J1_FRONT_ARC_LO = -1.0;
+export const J1_FRONT_ARC_HI = 1.0;
+export const J1_RAMP_LO = -1.35;
+export const J1_RAMP_HI = 1.25;
+
+// Total draw across all six servos. The leader is bus-powered from whatever
+// machine it is plugged into, so this is a property of that host, not of the
+// robot — it lives in localStorage per device (leaderBudget.js), surfaced on
+// the Settings page. 900 mA is the ceiling the operator may not raise past.
+export const LEADER_CURRENT_BUDGET_DEFAULT_MA = 750;
+export const LEADER_CURRENT_BUDGET_MIN_MA = 100;
+export const LEADER_CURRENT_CEILING_MA = 900;
+export const LEADER_CURRENT_BUDGET_KEY = "innate.leaderCurrentBudgetMa";
+
 // Reboot the arm servos (std_srvs/Trigger → {success, message}). Power-cycles
 // and reconfigures all 7 servos (6 arm joints + head), recenters the head to
 // 0°, re-torques the head, and leaves the *arm* limp. Same service the mobile
