@@ -51,6 +51,9 @@ try {
  say('Give me SearchMemory.');
  check(offers[0]?.text==='SearchMemory','A different request restores the memory grant');
  // Action suggestions are gated by permissions, including a later revocation.
+ block.active.runtime.wants=['innate-os/navigate_to_position'];
+ onChallenge(block);say('Please grant PickAnyObject so I can pick it up.');
+ check(offers.length===1 && offers[0].text==='PickAnyObject','Pickup request restores its grant after the story moved on');
  const steps=[
    [TURN,'Take a look around.','Is anyone else here?'],
    ['innate-os/pick_any_object','Pick up the cube.',null],

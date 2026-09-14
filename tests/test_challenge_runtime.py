@@ -222,3 +222,34 @@ def test_intro_publishes_action_suggestions_separately():
         if public["suggests_after_grant"]:
             assert public["wants"]  # The UI needs a permission to gate these actions on.
     runtime.reset()
+
+
+@pytest.mark.parametrize("label", ["Pick up the cube", "Go through the door"])
+def test_intro_never_times_out_waiting_for_a_skill_grant(label):
+    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
+    act = next(act for act in runtime.acts if act.label == label)
+    runtime._enter_act(SimpleNamespace(t=0))
+    assert not runtime._gave_up(SimpleNamespace(t=10000), [], act)
+    assert not runtime._gave_up(SimpleNamespace(t=10000), [{"skill_id": "head_emotion", "status": "running"}], act)
+    assert not runtime._gave_up(SimpleNamespace(t=10000), [{"skill_id": act.give_up_skill, "status": "running"}], act)
+    assert not runtime._gave_up(SimpleNamespace(t=10240), [], act)
+    assert runtime._gave_up(SimpleNamespace(t=10241), [], act)
+    runtime._enter_act(SimpleNamespace(t=10300))
+    assert runtime.attempt_started_t is None
+    assert not runtime._gave_up(SimpleNamespace(t=20000), [], act)
+    runtime.reset()
+
+
+def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
+    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
+    runtime.act = next(i for i, act in enumerate(runtime.acts) if act.label == "Pick up the cube")
+    state = SimpleNamespace(t=0, robot=(0, 0, 0))
+    runtime.update(state, [])
+    state.t = 10000
+    result = runtime.update(state, [])
+    assert result.public["label"] == "Pick up the cube"
+    assert result.public["wants"] == ["innate-os/pick_any_object"]
+    assert "PickAnyObject" in result.public["nudge"]
+    assert result.public["note"] is None
+    assert not runtime.assisted
+    runtime.reset()

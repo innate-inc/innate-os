@@ -220,6 +220,7 @@ class NowhereRuntime(ChallengeRuntime):
         self.surprised = False
         self.turned_t: float | None = None
         self.failures = 0
+        self.attempt_started_t: float | None = None
         self.nudging = False
 
     def still_for(self, state: WorldState, seconds: float) -> bool:
@@ -237,8 +238,14 @@ class NowhereRuntime(ChallengeRuntime):
     def _gave_up(self, state: WorldState, events: list[dict], act: Act) -> bool:
         if act.give_up_skill is None:
             return False
+        if self.attempt_started_t is None and any(matches(ev, act.give_up_skill, "running") for ev in events):
+            self.attempt_started_t = state.t
         self.failures += sum(matches(ev, act.give_up_skill, "failed") for ev in events)
-        timed_out = act.give_up_after_s is not None and state.t - self.act_entered_t > act.give_up_after_s
+        timed_out = (
+            self.attempt_started_t is not None
+            and act.give_up_after_s is not None
+            and state.t - self.attempt_started_t > act.give_up_after_s
+        )
         return self.failures >= act.give_up_failures or timed_out
 
     def update(self, state: WorldState, events: list[dict]) -> RuntimeResult:

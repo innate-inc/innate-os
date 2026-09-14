@@ -33,6 +33,7 @@ export const PLAY_INTRO_KEY = "innate.nowhere.play";
 const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]); // never part of the story's arc
 const WAVE = "innate-os/wave";
 const ARM_MOVE = "innate-os/arm_move";
+const PICK_UP = "innate-os/pick_any_object";
 const MEMORY = "innate-os/search_memory";
 const GRADUATION_MAX_WAIT_MS = 25_000;
 // The robot asks for its next skill in its own time, and sometimes takes a while. The grant
@@ -624,11 +625,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
       return { chips: [] };
     }
-    // A request made by the robot for the visitor's arm target overrides the scripted
+    // A request made by the robot for the visitor's arm or pickup target overrides the scripted
     // grant, including persona selection and the final memory step. Never auto-grant it.
-    if ((r || o) && !agentState.get().activeSkills.has(ARM_MOVE) && mentions(opts.lastLine(), ARM_MOVE)) {
-      chipReason = "grants:arm-request";
-      return { title: `${name} asks for a skill`, chips: [grantOffer(ARM_MOVE)] };
+    const requested = [ARM_MOVE, PICK_UP].filter((skill) =>
+      !agentState.get().activeSkills.has(skill) && mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
+    );
+    if ((r || o) && requested.length) {
+      chipReason = `grants:requested:${requested.join(",")}`;
+      return { title: `${name} asks for a skill`, chips: requested.map(grantOffer) };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
@@ -1152,7 +1156,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     skills.replaceChildren();
     for (const id of listed) {
       if (inStory && id === ARM_MOVE && !s.activeSkills.has(id)) continue;
-      if (r && !unlocked.has(id) && !(id === ARM_MOVE && s.activeSkills.has(id))) continue;
+      if (r && !unlocked.has(id) && !s.activeSkills.has(id)) continue;
       if (inStory && !r && UNMENTIONED_SKILLS.has(id) && !s.activeSkills.has(id)) continue;
       const granted = s.activeSkills.has(id);
       if (inStory && wanted.has(id) && !granted) continue; // the grant card above is that skill
