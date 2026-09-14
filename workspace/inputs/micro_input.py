@@ -40,7 +40,7 @@ import time
 
 import numpy as np
 
-from brain_client.brain.transport import pick_chat
+from brain_client.brain.transport import pick_wire
 from brain_client.common.logging import UniversalLogger
 from brain_client.inputs.batch_stt import (
     DEFAULT_KEYTERMS,
@@ -428,7 +428,7 @@ class MicroInput(InputDevice):
         """Start a batch-transcription session on Gemini. Returns the model id."""
         model = self.proxy.config.get("gemini_stt_model", "gemini-3.6-flash")
 
-        transport, _ = pick_chat(self.proxy)
+        transport = pick_wire(self.proxy).chat
         if transport is None:
             raise RuntimeError("no Gemini access: proxy unavailable and GEMINI_API_KEY unset")
 
