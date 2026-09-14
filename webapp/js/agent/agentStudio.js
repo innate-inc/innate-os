@@ -14,7 +14,7 @@
 
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
-import { ICONS, personaCard, skillCard } from "./storyCards.js";
+import { personaCard, skillCard } from "./storyCards.js";
 
 // The left side of the stage holds one open panel at a time: the scene setup and the
 // challenges already trade places through this event (simStage.ts, challengePanel.js), and
@@ -573,23 +573,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     onSelect: () => void grant(skill),
   });
 
-  /** The custom character is typed where the persona lives: the panel's prompt, or the
-   *  composer where there is no panel. */
-  function focusPrompt() {
-    // press-activate fires this on pointerdown, and the press then focuses the card itself:
-    // move the cursor a frame later, once that has happened.
-    requestAnimationFrame(() => {
-      if (compact) {
-        panel.focusComposer();
-        return;
-      }
-      tab = "identity";
-      render(true);
-      promptInput.focus();
-      promptInput.scrollIntoView({ block: "nearest" });
-    });
-  }
-
   /** @param {string} persona */
   function choose(persona) {
     if (persona === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
@@ -665,17 +648,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       });
       return {
         title: `Who is ${name}?`,
-        chips: [
-          ...personas.map(pick),
-          {
-            text: "Write your own",
-            kind: /** @type {const} */ ("custom"),
-            icon: ICONS.pen,
-            detail: "In your own words.",
-            onSelect: focusPrompt,
-          },
-          { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
-        ],
+        chips: personas.map(pick),
       };
     }
     const wants = (r.wants ?? []).filter(

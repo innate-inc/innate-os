@@ -1,4 +1,5 @@
 <!doctype html>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Intro arm grant checks</title>
 <link rel="stylesheet" href="../css/app.css">
@@ -9,15 +10,23 @@ import {createOfferDeck} from '../js/agent/offerDeck.js';
 const root=document.querySelector('.cockpit'), noop=()=>{}, checks=[];
 const check=(ok,text)=>{if(!ok)throw Error(text);checks.push(text)};
 const ARM='innate-os/arm_move', HEAD='innate-os/head_emotion', TURN='innate-os/turn_in_place';
-let onChallenge, onState, line='', count=1, offers=[], submitted='', studio;
+let onChallenge, onState, line='', count=1, offers=[], submitted='', composerAsk=null, chosen=null, studio;
 const state={currentDirective:'void_agent',activeSkills:new Set(['innate-os/wave']),agents:[{id:'void_agent',name:'MARS',skills:[ARM,HEAD,TURN],prompt:'Intro',source:'shipped'}]};
 const deck=createOfferDeck(); root.append(deck.el);
 try {
- studio=createAgentStudio(root,{get:()=>state,subscribe:cb=>(onState=cb,noop),setActiveSkills:ids=>{state.activeSkills=new Set(ids);onState();}}, {onChallenge:cb=>(onChallenge=cb,noop)}, {setDisplayName:noop,setOffers:(chips,title)=>{offers=chips;deck.set(chips,title)},setComposerAsk:noop,beginOnboarding:noop,narrate:noop,submitText:async text=>{submitted=text}}, {spokenCount:()=>count,motionAt:()=>0,recalledAt:()=>0,turnedAt:()=>0,lastLine:()=>line,overlay:()=>noop,cancelSkill:async()=>{},resetMotion:noop});
+ studio=createAgentStudio(root,{get:()=>state,subscribe:cb=>(onState=cb,noop),setActiveSkills:ids=>{state.activeSkills=new Set(ids);onState();}}, {onChallenge:cb=>(onChallenge=cb,noop),sendChallengeEvent:event=>{chosen=event;}}, {setDisplayName:noop,setOffers:(chips,title)=>{offers=chips;deck.set(chips,title)},setComposerAsk:ask=>{composerAsk=ask},beginOnboarding:noop,narrate:noop,submitText:async text=>{submitted=text}}, {spokenCount:()=>count,motionAt:()=>0,recalledAt:()=>0,turnedAt:()=>0,lastLine:()=>line,overlay:()=>noop,cancelSkill:async()=>{},resetMotion:noop});
  studio.setCompact(true);
  const block={active:{id:'nowhere',attempt_id:'arm-test',elapsed_s:30,runtime:{story:'nowhere',act:1,label:'Feel',wants:[HEAD],unlocked:[HEAD],profile:{name:'MARS'},suggests:['Where are you?']}}};
  onChallenge(block);
  const say=text=>{line=text;count++;onState()};
+ block.active.runtime.personas=['Rocky','Grumpy cat'];
+ say('Who should I be?');
+ check(offers.length===2 && offers.every(o=>o.kind==='persona'),'Character picker contains only the preset characters');
+ check(composerAsk?.placeholder==='Or describe your own character…','Chat still invites a custom character');
+ composerAsk.submit('A curious gardener');
+ check(chosen?.type==='persona' && chosen.persona==='A curious gardener','Custom character still submits through chat');
+ block.active.runtime.profile.persona='A curious gardener';
+ block.active.runtime.personas=[];
  say('Give me HeadEmotion.');
  check(offers.some(o=>o.text==='HeadEmotion'),'Story initially offers HeadEmotion');
  say('Okay, grant me the ArmMove skill so I can move my arm.');
