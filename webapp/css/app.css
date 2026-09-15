@@ -9501,14 +9501,14 @@ select.skill-input {
   gap: 4px;
   align-items: flex-end;
   padding: 6px 10px 6px 6px;
-  background: #28282a;
+  background: #0e0e11;
   border: 1px solid var(--hairline-strong);
   border-radius: 15px;
   transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .agent-compose:focus-within {
-  background: #202024;
+  background: #131317;
   border-color: var(--agent-purple-edge);
   box-shadow: 0 0 0 2px rgb(64 31 251 / 10%);
 }
