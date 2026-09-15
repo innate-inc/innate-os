@@ -209,7 +209,9 @@
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
-#     gemini_model: "gemini-3.6-flash"
+#     llm_model: "google:gemini-3.6-flash"  # provider:name — google | openai | anthropic; openai-chat + llm_base_url for a LAN server
+#     llm_thinking: "minimal"        # minimal | low | medium | high | xhigh; "" = model default
+#     memory_llm_model: ""           # recall's model; "" = the brain's
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs

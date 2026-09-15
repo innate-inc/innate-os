@@ -8,8 +8,10 @@ import json
 
 import httpx
 import pytest
+from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.models.function import FunctionModel
 
-from brain_client.brain.transport import GeminiRest, proxy_rest
+from brain_client.brain.transport import proxy_rest
 from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
     NO_SPEECH,
@@ -26,17 +28,15 @@ WAV = pcm_to_wav(b"\x00\x00" * 240, 24_000)
 GEMINI_MODEL = "gemini-3.6-flash"
 
 
-def gemini_rest(response: dict, calls: list | None = None) -> GeminiRest:
-    def post(path, body, timeout=None):
+def gemini_model(text: str | None, calls: list | None = None) -> FunctionModel:
+    """A model answering ``text`` (None: an empty reply), recording what it was asked."""
+
+    def reply(messages, info) -> ModelResponse:
         if calls is not None:
-            calls.append((path, body, timeout))
-        return response
+            calls.append((messages, info))
+        return ModelResponse(parts=[TextPart(content=text)] if text is not None else [])
 
-    return GeminiRest(post=post, delete=lambda path: {}, upload=lambda path, data, mime: {})
-
-
-def gemini_reply(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    return FunctionModel(reply, model_name=GEMINI_MODEL)
 
 
 class FakeProxyResponse:
@@ -70,12 +70,14 @@ class FakeProxy:
 # ---------- transcribe timeout ----------
 
 
-def test_gemini_post_carries_the_transcribe_timeout():
+def test_gemini_request_carries_the_audio_and_the_transcribe_timeout():
     calls = []
-    assert gemini_transcriber(gemini_rest(gemini_reply("hello robot"), calls), GEMINI_MODEL, "en")(WAV) == "hello robot"
-    path, _, timeout = calls[0]
-    assert path == f"/v1beta/models/{GEMINI_MODEL}:generateContent"
-    assert timeout == TRANSCRIBE_TIMEOUT_SECS
+    assert gemini_transcriber(gemini_model("hello robot", calls), "en")(WAV) == "hello robot"
+    messages, info = calls[0]
+    (prompt,) = [p for p in messages[-1].parts if isinstance(p, UserPromptPart)]
+    audio = next(item for item in prompt.content if isinstance(item, BinaryContent))
+    assert audio.media_type == "audio/wav" and audio.data == WAV
+    assert info.model_settings and info.model_settings["timeout"] == TRANSCRIBE_TIMEOUT_SECS
 
 
 def test_proxy_rest_threads_a_per_call_timeout_to_the_wire():
@@ -101,19 +103,18 @@ def test_elevenlabs_proxy_passes_the_transcribe_timeout():
 # ---------- gemini response shapes ----------
 
 
-def test_gemini_empty_candidates():
-    for response in ({}, {"candidates": []}):
-        assert gemini_transcriber(gemini_rest(response), GEMINI_MODEL, "en")(WAV) == ""
+def test_gemini_empty_reply_is_silence():
+    assert gemini_transcriber(gemini_model(None), "en")(WAV) == ""
 
 
 def test_no_speech_survives_model_decoration():
     for decorated in (NO_SPEECH, "NO_SPEECH.", '"NO_SPEECH"', "'NO_SPEECH'", ' "NO_SPEECH". ', "NO_SPEECH!"):
-        assert gemini_transcriber(gemini_rest(gemini_reply(decorated)), GEMINI_MODEL, "en")(WAV) == ""
+        assert gemini_transcriber(gemini_model(decorated), "en")(WAV) == ""
 
 
 def test_no_speech_inside_longer_text_is_a_real_transcript():
     for text in ("NO_SPEECH is what he said", "she whispered NO_SPEECH"):
-        assert gemini_transcriber(gemini_rest(gemini_reply(text)), GEMINI_MODEL, "en")(WAV) == text
+        assert gemini_transcriber(gemini_model(text), "en")(WAV) == text
 
 
 # ---------- proxy client body encoding ----------

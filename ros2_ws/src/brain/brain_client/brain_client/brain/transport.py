@@ -1,42 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""How the brain reaches Gemini: the Innate proxy (managed) or GEMINI_API_KEY (dev).
+"""Gemini's native REST, for the one thing the model layer has no words for.
 
-The proxy holds the upstream key and passes native Gemini calls — the turn
-stream and the memory search's blocking generate / context-cache management —
-through untouched (the robot authenticates with its service key); the direct
-path talks to ``generativelanguage.googleapis.com``. Both speak the same wire
-format — a transport only moves payloads and never interprets them.
+Every model call goes through pydantic-ai (:mod:`brain_client.brain.llm`).
+What remains here is the explicit context cache the memory search builds and
+deletes — ``cachedContents`` exists only on Gemini's own API — reached the
+same two ways as the model: the Innate proxy (it holds the upstream key and
+passes native calls through untouched) or ``GEMINI_API_KEY``.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
-
-from brain_client.common.enums import StrEnum
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
 
 PROXY_SERVICE = "gemini"
 DIRECT_BASE_URL = "https://generativelanguage.googleapis.com"
-STREAM_PATH = "/v1beta/models/{model}:streamGenerateContent?alt=sse"
-GENERATE_PATH = "/v1beta/models/{model}:generateContent"
 CACHED_CONTENTS_PATH = "/v1beta/cachedContents"
-FILES_UPLOAD_PATH = "/upload/v1beta/files"
 
 # The backend has no passthrough for this endpoint at all — callers latch the
-# feature off permanently rather than retry (shared by the cache and files tiers).
+# feature off permanently rather than retry.
 UNSUPPORTED_ENDPOINT_STATUSES = (404, 405, 501)
-
-Transport = Callable[[str, dict], Iterator[dict]]
-"""(model, request body) -> streamed response chunks."""
 
 
 class GeminiHttpError(RuntimeError):
@@ -58,103 +50,42 @@ class RestPost(Protocol):
 
 @dataclass(frozen=True)
 class GeminiRest:
-    """Blocking JSON + media calls against the same backend the stream uses."""
+    """Blocking JSON calls against Gemini's native API."""
 
     post: RestPost
     delete: Callable[[str], dict]  # api path -> parsed response (usually empty)
-    upload: Callable[[str, bytes, str], dict]  # (api path, raw bytes, mime type) -> parsed response
-
-
-class Backend(StrEnum):
-    """Which way the brain reaches Gemini (surfaced in health and telemetry)."""
-
-    PROXY = "innate-proxy"
-    DIRECT = "gemini-direct"
-    UNCONFIGURED = "unconfigured"
-
-
-def pick_transport(proxy: ProxyClient | None) -> tuple[Transport | None, Backend]:
-    """The way to reach Gemini: the Innate proxy (managed) or GEMINI_API_KEY (dev).
-
-    sim/launcher/config.py:resolve_brain_backend predicts this choice from the
-    host (it cannot import this module) to label the dashboard; change the
-    precedence here and change it there.
-    """
-    if proxy is not None and proxy.is_available():
-        return proxy_transport(proxy), Backend.PROXY
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key:
-        return direct_transport(api_key), Backend.DIRECT
-    return None, Backend.UNCONFIGURED
-
-
-def proxy_transport(proxy: ProxyClient) -> Transport:
-    """Reach Gemini through the Innate proxy (the proxy holds the upstream key)."""
-
-    def stream(model: str, body: dict) -> Iterator[dict]:
-        endpoint = STREAM_PATH.format(model=model)
-        with proxy.request_stream(PROXY_SERVICE, endpoint, json=body) as resp:
-            if resp.status_code != 200:
-                raise RuntimeError(f"gemini via proxy: HTTP {resp.status_code}: {resp.read()[:200]!r}")
-            yield from _sse_chunks(resp.iter_lines())
-
-    return stream
-
-
-def direct_transport(api_key: str) -> Transport:
-    """Reach Google's Gemini API directly with GEMINI_API_KEY."""
-    # One client for the process: reuses the TLS connection across turns
-    # instead of a fresh handshake per generate call. Single-threaded use by
-    # construction (one turn at a time on the agent's worker thread).
-    client = httpx.Client(headers={"x-goog-api-key": api_key}, timeout=90.0)
-
-    def stream(model: str, body: dict) -> Iterator[dict]:
-        url = DIRECT_BASE_URL + STREAM_PATH.format(model=model)
-        with client.stream("POST", url, json=body) as resp:
-            if resp.status_code != 200:
-                resp.read()
-                raise RuntimeError(f"gemini direct: HTTP {resp.status_code}: {resp.text[:200]}")
-            yield from _sse_chunks(resp.iter_lines())
-
-    return stream
 
 
 def pick_rest(proxy: ProxyClient | None) -> GeminiRest | None:
-    """Blocking-call access to Gemini, chosen the same way as :func:`pick_transport`."""
+    """Native Gemini access: the Innate proxy (managed) or GEMINI_API_KEY (dev)."""
     if proxy is not None and proxy.is_available():
         return proxy_rest(proxy)
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key = gemini_api_key()
     if api_key:
         return direct_rest(api_key)
     return None
 
 
-def proxy_rest(proxy: ProxyClient) -> GeminiRest:
-    """Non-streaming Gemini calls through the proxy (same service passthrough as the stream)."""
+def gemini_api_key() -> str:
+    return (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
 
-    def request(
-        method: str, path: str, body: dict | None = None, data: bytes | None = None, timeout: float | None = None
-    ) -> dict:
-        with proxy.request_stream(PROXY_SERVICE, path, method=method, json=body, data=data, timeout=timeout) as resp:
+
+def proxy_rest(proxy: ProxyClient) -> GeminiRest:
+    def request(method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict:
+        with proxy.request_stream(PROXY_SERVICE, path, method=method, json=body, timeout=timeout) as resp:
             payload = resp.read()
             if resp.status_code != 200:
                 raise GeminiHttpError(resp.status_code, payload[:200].decode(errors="replace"))
             return json.loads(payload) if payload else {}
 
-    # The proxy client cannot attach the raw-upload protocol headers; a
-    # passthrough that requires them answers non-200 and the caller latches
-    # the files tier off (frames ride inline — today's behavior).
     return GeminiRest(
         post=lambda path, body, timeout=None: request("POST", path, body, timeout=timeout),
         delete=lambda path: request("DELETE", path),
-        upload=lambda path, data, mime: request("POST", path, data=data),
     )
 
 
 def direct_rest(api_key: str) -> GeminiRest:
-    """Non-streaming Gemini calls directly against Google with GEMINI_API_KEY."""
-    # Own client: a context-cache upload carries a few MB of frames and needs a
-    # longer timeout than the per-chunk streaming client.
+    # A context-cache build carries a few MB of frames: a longer deadline than a turn.
     client = httpx.Client(headers={"x-goog-api-key": api_key}, timeout=120.0)
 
     def request(method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict:
@@ -166,24 +97,7 @@ def direct_rest(api_key: str) -> GeminiRest:
             raise GeminiHttpError(resp.status_code, resp.text[:200])
         return resp.json() if resp.content else {}
 
-    def upload(path: str, data: bytes, mime: str) -> dict:
-        resp = client.post(
-            DIRECT_BASE_URL + path,
-            content=data,
-            headers={"X-Goog-Upload-Protocol": "raw", "Content-Type": mime},
-        )
-        if resp.status_code != 200:
-            raise GeminiHttpError(resp.status_code, resp.text[:200])
-        return resp.json() if resp.content else {}
-
     return GeminiRest(
         post=lambda path, body, timeout=None: request("POST", path, body, timeout=timeout),
         delete=lambda path: request("DELETE", path),
-        upload=upload,
     )
-
-
-def _sse_chunks(lines: Iterable[str]) -> Iterator[dict]:
-    for line in lines:
-        if line.startswith("data: "):
-            yield json.loads(line[len("data: ") :])

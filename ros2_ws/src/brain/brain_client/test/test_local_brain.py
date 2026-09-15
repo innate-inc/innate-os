@@ -2,18 +2,30 @@
 # Copyright (c) 2026 Innate Inc
 """Unit tests for the local brain's pure core (no ROS, no network).
 
-Covers the Gemini layer the agent loop depends on: skill metadata -> tool
-declarations, response -> Decision (speech / thoughts / calls), and the history
-pruning that keeps requests small (the "image cache"). GeminiContext only
+Covers the model layer the agent loop depends on: skill metadata -> tool
+definitions, response -> Decision (speech / thoughts / calls), and the history
+pruning that keeps requests small (the "image cache"). ChatContext only
 touches the network in generate(), so everything else is exercised directly
-with a None or capturing transport.
+against a FunctionModel driven by a capturing transport fake.
 """
 
 import json
 
 import pytest
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import DeltaThinkingPart, DeltaToolCall, FunctionModel
 
-from brain_client.brain.context import GeminiContext, _decision_from
+from brain_client.brain.context import ChatContext, decision_from, trace_body
+from brain_client.brain.llm import model_settings
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.tools import (
     STOP_SKILL,
@@ -39,12 +51,6 @@ NAV_SKILL = {
 WAVE_SKILL = {"id": "local/wave", "name": "wave", "guidelines": "Wave the arm.", "inputs": {}}
 
 
-def make_context(transport=None, max_history=60, max_image_turns=2) -> GeminiContext:
-    return GeminiContext(
-        transport, model="test-model", thinking_level="", max_history=max_history, max_image_turns=max_image_turns
-    )
-
-
 def model_response(*parts) -> dict:
     return {"candidates": [{"content": {"role": "model", "parts": list(parts)}}]}
 
@@ -54,6 +60,47 @@ def call_part(name: str, args: dict, call_id: str = "") -> dict:
     if call_id:
         call["id"] = call_id
     return {"functionCall": call}
+
+
+def fake_model(transport=None) -> FunctionModel:
+    """A pydantic-ai model driven by a ``(model, body) -> chunks`` fake.
+
+    The fake sees the request in the monitor's dialect (:func:`trace_body`)
+    and answers with Gemini-style part chunks, which stream back as text,
+    thinking and tool-call deltas.
+    """
+    transport = transport or (lambda model, body: [model_response({"text": "ok"})])
+
+    async def stream(messages, info):
+        system = next(
+            (m.instructions for m in reversed(messages) if isinstance(m, ModelRequest) and m.instructions), ""
+        )
+        body = trace_body(system or "", messages, info.function_tools, info.model_settings or {})
+        index = 0
+        for chunk in transport("test-model", body):
+            for part in (chunk.get("candidates") or [{}])[0].get("content", {}).get("parts") or []:
+                index += 1
+                call = part.get("functionCall")
+                if call is not None:
+                    args = json.dumps(call.get("args") or {})
+                    yield {index: DeltaToolCall(name=call["name"], json_args=args, tool_call_id=call.get("id") or None)}
+                elif part.get("thought"):
+                    yield {index: DeltaThinkingPart(content=part["text"])}
+                else:
+                    yield part.get("text", "")
+        if not index:
+            yield ""  # a partless stream: the context must see "no content"
+
+    return FunctionModel(stream_function=stream, model_name="test-model")
+
+
+def make_context(transport=None, max_history=60, max_image_turns=2, thinking="") -> ChatContext:
+    return ChatContext(
+        fake_model(transport),
+        settings=model_settings(thinking, ""),
+        max_history=max_history,
+        max_image_turns=max_image_turns,
+    )
 
 
 # ---------- tool building ----------
@@ -66,7 +113,7 @@ def test_tool_name_sanitizes_invalid_characters():
 
 
 def test_tool_name_never_starts_with_a_digit():
-    # Gemini requires function names to start with a letter or underscore; a
+    # Vendors require function names to start with a letter or underscore; a
     # digit-leading skill would 400 every request while it is active.
     assert tool_name("3d_scan") == "_3d_scan"
     assert tool_name("-dash") == "_-dash"
@@ -88,46 +135,44 @@ def test_assign_tool_names_disambiguates_collisions_and_builtins():
     assert names[2] == "wait_2"
     assert len(names) == len(set(names)) and WAIT not in names
     assert all(len(name) <= 64 for name in names)
-    # The declarations use the same disambiguated names.
-    declared = [d["name"] for d in build_tools(named, None)[0]["functionDeclarations"]]
+    # The definitions use the same disambiguated names.
+    declared = [d.name for d in build_tools(named, None)]
     assert declared[:5] == names
 
 
 def test_build_tools_declares_one_function_per_skill_plus_wait():
-    tools = build_tools(assign_tool_names([NAV_SKILL, WAVE_SKILL]), None)
-    declarations = tools[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == ["navigate_to_position", "wave", "wait"]
+    declarations = build_tools(assign_tool_names([NAV_SKILL, WAVE_SKILL]), None)
+    assert [d.name for d in declarations] == ["navigate_to_position", "wave", "wait"]
 
     nav = declarations[0]
-    assert nav["description"] == NAV_SKILL["guidelines"]
-    params = nav["parameters"]
-    assert params["type"] == "OBJECT"
+    assert nav.description == NAV_SKILL["guidelines"]
+    params = nav.parameters_json_schema
+    assert params["type"] == "object"
     assert set(params["properties"]) == {"x", "y", "local_frame", "mode"}
     assert params["required"] == ["x", "y"]
-    assert params["properties"]["x"]["type"] == "NUMBER"
-    assert params["properties"]["local_frame"]["type"] == "BOOLEAN"
+    assert params["properties"]["x"]["type"] == "number"
+    assert params["properties"]["local_frame"]["type"] == "boolean"
     assert params["properties"]["mode"]["enum"] == ["fast", "safe"]
-    # No-input skills must not carry an empty object schema.
-    assert "parameters" not in declarations[1]
+    # No-input skills carry an empty object schema (a tool must have one).
+    assert declarations[1].parameters_json_schema == {"type": "object", "properties": {}}
 
 
 def test_build_tools_while_running_offers_only_stop_and_wait():
-    declarations = build_tools([], "navigate_to_position")[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == [STOP_SKILL, "wait"]
-    assert "navigate_to_position" in declarations[0]["description"]
+    declarations = build_tools([], "navigate_to_position")
+    assert [d.name for d in declarations] == [STOP_SKILL, "wait"]
+    assert "navigate_to_position" in declarations[0].description
 
 
 def test_build_tools_while_running_with_user_speech_offers_stop_alone():
     # Offered any no-op tool the model calls it and goes silent, so a turn
     # carrying a user message gets stop alone — text becomes the reply channel.
-    declarations = build_tools([], "wave", user_spoke=True)[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == [STOP_SKILL]
-    assert "NOT reasons to stop" in declarations[0]["description"]
+    declarations = build_tools([], "wave", user_spoke=True)
+    assert [d.name for d in declarations] == [STOP_SKILL]
+    assert "NOT reasons to stop" in declarations[0].description
 
 
 def test_build_tools_with_no_skills_still_offers_wait():
-    declarations = build_tools([], None)[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == ["wait"]
+    assert [d.name for d in build_tools([], None)] == ["wait"]
 
 
 def test_unknown_param_type_falls_back_to_annotated_string():
@@ -137,72 +182,94 @@ def test_unknown_param_type_falls_back_to_annotated_string():
         "guidelines": "g",
         "inputs": {"blob": {"type": "dict[str, float]", "required": True}},
     }
-    schema = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]["properties"][
-        "blob"
-    ]
-    assert schema["type"] == "STRING"
+    schema = build_tools(assign_tool_names([skill]), None)[0].parameters_json_schema["properties"]["blob"]
+    assert schema["type"] == "string"
     assert "dict[str, float]" in schema["description"]
 
 
 @pytest.mark.parametrize("declared", ["float | None", "None | float", "Optional[float]", "typing.Optional[float]"])
 def test_optional_numeric_tool_parameters_remain_numbers(declared):
     skill = {"id": "s", "name": "s", "inputs": {"x": {"type": declared, "required": False, "default": None}}}
-    params = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]
-    assert params["properties"]["x"]["type"] == "NUMBER"
-    assert params["properties"]["x"]["nullable"] is True
+    params = build_tools(assign_tool_names([skill]), None)[0].parameters_json_schema
+    assert params["properties"]["x"]["anyOf"] == [{"type": "number"}, {"type": "null"}]
     assert params["required"] == []
 
 
 @pytest.mark.parametrize("declared", ["list[float] | None", "Optional[List[float]]"])
 def test_optional_joint_list_is_a_native_numeric_array(declared):
     skill = {"id": "s", "name": "s", "inputs": {"joints": {"type": declared, "required": False}}}
-    params = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]
-    assert params["properties"]["joints"] == {"type": "ARRAY", "items": {"type": "NUMBER"}, "nullable": True}
+    params = build_tools(assign_tool_names([skill]), None)[0].parameters_json_schema
+    assert params["properties"]["joints"]["anyOf"] == [{"type": "array", "items": {"type": "number"}}, {"type": "null"}]
 
 
 # ---------- decisions ----------
 
 
 def test_decision_separates_speech_thoughts_and_calls():
-    response = model_response(
-        {"text": "I see a person.", "thought": True},
-        {"text": "Hello there!"},
-        call_part("wave", {}, "c1"),
+    response = ModelResponse(
+        parts=[
+            ThinkingPart(content="I see a person."),
+            TextPart(content="Hello there!"),
+            ToolCallPart(tool_name="wave", args={}, tool_call_id="c1"),
+        ]
     )
-    decision = _decision_from(response)
+    decision = decision_from(response)
     assert decision.speech == "Hello there!"
     assert decision.thoughts == "I see a person."
     assert [(c.id, c.name, c.args) for c in decision.calls] == [("c1", "wave", {})]
 
 
 def test_decision_tolerates_empty_or_malformed_response():
-    assert _decision_from({"candidates": []}).calls == []
-    assert _decision_from({}).speech is None
-    decision = _decision_from(model_response({"functionCall": {"name": "wave", "args": None}}))
+    assert decision_from(ModelResponse(parts=[])).calls == []
+    assert decision_from(ModelResponse(parts=[])).speech is None
+    decision = decision_from(ModelResponse(parts=[ToolCallPart(tool_name="wave", args=None, tool_call_id="c")]))
     assert decision.calls[0].args == {}
 
 
 # ---------- history / image pruning ----------
 
 
-def user_turn(text: str, with_image: bool) -> dict:
-    return GeminiContext.user_message(text, [JPEG] if with_image else [])
+def user_turn(text: str, with_image: bool) -> ModelRequest:
+    return ChatContext.user_message(text, [JPEG] if with_image else [])
 
 
-def images_in(content: dict) -> int:
-    return sum(1 for p in content.get("parts") or [] if "inlineData" in p)
+def images_in(turn) -> int:
+    """Frames in a stored request, or in a request as the transport fake saw it."""
+    if isinstance(turn, dict):
+        return sum(1 for p in turn.get("parts") or [] if "inlineData" in p)
+    return sum(
+        1
+        for p in turn.parts
+        if isinstance(p, UserPromptPart) and not isinstance(p.content, str)
+        for item in p.content
+        if isinstance(item, BinaryContent)
+    )
+
+
+def texts_in(request: ModelRequest) -> list[str]:
+    return [
+        item
+        for p in request.parts
+        if isinstance(p, UserPromptPart)
+        for item in ([p.content] if isinstance(p.content, str) else p.content)
+        if isinstance(item, str)
+    ]
+
+
+def user_turns(context: ChatContext) -> list[ModelRequest]:
+    return [m for m in context._history if isinstance(m, ModelRequest)]
 
 
 def test_prune_keeps_images_only_in_newest_turns():
     context = make_context(max_image_turns=2)
     for i in range(5):
-        context.absorb(user_turn(f"turn {i}", with_image=True), model_response({"text": "ok"}))
+        context.absorb(user_turn(f"turn {i}", with_image=True), ModelResponse(parts=[TextPart(content="ok")]))
 
-    user_turns = [c for c in context._history if c["role"] == "user"]
-    assert [images_in(c) for c in user_turns] == [0, 0, 0, 1, 1]
+    turns = user_turns(context)
+    assert [images_in(m) for m in turns] == [0, 0, 0, 1, 1]
     assert context.image_turn_count == 2  # what turn_start traces as history_images
     # Stripped frames leave a placeholder so the transcript still reads coherently.
-    assert any("removed" in p.get("text", "") for p in user_turns[0]["parts"])
+    assert any("removed" in text for text in texts_in(turns[0]))
 
 
 def test_absorb_keeps_only_the_newest_wrist_frame():
@@ -210,25 +277,24 @@ def test_absorb_keeps_only_the_newest_wrist_frame():
     # a stale gripper close-up reads as current grasp state.
     context = make_context(max_image_turns=3)
     for i in range(3):
-        message = GeminiContext.user_message(f"turn {i}", [JPEG, JPEG])  # head + wrist
-        context.absorb(message, model_response({"text": "ok"}), latest_only_images=[1])
+        message = ChatContext.user_message(f"turn {i}", [JPEG, JPEG])  # head + wrist
+        context.absorb(message, ModelResponse(parts=[TextPart(content="ok")]), latest_only_images=[1])
 
-    user_turns = [c for c in context._history if c["role"] == "user"]
-    assert [images_in(c) for c in user_turns] == [1, 1, 2]
-    assert any("wrist camera frame removed" in p.get("text", "") for p in user_turns[0]["parts"])
+    turns = user_turns(context)
+    assert [images_in(m) for m in turns] == [1, 1, 2]
+    assert any("wrist camera frame removed" in text for text in texts_in(turns[0]))
 
 
 def test_wrist_frame_survives_turns_without_one():
     # The arm camera going stale must not orphan-prune the one wrist frame left.
     context = make_context(max_image_turns=3)
     context.absorb(
-        GeminiContext.user_message("with wrist", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
+        ChatContext.user_message("with wrist", [JPEG, JPEG]),
+        ModelResponse(parts=[TextPart(content="ok")]),
         latest_only_images=[1],
     )
-    context.absorb(GeminiContext.user_message("head only", [JPEG]), model_response({"text": "ok"}))
-    user_turns = [c for c in context._history if c["role"] == "user"]
-    assert [images_in(c) for c in user_turns] == [2, 1]
+    context.absorb(ChatContext.user_message("head only", [JPEG]), ModelResponse(parts=[TextPart(content="ok")]))
+    assert [images_in(m) for m in user_turns(context)] == [2, 1]
 
 
 def test_generate_ships_exactly_one_wrist_frame():
@@ -242,11 +308,11 @@ def test_generate_ships_exactly_one_wrist_frame():
 
     context = make_context(transport, max_image_turns=3)
     context.absorb(
-        GeminiContext.user_message("turn 1", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
+        ChatContext.user_message("turn 1", [JPEG, JPEG]),
+        ModelResponse(parts=[TextPart(content="ok")]),
         latest_only_images=[1],
     )
-    context.generate(GeminiContext.user_message("turn 2", [JPEG, JPEG]), [], "S", latest_only_images=[1])
+    context.generate(ChatContext.user_message("turn 2", [JPEG, JPEG]), [], "S", latest_only_images=[1])
 
     contents = captured["contents"]
     assert images_in(contents[0]) == 1  # previous turn on the wire: head frame only
@@ -265,11 +331,11 @@ def test_generate_keeps_the_old_wrist_frame_when_this_turn_has_none():
 
     context = make_context(transport, max_image_turns=3)
     context.absorb(
-        GeminiContext.user_message("turn 1", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
+        ChatContext.user_message("turn 1", [JPEG, JPEG]),
+        ModelResponse(parts=[TextPart(content="ok")]),
         latest_only_images=[1],
     )
-    context.generate(GeminiContext.user_message("turn 2", [JPEG]), [], "S", latest_only_images=[])
+    context.generate(ChatContext.user_message("turn 2", [JPEG]), [], "S", latest_only_images=[])
     assert images_in(captured["contents"][0]) == 2  # arm camera stale: last wrist frame still shown
 
 
@@ -279,8 +345,8 @@ def test_generate_taps_the_exact_request_body():
     context = make_context(lambda model, body: [model_response({"text": "ok"})])
     seen = []
     context.on_request = seen.append
-    context.absorb(user_turn("earlier", True), model_response({"text": "old"}))
-    context.generate(user_turn("now", True), tools=[{"functionDeclarations": []}], system="sys")
+    context.absorb(user_turn("earlier", True), ModelResponse(parts=[TextPart(content="old")]))
+    context.generate(user_turn("now", True), tools=[], system="sys")
     (body,) = seen
     assert body["systemInstruction"]["parts"][0]["text"] == "sys"
     assert [c["role"] for c in body["contents"]] == ["user", "model", "user"]
@@ -290,81 +356,76 @@ def test_generate_taps_the_exact_request_body():
 def test_prune_with_zero_image_turns_strips_every_frame():
     context = make_context(max_image_turns=0)
     for i in range(3):
-        context.absorb(user_turn(f"turn {i}", with_image=True), model_response({"text": "ok"}))
-    user_turns = [c for c in context._history if c["role"] == "user"]
-    assert all(images_in(c) == 0 for c in user_turns)
+        context.absorb(user_turn(f"turn {i}", with_image=True), ModelResponse(parts=[TextPart(content="ok")]))
+    assert all(images_in(m) == 0 for m in user_turns(context))
 
 
-def test_prune_caps_history_and_never_starts_on_orphaned_function_response():
+def test_prune_caps_history_and_never_starts_on_orphaned_tool_return():
     context = make_context(max_history=4)
     for i in range(6):
-        decision = context.absorb(user_turn(f"turn {i}", False), model_response(call_part("wave", {}, f"c{i}")))
+        response = ModelResponse(parts=[ToolCallPart(tool_name="wave", args={}, tool_call_id=f"c{i}")])
+        decision = context.absorb(user_turn(f"turn {i}", False), response)
         context.add_tool_outcomes([(decision.calls[0], "started")])
 
     history = context._history
     assert len(history) <= 4
-    assert history[0]["role"] == "user"
-    assert not any("functionResponse" in p for p in history[0]["parts"])
+    assert isinstance(history[0], ModelRequest)
+    assert not any(isinstance(p, ToolReturnPart) for p in history[0].parts)
 
 
-def test_absorb_drops_thought_parts_from_stored_history():
+def test_absorb_keeps_thought_parts_for_replay():
+    # Vendors sign their thinking (Gemini 3, Claude) and demand it back on the
+    # next request, so the model turn is stored whole; thoughts still surface.
     context = make_context()
-    context.absorb(
+    decision = context.absorb(
         user_turn("hi", False),
-        model_response({"text": "planning...", "thought": True}, {"text": "Hello!"}),
+        ModelResponse(parts=[ThinkingPart(content="planning..."), TextPart(content="Hello!")]),
     )
     model_turn = context._history[-1]
-    assert model_turn["role"] == "model"
-    assert [p.get("text") for p in model_turn["parts"]] == ["Hello!"]
+    assert isinstance(model_turn, ModelResponse)
+    assert [type(p) for p in model_turn.parts] == [ThinkingPart, TextPart]
+    assert decision.thoughts == "planning..." and decision.speech == "Hello!"
 
 
 def test_clear_empties_history():
     context = make_context()
-    context.absorb(user_turn("hi", False), model_response({"text": "hello"}))
+    context.absorb(user_turn("hi", False), ModelResponse(parts=[TextPart(content="hello")]))
     context.clear()
     assert context._history == []
 
 
-def test_tool_outcomes_are_recorded_as_function_responses():
+def test_tool_outcomes_are_recorded_as_tool_returns():
     context = make_context()
     decision = context.absorb(
-        user_turn("go", False), model_response(call_part("navigate_to_position", {"x": 1}, "abc"))
+        user_turn("go", False),
+        ModelResponse(parts=[ToolCallPart(tool_name="navigate_to_position", args={"x": 1}, tool_call_id="abc")]),
     )
     context.add_tool_outcomes([(decision.calls[0], "started")])
-    part = context._history[-1]["parts"][0]["functionResponse"]
-    assert part["name"] == "navigate_to_position"
-    assert part["id"] == "abc"
-    assert part["response"] == {"outcome": "started"}
+    (part,) = context._history[-1].parts
+    assert isinstance(part, ToolReturnPart)
+    assert part.tool_name == "navigate_to_position"
+    assert part.tool_call_id == "abc"
+    assert part.content == {"outcome": "started"}
 
 
-def test_generate_builds_a_complete_native_request():
+def test_generate_sends_the_system_prompt_tools_and_thinking():
     captured = {}
 
     def transport(model, body):
-        captured["model"] = model
         captured.update(body)
         return [model_response({"text": "ok"})]
 
-    context = make_context(transport=transport)
+    context = make_context(transport=transport, thinking="high")
+    traced = []
+    context.on_request = traced.append
     tools = build_tools(assign_tool_names([WAVE_SKILL]), None)
     context.generate(user_turn("hello", True), tools, "SYSTEM")
-    assert captured["model"] == "test-model"
     assert captured["systemInstruction"] == {"parts": [{"text": "SYSTEM"}]}
-    assert captured["tools"] == tools
-    assert captured["generationConfig"]["thinkingConfig"] == {"includeThoughts": True}
+    assert [d["name"] for d in captured["tools"][0]["functionDeclarations"]] == ["wave", "wait"]
     assert images_in(captured["contents"][-1]) == 1
-
-
-def test_generate_sets_thinking_level_when_configured():
-    captured = {}
-
-    def transport(model, body):
-        captured.update(body)
-        return [model_response({"text": "ok"})]
-
-    context = GeminiContext(transport, model="m", thinking_level="high", max_history=10, max_image_turns=2)
-    context.generate(user_turn("hi", False), [], "S")
-    assert captured["generationConfig"]["thinkingConfig"] == {"includeThoughts": True, "thinkingLevel": "high"}
+    # The thinking level rides the settings (vendors map it; a FunctionModel drops it), so the
+    # monitor's copy of the request is where it shows.
+    assert traced[0]["generationConfig"]["thinking"] == "high"
 
 
 def test_generate_streams_speech_deltas_and_assembles_the_response():
@@ -379,30 +440,25 @@ def test_generate_streams_speech_deltas_and_assembles_the_response():
     response = context.generate(user_turn("hi", False), [], "S", on_speech=heard.append)
 
     assert heard == ["One. ", "Two"]  # thoughts never reach the speech stream
-    parts = response["candidates"][0]["content"]["parts"]
-    assert parts[0] == {"text": "thinking...", "thought": True}  # kept verbatim
-    assert {"text": "One. Two"} in parts  # adjacent plain-text deltas merged
-    decision = _decision_from(response)
+    assert [type(p) for p in response.parts] == [ThinkingPart, TextPart, ToolCallPart]
+    assert response.parts[1].content == "One. Two"  # adjacent text deltas assembled
+    decision = decision_from(response)
     assert decision.speech == "One. Two"
-    assert [c.name for c in decision.calls] == ["wave"]
+    assert decision.thoughts == "thinking..."
+    assert [(c.name, c.id) for c in decision.calls] == [("wave", "c9")]
 
 
 def test_generate_raises_on_an_empty_stream_instead_of_committing_silence():
-    # A 200 stream with no parts (safety block, malformed function call, empty
+    # A reply with no parts (safety block, malformed function call, empty
     # candidate) must fail the turn — committing it would record a silent,
     # answerless exchange and consume the user's message with no reply.
     blocked = {"promptFeedback": {"blockReason": "SAFETY"}}
     context = make_context(transport=lambda model, body: iter([blocked]))
-    with pytest.raises(RuntimeError, match="SAFETY"):
-        context.generate(user_turn("hi", False), [], "S")
-
-    empty_candidate = {"candidates": [{"finishReason": "MALFORMED_FUNCTION_CALL"}]}
-    context = make_context(transport=lambda model, body: iter([empty_candidate]))
-    with pytest.raises(RuntimeError, match="MALFORMED_FUNCTION_CALL"):
+    with pytest.raises(RuntimeError, match="no content"):
         context.generate(user_turn("hi", False), [], "S")
 
     context = make_context(transport=lambda model, body: iter([]))
-    with pytest.raises(RuntimeError, match="empty stream"):
+    with pytest.raises(RuntimeError, match="no content"):
         context.generate(user_turn("hi", False), [], "S")
 
 
@@ -472,6 +528,7 @@ import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 from brain_client.brain.agent import BrainAgent  # noqa: E402
+from brain_client.brain.llm import Backend, LlmRoute  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
@@ -480,15 +537,15 @@ from brain_client.transport.chat import SpeechStreamer  # noqa: E402
 @pytest.fixture
 def agent_factory(monkeypatch):
     """Build agents against stub collaborators; shut their loop threads down after."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")  # gives the agent a swappable transport
     created = []
 
     def make(trace=None, on_thinking_changed=None) -> tuple[BrainAgent, BrainState]:
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
-            gemini_model="m",
-            gemini_thinking_level="",
+            llm_model="m",
+            llm_thinking="",
+            llm_extra_body="",
             history_max_entries=60,
             history_max_image_turns=2,
             idle_turn_interval=3.0,
@@ -525,6 +582,7 @@ def agent_factory(monkeypatch):
             roster=SimpleNamespace(active_skill_ids=lambda: []),
             chat=chat,
             gaze=SimpleNamespace(pause=lambda: None),
+            route=LlmRoute("function:m", fake_model(), Backend.DIRECT, None, model_settings("", "")),
             trace=trace,
             on_thinking_changed=on_thinking_changed,
         )
@@ -557,7 +615,7 @@ def test_failed_turn_leaves_events_queued_for_the_retry(agent_factory, monkeypat
     def transport(model, body):
         raise RuntimeError("boom")
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     no_pause(agent, monkeypatch)
     agent.on_user_message("bring me a snack")
     run_turn(agent)
@@ -591,7 +649,7 @@ def test_turn_start_drops_the_oldest_backlog_beyond_the_cap(agent_factory):
         captured["contents"] = body["contents"]
         return iter([model_response(call_part("wait", {}))])
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     for i in range(40):
         agent.add_event(f"stimulus {i}")
     run_turn(agent)
@@ -604,7 +662,7 @@ def test_turn_start_drops_the_oldest_backlog_beyond_the_cap(agent_factory):
 
 def test_committed_turn_consumes_exactly_the_events_it_saw(agent_factory):
     agent, state = agent_factory()
-    agent._context._transport = lambda model, body: [model_response(call_part("wait", {}))]
+    agent._context._model = fake_model(lambda model, body: [model_response(call_part("wait", {}))])
     agent.on_user_message("hello")
     run_turn(agent)
 
@@ -624,11 +682,11 @@ def test_a_call_outside_the_active_skill_set_is_rejected(agent_factory):
     started = []
     agent._runner.start_task = lambda *a, **k: started.append(a)
     agent._roster.active_skill_ids = lambda: ["local/wave"]
-    agent._context._transport = lambda model, body: [model_response(call_part("pick", {}))]
+    agent._context._model = fake_model(lambda model, body: [model_response(call_part("pick", {}))])
     run_turn(agent)
 
     assert started == []
-    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    outcome = agent._context._history[-1].parts[0].content["outcome"]
     assert outcome == "unknown skill 'pick'"
 
 
@@ -643,7 +701,7 @@ def test_a_stale_tool_name_is_rechecked_against_the_live_active_set(agent_factor
     started = []
     agent._runner.start_task = lambda *a, **k: started.append(a)
     agent._roster.active_skill_ids = lambda: ["local/wave"]
-    agent._context._transport = lambda model, body: [model_response(call_part("wave", {}))]
+    agent._context._model = fake_model(lambda model, body: [model_response(call_part("wave", {}))])
     run_turn(agent)  # populates the dispatch map with wave
     assert len(started) == 1
 
@@ -653,11 +711,11 @@ def test_a_stale_tool_name_is_rechecked_against_the_live_active_set(agent_factor
         agent._roster.active_skill_ids = lambda: []
         return [model_response(call_part("wave", {}))]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     run_turn(agent)
 
     assert len(started) == 1  # the stale map entry did not dispatch
-    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    outcome = agent._context._history[-1].parts[0].content["outcome"]
     assert outcome == "rejected — wave is no longer available"
 
 
@@ -671,13 +729,13 @@ def test_go_to_point_outside_the_active_skill_set_is_rejected(agent_factory):
     state.registry = SkillRegistry.from_metadata([NAV_SKILL])
     started = []
     agent._runner.start_task = lambda *a, **k: started.append(a)
-    agent._context._transport = lambda model, body: [
-        model_response(call_part("go_to_point_in_view", {"y": 800, "x": 500}))
-    ]
+    agent._context._model = fake_model(
+        lambda model, body: [model_response(call_part("go_to_point_in_view", {"y": 800, "x": 500}))]
+    )
     run_turn(agent)
 
     assert started == []
-    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    outcome = agent._context._history[-1].parts[0].content["outcome"]
     assert outcome == "rejected — navigate_to_position is not available"
 
 
@@ -691,13 +749,13 @@ def test_go_to_point_rejects_out_of_range_coordinates(agent_factory):
     agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
     started = []
     agent._runner.start_task = lambda *a, **k: started.append(a)
-    agent._context._transport = lambda model, body: [
-        model_response(call_part("go_to_point_in_view", {"y": 2000, "x": 500}))
-    ]
+    agent._context._model = fake_model(
+        lambda model, body: [model_response(call_part("go_to_point_in_view", {"y": 2000, "x": 500}))]
+    )
     run_turn(agent)
 
     assert started == []
-    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    outcome = agent._context._history[-1].parts[0].content["outcome"]
     assert outcome == "rejected — y and x must be within 0-1000 image coordinates"
 
 
@@ -711,25 +769,25 @@ def test_chat_failure_after_commit_still_answers_the_models_calls(agent_factory,
         raise RuntimeError("publisher torn down")
 
     agent._chat.emit_thoughts = explode
-    agent._context._transport = lambda model, body: [
-        model_response({"text": "hmm", "thought": True}, call_part(WAIT, {}))
-    ]
+    agent._context._model = fake_model(
+        lambda model, body: [model_response({"text": "hmm", "thought": True}, call_part(WAIT, {}))]
+    )
     run_turn(agent)
 
-    assert agent._context._history[-1]["parts"][0]["functionResponse"]["name"] == WAIT
+    assert agent._context._history[-1].parts[0].tool_name == WAIT
 
 
 def test_tool_failure_becomes_an_outcome_instead_of_failing_the_committed_turn(agent_factory):
     agent, state = agent_factory()
     state.primitive_running = RunningSkill(primitive_name="wave", skill_id="local/wave")
     # The runner stub has no attributes, so stopping the skill raises.
-    agent._context._transport = lambda model, body: [model_response(call_part(STOP_SKILL, {}))]
+    agent._context._model = fake_model(lambda model, body: [model_response(call_part(STOP_SKILL, {}))])
     agent.on_user_message("stop that")
     run_turn(agent)
 
     assert agent._events == []  # the turn committed; nothing is rerun
     assert agent._error_streak == 0
-    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    outcome = agent._context._history[-1].parts[0].content["outcome"]
     assert outcome.startswith("failed —")
 
 
@@ -740,7 +798,7 @@ def test_turn_finishing_after_deactivation_is_dropped_entirely(agent_factory):
         state.is_brain_active = False
         return [model_response({"text": "stale"})]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     run_turn(agent)
 
     assert agent._context._history == []  # no stale observation survives into the next activation
@@ -759,7 +817,7 @@ def test_thinking_status_covers_request_and_clears_before_backoff(agent_factory,
             raise RuntimeError("offline")
         return [model_response({"text": "done"})]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     assert not agent.thinking
     run_turn(agent)
     assert statuses == [True, False]
@@ -776,7 +834,7 @@ def test_stop_cancels_a_turn_mid_think_and_absorbs_nothing(agent_factory):
         release.wait(timeout=5)
         return [model_response({"text": "stale"})]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("hi")
     agent.start()
     assert thinking.wait(timeout=5)
@@ -799,7 +857,7 @@ def test_reset_mid_turn_restarts_the_loop_with_empty_history(agent_factory):
         release.wait(timeout=5)
         return [model_response({"text": "stale"})]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.start()
     assert thinking.wait(timeout=5)
     thinking.clear()
@@ -825,7 +883,7 @@ def test_user_speech_preempts_a_thinking_housekeeping_turn(agent_factory):
             release.wait(timeout=5)  # the heartbeat turn hangs mid-think
         return [model_response(call_part("wait", {}))]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.start()  # empty queue: the first turn is a preemptible heartbeat
     assert thinking.wait(timeout=5)
     thinking.clear()
@@ -844,8 +902,8 @@ def test_user_speech_preempts_a_thinking_housekeeping_turn(agent_factory):
     agent.stop()
     # The aborted heartbeat exchange never entered history: the first stored
     # user turn is the rerun's, which carries the user's message.
-    first_user_turn = next(c for c in agent._context._history if c["role"] == "user")
-    assert any("hello" in p.get("text", "") for p in first_user_turn["parts"])
+    first_user_turn = next(m for m in agent._context._history if isinstance(m, ModelRequest))
+    assert any("hello" in text for text in texts_in(first_user_turn))
 
 
 def test_a_second_message_reruns_an_unspoken_user_turn(agent_factory):
@@ -860,7 +918,7 @@ def test_a_second_message_reruns_an_unspoken_user_turn(agent_factory):
             release.wait(timeout=5)
         return [model_response(call_part("wait", {}))]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("first request")
     agent.start()
     assert thinking.wait(timeout=5)
@@ -893,7 +951,7 @@ def test_a_turn_that_started_speaking_finishes(agent_factory):
 
         return chunks()
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("first")
     agent.start()
     assert thinking.wait(timeout=5)  # the first sentence has streamed
@@ -923,7 +981,7 @@ def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
         release.wait(timeout=5)
         return [model_response(call_part("wait", {}))]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("one")
     agent.start()
     assert thinking.wait(timeout=5)
@@ -1014,8 +1072,8 @@ def test_speech_streamer_try_abandon_is_atomic_with_spoke():
 
 def test_user_turn_streams_sentences_to_tts_before_commit(agent_factory):
     agent, state = agent_factory()
-    agent._context._transport = lambda model, body: iter(
-        [model_response({"text": "First sentence. "}), model_response({"text": "Second."})]
+    agent._context._model = fake_model(
+        lambda model, body: iter([model_response({"text": "First sentence. "}), model_response({"text": "Second."})])
     )
     agent.on_user_message("talk to me")
     run_turn(agent)
@@ -1024,8 +1082,8 @@ def test_user_turn_streams_sentences_to_tts_before_commit(agent_factory):
 
 def test_housekeeping_turn_speech_streams_like_any_other(agent_factory):
     agent, state = agent_factory()
-    agent._context._transport = lambda model, body: iter(
-        [model_response({"text": "One. "}), model_response({"text": "Two."})]
+    agent._context._model = fake_model(
+        lambda model, body: iter([model_response({"text": "One. "}), model_response({"text": "Two."})])
     )
     run_turn(agent)  # the started-speaking guard protects it, so it may stream too
     assert agent._chat.spoken == [("One.", True), ("Two.", False)]
@@ -1042,7 +1100,7 @@ def test_suppressed_reply_tells_the_model_it_went_unspoken(agent_factory):
         agent._events.append(Event('The user says: "wait, actually…"', kind=EventKind.USER))
         return iter([model_response({"text": "Here is my answer."})])
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("question?")
     run_turn(agent)
 
@@ -1071,7 +1129,7 @@ def test_running_skill_guidance_reads_registry_metadata(agent_factory):
         bodies.append(body)
         return iter([model_response({"text": "ok"})])
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     run_turn(agent)
     (body,) = bodies
     assert "do not block the arm" in body["systemInstruction"]["parts"][0]["text"]
@@ -1083,7 +1141,7 @@ def test_a_turn_bug_backs_off_instead_of_killing_the_loop(agent_factory, monkeyp
     # network call) must take the backoff path, not unwind the whole loop —
     # a crashed brain stays dead until a human stops and starts it.
     agent, state = agent_factory()
-    agent._context._transport = lambda model, body: [model_response({"text": "hi"})]
+    agent._context._model = fake_model(lambda model, body: [model_response({"text": "hi"})])
     no_pause(agent, monkeypatch)
 
     def broken_tools():
@@ -1108,7 +1166,7 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
             raise outcome
         return [outcome]
 
-    agent._context._transport = transport
+    agent._context._model = fake_model(transport)
     agent.on_user_message("hello")
     run_turn(agent)  # fails...
     run_turn(agent)  # ...retries the same still-queued event and commits
@@ -1134,7 +1192,7 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
     assert traces[6]["calls"] == [{"name": "wait", "args": {}, "outcome": "ok"}]
     snapshot = traces[7]
     # History: the user turn, the model turn, and the wait call's functionResponse.
-    assert snapshot["active"] is False and snapshot["backend"] == "gemini-direct" and snapshot["history"] == 3
+    assert snapshot["active"] is False and snapshot["backend"] == "direct" and snapshot["history"] == 3
     assert snapshot["interval"] == 3.0
 
     # The heartbeat follows the current agent and skill state, including unset overrides.

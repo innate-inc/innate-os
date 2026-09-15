@@ -55,10 +55,15 @@ def generate_launch_description():
         default_value="True",
         description="Flag to enable full brain turn logging",
     )
-    gemini_model_arg = DeclareLaunchArgument(
-        "gemini_model",
-        default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
-        description="Gemini model powering the local brain",
+    llm_model_arg = DeclareLaunchArgument(
+        "llm_model",
+        default_value=get_env("LLM_MODEL", get_env("GEMINI_MODEL", "google:gemini-3.6-flash")),
+        description="Model powering the local brain, as provider:name (google | openai | anthropic | openai-chat)",
+    )
+    llm_base_url_arg = DeclareLaunchArgument(
+        "llm_base_url",
+        default_value=get_env("LLM_BASE_URL", ""),
+        description="OpenAI-compatible server for openai-chat models (a LAN vLLM, Ollama, NIM); empty = the vendor's API",
     )
 
     # --- Proxy service configuration ---
@@ -81,7 +86,8 @@ def generate_launch_description():
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
-                "gemini_model": LaunchConfiguration("gemini_model"),
+                "llm_model": LaunchConfiguration("llm_model"),
+                "llm_base_url": LaunchConfiguration("llm_base_url"),
                 # Proxy service config
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
             },
@@ -104,7 +110,8 @@ def generate_launch_description():
             simulator_mode_arg,
             current_nav_mode_topic_arg,
             log_everything_arg,
-            gemini_model_arg,
+            llm_model_arg,
+            llm_base_url_arg,
             # Proxy service config args
             cartesia_voice_id_arg,
             brain_client_node,

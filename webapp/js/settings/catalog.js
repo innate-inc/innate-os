@@ -335,7 +335,8 @@ export const SETTINGS_PAGES = [
         title: "AI models",
         note: "The brain and the speech-to-text path use separate models. The transcribe backend picks which STT model knob applies.",
         knobs: [
-          { path: ["brain_client_node", P, "gemini_model"], label: "Brain model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model powering the local brain", subsection: "Brain" },
+          { path: ["brain_client_node", P, "llm_model"], label: "Brain model", default: "google:gemini-3.6-flash", type: "string", doc: "provider:name — google:gemini-3.6-flash, anthropic:claude-sonnet-5, openai:gpt-5.4-mini", subsection: "Brain" },
+          { path: ["brain_client_node", P, "llm_thinking"], label: "Brain thinking", default: "minimal", type: "string", doc: "minimal · low · medium · high · xhigh; empty = the model's default", subsection: "Brain" },
           { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "elevenlabs_batch_stt_model"], label: "Scribe batch model", default: "scribe_v2", type: "string", doc: "ElevenLabs model for the elevenlabs_batch backend", subsection: "Speech to text" },
