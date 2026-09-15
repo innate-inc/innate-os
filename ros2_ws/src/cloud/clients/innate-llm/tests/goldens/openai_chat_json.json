@@ -1,0 +1,56 @@
+{
+  "model": "gpt-5.4-mini",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "SYS"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        },
+        {
+          "type": "text",
+          "text": "Frame 1"
+        },
+        {
+          "type": "text",
+          "text": "Which frame?"
+        }
+      ]
+    }
+  ],
+  "reasoning_effort": "low",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "Verdict",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "frame": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "found",
+          "frame"
+        ],
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  }
+}

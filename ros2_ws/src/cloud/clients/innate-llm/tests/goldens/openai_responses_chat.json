@@ -1,0 +1,107 @@
+{
+  "model": "gpt-5.4-mini",
+  "stream": true,
+  "store": false,
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "instructions": "SYS",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Look at this."
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/jpeg;base64,/9j/4GZha2VqcGVnYnl0ZXM="
+        }
+      ]
+    },
+    {
+      "type": "reasoning",
+      "id": "rs_1",
+      "summary": [
+        {
+          "type": "summary_text",
+          "text": "planning"
+        }
+      ],
+      "encrypted_content": "enc123"
+    },
+    {
+      "type": "message",
+      "id": "msg_1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "On it."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_1",
+      "call_id": "call_1",
+      "name": "wave",
+      "arguments": "{\"times\":2}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": "started"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Now what?"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/jpeg;base64,/9j/4GZha2VqcGVnYnl0ZXM="
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "wave",
+      "description": "Wave the arm.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "times": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "times"
+        ]
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "wait",
+      "description": "Do nothing.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "strict": false
+    }
+  ],
+  "reasoning": {
+    "effort": "low",
+    "summary": "auto"
+  },
+  "max_output_tokens": 1024
+}

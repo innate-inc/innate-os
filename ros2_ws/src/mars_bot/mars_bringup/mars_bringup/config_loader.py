@@ -255,6 +255,15 @@ def settings_params() -> list:
     return [str(_settings_yaml_path())]
 
 
+def settings_node_params(node: str, *keys: str) -> dict:
+    """The listed ``ros__parameters`` of ``node`` in settings.yaml, for a second node that must
+    agree with it (the skills server reads the brain's model). Absent keys are left out, so the
+    result layers over launch defaults the same way settings.yaml layers over the node's own."""
+    section = _load_settings_yaml().get(node, {})
+    params = section.get("ros__parameters", {}) if isinstance(section, dict) else {}
+    return {key: params[key] for key in keys if isinstance(params, dict) and key in params}
+
+
 def _settings_global_params() -> dict:
     """Flatten settings.yaml's ``/**`` ros__parameters block to dotted keys for the nav remap."""
     glob = _load_settings_yaml().get("/**", {})

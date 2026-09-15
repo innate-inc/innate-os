@@ -1,0 +1,17 @@
+[project]
+name = "innate-llm"
+version = "0.1.0"
+description = "LLM vendor library for innate-os: one Request/Reply vocabulary, one pure adapter per wire, httpx only."
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.24",
+    "innate-proxy-client",
+    "innate-auth-client",
+]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["innate_llm*"]

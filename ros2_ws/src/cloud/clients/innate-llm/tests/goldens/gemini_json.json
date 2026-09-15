@@ -1,0 +1,50 @@
+{
+  "systemInstruction": {
+    "parts": [
+      {
+        "text": "SYS"
+      }
+    ]
+  },
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "inlineData": {
+            "mimeType": "image/jpeg",
+            "data": "/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        },
+        {
+          "text": "Frame 1"
+        },
+        {
+          "text": "Which frame?"
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "thinkingConfig": {
+      "thinkingLevel": "low"
+    },
+    "responseMimeType": "application/json",
+    "responseJsonSchema": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "frame": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "found",
+        "frame"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

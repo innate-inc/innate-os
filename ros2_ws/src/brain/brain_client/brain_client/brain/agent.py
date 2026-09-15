@@ -29,12 +29,13 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from innate_llm import Message, Reply, Thinking, Tool, ToolCall
+
 from brain_client.brain import grounding
-from brain_client.brain.context import Decision, GeminiContext, ToolCall
+from brain_client.brain.context import ChatContext, Decision
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
-from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
     Event,
     EventKind,
@@ -53,6 +54,7 @@ from brain_client.transport.chat import Sender
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from innate_llm import Llm
     from rclpy.node import Node
 
     from brain_client.core.config import BrainConfig
@@ -67,7 +69,6 @@ if TYPE_CHECKING:
     from brain_client.skills.roster import SkillRoster
     from brain_client.skills.runner import PrimitiveRunner
     from brain_client.transport.chat import ChatManager, SpeechStreamer
-    from innate_proxy import ProxyClient
 
 _NAV_TO_POSITION = "innate-os/navigate_to_position"
 _FRESH_FRAME_SEC = 3.0  # an older camera frame means the feed is broken; don't think blind
@@ -91,7 +92,7 @@ class BrainAgent:
         roster: SkillRoster,
         chat: ChatManager,
         gaze: GazeController,
-        proxy: ProxyClient | None = None,
+        llm: Llm,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
@@ -119,17 +120,22 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
-        transport, self.backend = pick_transport(proxy)
+        self.backend = llm.backend
+        provider = llm.provider
+        if provider is not None and not provider.model.vision:
+            self._logger.error(
+                f"[Brain] {provider.model.name} takes no images and the brain looks every turn — unavailable"
+            )
+            provider = None
         self._context = (
-            GeminiContext(
-                transport,
-                model=config.gemini_model,
-                thinking_level=config.gemini_thinking_level,
+            ChatContext(
+                provider,
+                thinking=self._thinking_level(config.llm_thinking),
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
             )
-            if transport is not None
+            if provider is not None
             else None
         )
 
@@ -137,7 +143,7 @@ class BrainAgent:
         self._pose_at_capture: Pose | None = None
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
-        self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
+        self._tool_map: dict[str, str] = {}  # tool name -> skill id
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -166,9 +172,17 @@ class BrainAgent:
         self._timezone = zone
         return True
 
+    def _thinking_level(self, raw: str) -> Thinking:
+        try:
+            return Thinking(raw.strip().lower())
+        except ValueError:
+            levels = ", ".join(level.value or '""' for level in Thinking)
+            self._logger.warn(f"[Brain] Unknown llm_thinking '{raw}' — using the model's default (one of {levels})")
+            return Thinking.DEFAULT
+
     @property
     def available(self) -> bool:
-        """Whether the brain can reach Gemini — true exactly when a context exists."""
+        """Whether the brain can reach its model — true exactly when a context exists."""
         return self._context is not None
 
     @property
@@ -277,7 +291,7 @@ class BrainAgent:
         turn.cancel()
         return True
 
-    async def _turn(self, context: GeminiContext) -> None:
+    async def _turn(self, context: ChatContext) -> None:
         """One turn: look at the world, think with Gemini, commit, act.
 
         ``events`` is a peek at the queue — consumed only when the turn
@@ -296,12 +310,12 @@ class BrainAgent:
         except Exception as error:
             await self._back_off(error, seen=len(events))
 
-    async def _think(self, context: GeminiContext, events: list[Event], speaker: SpeechStreamer) -> None:
+    async def _think(self, context: ChatContext, events: list[Event], speaker: SpeechStreamer) -> None:
         text, frames = self._look(events)
         if self._frame_at_capture is None:
             return  # the feed died between the loop's freshness check and the look
         wrist_frames = [i for i, (label, _) in enumerate(frames) if label == FrameLabel.WRIST]
-        message = GeminiContext.user_message(text, [jpeg for _, jpeg in frames])
+        message = ChatContext.user_message(text, [jpeg for _, jpeg in frames])
         tools = self._build_tools(events)
         directive = self._state.current_directive
         system = build_system_prompt(
@@ -313,7 +327,7 @@ class BrainAgent:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
 
-        response = await self._generate(context, message, tools, system, speaker, wrist_frames)
+        reply = await self._generate(context, message, tools, system, speaker, wrist_frames)
         latency = self._elapsed()
         self._report_recovered()
         if not self._state.is_brain_active:
@@ -321,7 +335,7 @@ class BrainAgent:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=latency)
             return
 
-        decision = context.absorb(message, response, latest_only_images=wrist_frames)
+        decision = context.absorb(message, reply, latest_only_images=wrist_frames)
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
         outcomes = self._act(decision, speaker, context)
@@ -338,13 +352,13 @@ class BrainAgent:
 
     async def _generate(
         self,
-        context: GeminiContext,
-        message: dict,
-        tools: list[dict],
+        context: ChatContext,
+        message: Message,
+        tools: list[Tool],
         system: str,
         speaker: SpeechStreamer,
         wrist_frames: list[int],
-    ) -> dict:
+    ) -> Reply:
         """The only blocking call, on a worker thread. Cancellation unwinds HERE —
         the orphaned HTTP call finishes and its result is dropped."""
         self._turn_in_flight = True
@@ -474,7 +488,7 @@ class BrainAgent:
         meta = self._state.registry.primitives.get(running.skill_id) or {}
         return (meta.get("guidelines_when_running") or "").strip()
 
-    def _build_tools(self, events: list[Event]) -> list[dict]:
+    def _build_tools(self, events: list[Event]) -> list[Tool]:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
         active_ids = set(self._roster.active_skill_ids())
@@ -488,7 +502,7 @@ class BrainAgent:
         return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
 
     # ================= act =================
-    def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
+    def _act(self, decision: Decision, speaker: SpeechStreamer, context: ChatContext) -> list[tuple[ToolCall, str]]:
         # Execute and answer the calls before any chat I/O: a functionCall
         # left unanswered in history poisons every later request.
         outcomes = [(call, self._execute(call)) for call in decision.calls]
@@ -672,7 +686,7 @@ class BrainAgent:
         self._trace(TraceEvent.TURN_REQUEST, heavy=True, turn=self._turn_count, body=body)
 
     def _trace_turn_start(
-        self, text: str, frames: list[Frame], tools: list[dict], system: str, context: GeminiContext
+        self, text: str, frames: list[Frame], tools: list[Tool], system: str, context: ChatContext
     ) -> None:
         if self._trace_sink is None or not self.trace_has_audience():
             return  # skip the base64 work entirely, not just the publish
@@ -682,7 +696,7 @@ class BrainAgent:
             turn=self._turn_count,
             input=text,
             images=len(frames),
-            tools=[d["name"] for d in tools[0]["functionDeclarations"]],
+            tools=[t.name for t in tools],
             history=context.history_len,
             history_images=context.image_turn_count,
             system=system,
@@ -704,7 +718,7 @@ class BrainAgent:
             TraceEvent.SNAPSHOT,
             active=self._state.is_brain_active,
             backend=self.backend,
-            model=self._config.gemini_model,
+            model=self._config.llm_model,
             interval=self._interval(),
             turn=self._turn_count,
             in_flight=self._turn_in_flight,
