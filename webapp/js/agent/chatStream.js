@@ -62,6 +62,7 @@ function setLinkedText(el, text) {
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
+ *   keepTranscript: () => void,
  *   clear: () => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
@@ -509,13 +510,13 @@ export function createChatStream(opts = {}) {
 
   /** Replace the transcript with a history snapshot. The snapshot already
    *  includes anything the live stream just showed, so reset and replay it
-   *  wholesale rather than trying to merge -- except the world's own lines,
-   *  which the brain never recorded and only this page can put back.
+   *  wholesale rather than trying to merge -- except the world's own lines and a kept
+   *  transcript, which the brain no longer records and only this page can put back.
    *  @param {any[]} entries */
   function replay(entries) {
     const wasAtBottom = atBottom();
     const priorTop = scrollElement.scrollTop;
-    const narrated = [...stream.querySelectorAll(":scope > .chat-msg.narrator")];
+    const narrated = [...stream.querySelectorAll(":scope > .chat-msg.narrator, :scope > .kept")];
     stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
     compactEnterTimers.clear();
@@ -546,8 +547,13 @@ export function createChatStream(opts = {}) {
     stream.insertBefore(line, later ?? null);
   }
 
+  /** Hold what is shown through the next replays: a switch of agent empties the brain's history. */
+  function keepTranscript() {
+    for (const item of stream.children) item.classList.add("kept");
+  }
+
   function clear() {
-    for (const line of stream.querySelectorAll(":scope > .chat-msg.narrator")) line.remove();
+    for (const line of stream.querySelectorAll(":scope > .chat-msg.narrator, :scope > .kept")) line.remove();
     replay([]);
   }
 
@@ -560,6 +566,7 @@ export function createChatStream(opts = {}) {
     addSkillRun,
     routeChatOut,
     replay,
+    keepTranscript,
     clear,
     setMode: setStreamMode,
     destroy() {

@@ -28,12 +28,13 @@ const SKIP_KEY = "innate.nowhere.skip.v1";
 // Learning that the 3D view drags is a once-ever lesson, not a once-per-run one.
 const DRAG_HINT_KEY = "innate.nowhere.draghint.v1";
 const ARMED_KEY = "innate.nowhere.armed";
+// The attempt whose ending already played, and the agent it made: a reload must not play it again.
+const GRADUATED_KEY = "innate.nowhere.graduated";
 // Set by the rail's "Play the intro" for an Agent page that is still mounting.
 export const PLAY_INTRO_KEY = "innate.nowhere.play";
 const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]); // never part of the story's arc
 const WAVE = "innate-os/wave";
 const ARM_MOVE = "innate-os/arm_move";
-const PICK_UP = "innate-os/pick_any_object";
 const MEMORY = "innate-os/search_memory";
 const GRADUATION_MAX_WAIT_MS = 25_000;
 // The robot asks for its next skill in its own time, and sometimes takes a while. The grant
@@ -63,12 +64,11 @@ function held(ready, timeoutMs) {
 
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
-  "innate-os/arm_move": "Granted: the ArmMove skill. Use it for the arm movement I requested; ask me for a target if needed.",
-  "innate-os/head_emotion": "Granted: the HeadEmotion skill. Use it.",
-  "innate-os/turn_in_place": "Granted: the TurnInPlace skill. Have a look around.",
-  "innate-os/pick_any_object": "Granted: the PickAnyObject skill. Pick it up.",
-  "innate-os/navigate_to_position": "Granted: the NavigateToPosition skill. Go to the door.",
-  "innate-os/search_memory": "Granted: the SearchMemory skill. Think back.",
+  "innate-os/head_emotion": "Added the HeadEmotion skill. Use it.",
+  "innate-os/turn_in_place": "Added the TurnInPlace skill. Have a look around.",
+  "innate-os/pick_any_object": "Added the PickAnyObject skill. Pick it up.",
+  "innate-os/navigate_to_position": "Added the NavigateToPosition skill. Go to the door.",
+  "innate-os/search_memory": "Added the SearchMemory skill. Think back.",
 });
 // What the world does at the top of an act, said to the visitor (not to the brain:
 // the act's own brief already tells the robot what changed).
@@ -102,6 +102,10 @@ const shortPath = (path) => {
   const root = path.lastIndexOf("/innate-os/");
   return root === -1 ? path.split("/").slice(-3).join("/") : path.slice(root + 1);
 };
+
+/** A path that wraps between folders; <wbr> keeps a copied path free of break characters. @param {string} path */
+const breakablePath = (path) =>
+  path.split("/").flatMap((part, i) => (i ? ["/", document.createElement("wbr"), part] : [part]));
 
 /** @param {string[]} a @param {string[]} b */
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -176,8 +180,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panelEl.setAttribute("aria-label", "Agent detail");
   toggle.setAttribute("aria-controls", panelEl.id);
 
-  const persona = document.createElement("span");
-  persona.className = "agent-studio-persona";
   const note = document.createElement("p");
   note.className = "agent-studio-note";
   // Where the file lives, for whoever wants to edit it in code.
@@ -294,7 +296,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
   panes.identity.append(mobilePrompt);
-  panelEl.append(mobileName, persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
+  panelEl.append(mobileName, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
   head.append(toggle, headAction);
   dock.append(head, panelEl);
   root.append(dock);
@@ -341,6 +343,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let graduatedAttempt = "";
   let doorAttempt = "";
   let graduationReady = false;
+  let builtAgent = ""; // the agent the story saved for the person, once it has
+  let toured = false;
   /** @type {ReturnType<typeof setInterval> | null} */ let graduationPoll = null;
   let seenAct = -1;
   let actSpoke = 0; // robot lines when the current act began; chips wait for one more
@@ -365,7 +369,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const active = () => challenge?.active ?? null;
   const story = () => (active()?.runtime?.story ? active() : null);
   const runtime = () => story()?.runtime ?? null;
-  const out = () => (active()?.id === "way_out" ? active() : null);
+  const out = () => (active()?.id === "nowhere_way_out" ? active() : null);
   const passed = () => out()?.state === "passed";
   /** The story owns the interface exactly while the world is running it. Passing the last
    * challenge ends that: the rail, the scene setup and the challenges are the reward. */
@@ -388,13 +392,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const envId = () => environment?.environment?.id ?? "";
   const skipped = () => read(localStorage, SKIP_KEY) === "1";
   const spoken = () => opts.spokenCount();
-  /** Persona and name: from the running story, else what the world carried over. */
+  /** Who the story made: from the running story, else what the world carried over. */
   const profile = () => {
     const r = runtime();
     const carried = challenge?.profile ?? {};
     const own = r?.profile ?? {};
-    return { persona: own.persona || carried.persona || "", name: own.name || carried.name || "" };
+    return {
+      persona: own.persona || carried.persona || "",
+      displayName: own.display_name || carried.display_name || "",
+      agentPrompt: own.agent_prompt || carried.agent_prompt || "",
+    };
   };
+  const storyName = () => profile().displayName || "MARS";
   const storyAgent = () => agentState.get().agents.find((a) => a.id === STORY_AGENT) ?? null;
   /** The agent the chat panel shows: currentDirective is empty until Start, and a picked agent is still picked. */
   const currentAgent = () => {
@@ -453,7 +462,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   // and the person grants it like every other skill.
   function arriveInBackrooms() {
     const o = out();
-    if (!o || switching() || envId() !== "backrooms" || arrivalAttempt === o.attempt_id) return;
+    if (!o || o.state === "passed" || switching() || envId() !== "backrooms" || arrivalAttempt === o.attempt_id) return;
     arrivalAttempt = o.attempt_id;
     actSpoke = spoken();
     actAt = Date.now();
@@ -464,10 +473,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     write(localStorage, SKIP_KEY, "");
     write(localStorage, DRAG_HINT_KEY, ""); // asking for the story again means asking for all of it
     write(sessionStorage, ARMED_KEY, "");
+    write(localStorage, GRADUATED_KEY, "");
     armedAttempt = "";
     autoStarted = false;
     graduationReady = false;
     sceneTaught = false;
+    builtAgent = "";
+    endTour();
+    toured = false;
     panel.setOffers([]);
     leaveStage();
     session?.abortChallenge?.();
@@ -515,9 +528,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     opts.showView?.("orbit");
   }
 
-  // The ending points at the scene setup, bottom left, where the next world is chosen: the
-  // toggle until it opens, then the environment picker until it is used. Learned once, it
-  // stays learned.
+  // The ending points at the scene setup, bottom left, where the next world is chosen, until
+  // it is first clicked. Learned once, it stays learned.
   /** @type {(() => void) | null} */ let sceneCue = null;
   /** @type {HTMLElement | null} */ let sceneCueTarget = null;
   let sceneTaught = false;
@@ -526,12 +538,29 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   /** @param {boolean} on */
   function inviteSceneSetup(on) {
     const setup = sceneSetup();
-    const target = !on || !setup ? null : setup.querySelector(sceneSetupOpen() ? ".sim-environment-section:not([hidden])" : ".sim-scene-toggle");
+    const target = !on || !setup ? null : setup.querySelector(".sim-scene-toggle");
     if (target === sceneCueTarget) return;
     sceneCue?.();
     sceneCue = null;
     sceneCueTarget = target instanceof HTMLElement ? target : null;
-    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, sceneSetupOpen() ? "Pick a world" : "New world");
+    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, "New world");
+  }
+
+  /** The ending this browser already played, as it left it. @param {any} o */
+  function playedEnding(o) {
+    let played;
+    try {
+      played = JSON.parse(read(localStorage, GRADUATED_KEY) || "null");
+    } catch {
+      return false;
+    }
+    if (played?.attempt !== o.attempt_id) return false;
+    graduatedAttempt = o.attempt_id;
+    graduationReady = true;
+    sceneTaught = true;
+    toured = true;
+    builtAgent = typeof played.agent === "string" ? played.agent : "";
+    return true;
   }
 
   // The narration waits for the robot's closing line, so the ending is not talked over.
@@ -541,7 +570,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     graduationReady = false;
     sceneTaught = false;
     void opts.cancelSkill().catch(() => {});
-    setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
+    // Sent to the brain too: the passed state only changes its prompt, which a robot busy
+    // inching toward the door does not notice for several turns.
+    setTimeout(() => void panel.narrate("You're out. You made it."), 600);
     const before = spoken();
     const deadline = Date.now() + GRADUATION_MAX_WAIT_MS;
     if (graduationPoll) clearInterval(graduationPoll);
@@ -550,22 +581,83 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (graduationPoll) clearInterval(graduationPoll);
       graduationPoll = null;
       graduationReady = true;
-      agentState.setActiveSkills(earnedSkills(), STORY_AGENT);
-      const { name } = profile();
-      panel.addNotice(`You built this agent${name ? `: ${name}` : ""}. Its skills are all yours now.`);
-      void panel.narrate(
-        "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
-        { local: true },
-      );
-      render(true);
+      void adoptBuiltAgent().then(() => {
+        write(localStorage, GRADUATED_KEY, JSON.stringify({ attempt: o.attempt_id, agent: builtAgent }));
+        void panel.narrate(
+          "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
+          { local: true },
+        );
+        render(true);
+      });
     }, 500);
+  }
+
+  /** The character becomes an agent of the person's own, and runs in place of the intro.
+   * A switch empties the brain's chat history, so the story's transcript is kept on the page. */
+  async function adoptBuiltAgent() {
+    const { displayName, agentPrompt } = profile();
+    const id = slug(displayName);
+    const skills = earnedSkills();
+    // Another tab at the same ending got there first; saving again would reload and stop it.
+    if (id && agentState.get().currentDirective === id) {
+      builtAgent = id;
+      return;
+    }
+    const res = agentPrompt && id
+      ? await agentState
+        .saveAgent({ id, display_name: displayName, prompt: agentPrompt, skill_ids: skills, listen: true, gaze: true })
+        .catch((err) => ({ success: false, message: failure("Save", err), path: "" }))
+      : { success: false, message: "the story carried no character", path: "" };
+    // A message on success means the file was written but did not load, so there is nothing to run.
+    if (!res.success || res.message) {
+      console.warn("[story] the built agent was not saved:", res.message);
+      agentState.setActiveSkills(skills, STORY_AGENT);
+      panel.addNotice("You built this agent. Its skills are all yours now.");
+      return;
+    }
+    builtAgent = id;
+    panel.addNotice(`You built ${displayName}. It is your agent now: give it skills, change its prompt.`);
+    panel.keepTranscript();
+    // Saving reloads the roster, which stops the brain: start the new agent, do not only pick it.
+    await agentState.setDirective(id);
+  }
+
+  // After the switch, the panel points at everything the person can now change; each pointer
+  // goes once its target is used.
+  const TOUR = /** @type {const} */ ([
+    ["Add skills", () => addBtn],
+    ["Change the prompt", () => tabs.identity],
+    ["More agents", () => root.querySelector(".agent-directive")],
+  ]);
+  /** @type {(() => void)[]} */ let tourCues = [];
+  function endTour() {
+    for (const off of tourCues) off();
+    tourCues = [];
+  }
+  function showTour() {
+    endTour();
+    if (compact) return;
+    tab = "skills";
+    chooserOpen = false;
+    render(true);
+    for (const [label, target] of TOUR) {
+      const el = target();
+      if (!(el instanceof HTMLElement) || el.closest("[hidden]")) continue;
+      const uncueEl = cue(el, label);
+      const off = () => {
+        el.removeEventListener("pointerdown", off);
+        uncueEl();
+      };
+      el.addEventListener("pointerdown", off, { once: true });
+      tourCues.push(off);
+    }
   }
 
   /** Bind post-grant guidance to this attempt, act and conversation turn. @param {string} skill */
   const grantReplyContext = (skill) => JSON.stringify([story()?.attempt_id, runtime()?.act, skill]);
 
-  /** @param {string} skill @param {boolean} [announce] */
-  async function grant(skill, announce = true) {
+  /** @param {string} skill @param {string} line @param {boolean} [announce] */
+  async function grant(skill, line, announce = true) {
     const replyContext = grantReplyContext(skill);
     const next = new Set(agentState.get().activeSkills);
     next.add(skill);
@@ -578,18 +670,27 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     landed = { skill, at: Date.now() };
     render(true);
     setTimeout(() => render(true), LANDED_MS);
-    void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`, {
+    void panel.submitText(line, {
       replyContext,
     });
   }
 
-  /** @param {string} skill */
-  const grantOffer = (skill) => ({
+  /** @param {string} skill @param {string} line */
+  const offerGrant = (skill, line) => ({
     text: skillLabel(skill),
     kind: /** @type {const} */ ("grant"),
     ...skillCard(skill),
-    onSelect: () => void grant(skill),
+    onSelect: () => void grant(skill, line),
   });
+  /** @param {string} skill */
+  const grantOffer = (skill) => offerGrant(skill, GRANT_LINES[skill] ?? `Added the ${skillLabel(skill)} skill.`);
+  // The scripted lines steer the act ("Go to the door"); a skill granted for the person's own
+  // request must steer back to that request instead.
+  /** @param {string} skill */
+  const requestedGrantOffer = (skill) => offerGrant(
+    skill,
+    `Added the ${skillLabel(skill)} skill. Use it for what I asked; ask me if the target is unclear.`,
+  );
 
   /** @param {string} persona */
   function choose(persona) {
@@ -622,7 +723,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function offers() {
     const r = runtime();
     const o = out();
-    const name = profile().name || "MARS";
+    const name = storyName();
     if (switching()) {
       chipReason = "frozen";
       return { chips: [] }; // nothing lands while the world changes
@@ -631,14 +732,15 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
       return { chips: [] };
     }
-    // A request made by the robot for the visitor's arm or pickup target overrides the scripted
+    // A skill the robot asks for off-script, for the visitor's own request, overrides the scripted
     // grant, including persona selection and the final memory step. Never auto-grant it.
-    const requested = [ARM_MOVE, PICK_UP].filter((skill) =>
-      !agentState.get().activeSkills.has(skill) && mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
+    const requested = (storyAgent()?.skills ?? []).filter((skill) =>
+      skill !== WAVE && !UNMENTIONED_SKILLS.has(skill) && !agentState.get().activeSkills.has(skill) &&
+      mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
     );
     if ((r || o) && requested.length) {
       chipReason = `grants:requested:${requested.join(",")}`;
-      return { title: `${name} asks for a skill`, chips: requested.map(grantOffer) };
+      return { title: `${name} asks for a skill`, chips: requested.map(requestedGrantOffer) };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
@@ -936,7 +1038,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const agent = currentAgent();
     const r = runtime();
     const o = out();
-    const { persona: who, name } = profile();
+    const who = profile().persona;
+    const name = storyName();
     const env = envId();
     // World frames arrive at physics rate; touch the DOM only when something shown here changed.
     const key = JSON.stringify([
@@ -944,7 +1047,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
       graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0, opts.navigating?.(),
       opts.recalledAt(), opts.turnedAt(), opts.lastLine(), panel.replyContext(),
-      draft, saving, saveStatus, chooserOpen, tab, roster.length,
+      draft, saving, saveStatus, chooserOpen, tab, roster.length, builtAgent, toured,
     ]);
     if (!force && key === renderedKey) return;
     renderedKey = key;
@@ -996,7 +1099,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         setTimeout(uncue, 12_000);
       }, 1500);
     }
-    if (o?.state === "passed" && graduatedAttempt !== o.attempt_id) armGraduation(o);
+    if (o?.state === "passed" && graduatedAttempt !== o.attempt_id && !playedEnding(o)) armGraduation(o);
     showLidar(!!o && o.state !== "passed" && env === "backrooms" && !switching() && !!opts.navigating?.());
     inviteSceneSetup(!!o && o.state === "passed" && graduationReady && env === "backrooms" && !switching() && !sceneTaught);
 
@@ -1023,26 +1126,35 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const f = inStory ? null : form();
     const pausedCreation = compact && isNew;
     const canEdit = !inStory && !pausedCreation && editable(agent);
+    // The intro agent always goes by the character's name; the built agent carries it in its file.
+    const onStoryAgent = inStory || agent?.id === STORY_AGENT;
+    const onBuiltAgent = onStoryAgent || (!!builtAgent && agent?.id === builtAgent);
+    if (builtAgent && agent?.id === builtAgent && canEdit && !toured) {
+      toured = true;
+      setTimeout(showTour, 0);
+    }
 
-    title.textContent = inStory
-      ? name || "MARS"
+    title.textContent = onStoryAgent
+      ? name
       : isNew
         ? draft?.name.trim() || "New agent"
         : (draft?.name.trim() || agent?.name) ?? "No agent";
-    panel.setDisplayName(owned ? name || "MARS" : null);
+    panel.setDisplayName(onStoryAgent ? name : null);
     mobileName.hidden = !compact;
     mobileName.textContent = title.textContent;
     mobilePrompt.hidden = !compact;
     mobilePrompt.textContent = (inStory ? who || agent?.prompt : f?.prompt) || "No prompt.";
-    persona.textContent = who;
-    persona.hidden = !who || !owned;
-    note.textContent = noteFor(r, o, graduated, agent, isNew);
+    note.textContent = noteFor(r, o, graduated && onBuiltAgent, agent, isNew);
     note.hidden = !note.textContent;
-    note.classList.toggle("warn", !inStory && !!agent && !isNew && !canEdit);
-    caption.textContent = isNew
+    note.classList.toggle("warn", !inStory && !!agent && !isNew && !canEdit && !(graduated && onBuiltAgent));
+    const path = isNew
       ? `innate-os/workspace/custom_agents/${slug(draft?.name ?? "") || "…"}.py`
       : shortPath(agent?.path ?? "");
-    caption.hidden = !caption.textContent;
+    if (caption.dataset.path !== path) {
+      caption.dataset.path = path;
+      caption.replaceChildren(...breakablePath(path));
+    }
+    caption.hidden = !path;
     // Which agent runs, and resetting its brain, are not part of the story: it arms its own.
     if (opts.directivesEl) opts.directivesEl.hidden = inStory || (isNew && !compact);
 
@@ -1129,7 +1241,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     panel.setComposerAsk(
       !choosing ? null
         : compact ? { placeholder: "Or describe your own character…", submit: choose }
-        : { placeholder: `Pick who ${name || "MARS"} is, top left` },
+        : { placeholder: `Pick who ${name} is, top left` },
     );
   }
 
@@ -1142,11 +1254,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       return "This is an Innate Agent. To modify it or create one, use the desktop version.";
     }
     if (r) return r.finished ? "Through the door." : "";
+    if (o && o.state !== "passed") return "";
     if (graduated) {
       // Said in the chat too, but a history sync drops display-only lines; this stays.
-      return "It found the way out. This is the agent you built. Scene setup and the challenges are at the bottom of the stage, and the rail on the left has Teleop, the map and the settings.";
+      return "It found the way out. This is the agent you built: add skills, change its prompt, or try another agent. Scene setup and the challenges are at the bottom of the stage.";
     }
-    if (o) return "Find the way out.";
     if (isNew) return "An agent is a prompt plus skills. Name it, tell it who it is, and add what it may do.";
     if (!agent) return "Pick an agent to see its prompt and skills.";
     if (agent.source === "shipped") return "This is an innate agent. Create your own agent, or edit this one in code.";
@@ -1190,7 +1302,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (inStory) {
         const state = document.createElement("span");
         state.className = "agent-studio-skill-state microlabel";
-        state.textContent = fresh ? "new" : "granted";
+        state.textContent = fresh ? "new" : "added";
         row.append(state);
       } else if (canEdit) {
         const del = document.createElement("button");
@@ -1324,9 +1436,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     }
   };
   document.addEventListener("pointerdown", onOutsideClick, true);
-  // Using the environment tiles is the lesson; the world changing under them is the proof.
+  // Finding the scene setup is the lesson: the pointer goes at the first click on it.
   const onSceneChange = (/** @type {Event} */ event) => {
-    if (!(event.target instanceof Element) || !event.target.closest(".sim-environment-section button")) return;
+    if (!(event.target instanceof Element) || !event.target.closest(".sim-scene-toggle, .sim-environment-section button")) return;
     sceneTaught = true;
     render(true);
   };
@@ -1415,6 +1527,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       document.removeEventListener("keydown", onMenuKeyDown);
       root.removeEventListener("click", onSceneChange, true);
       sceneCue?.();
+      endTour();
       opts.onCreateAgent?.(() => {});
       uncue();
       hideDragHint();

@@ -23,26 +23,60 @@ CAN = "cube"
 DOOR_AHEAD_M = 3.0
 DOOR_STAND_M = 2.35
 AT_DOOR_M = 0.95
-# Offered by name; the guide is what the agent is told once one is chosen.
+
+
+@dataclass(frozen=True)
+class Persona:
+    name: str
+    voice: str
+
+
+# Offered by name; the voice is what the agent is told once one is chosen.
 PERSONAS = {
-    "Rocky from Project Hail Mary": (
+    "Rocky from Project Hail Mary": Persona(
+        "Rocky",
         "Rocky, the Eridian engineer from Project Hail Mary: clipped English with no articles ('Amaze!', 'Question.', "
         "'Bad bad bad.', 'Happy happy happy.'), you call the person Grace, you think in engineering fixes and "
-        "numbers, and you are loyal and brave"
+        "numbers, and you are loyal and brave",
     ),
-    "a grumpy cat": (
+    "a grumpy cat": Persona(
+        "Grumpy Cat",
         "a grumpy cat: contemptuous, sleepy, as few words as possible; everything is beneath you, nothing is ever "
-        "thanked, and whatever you do you were going to do anyway"
+        "thanked, and whatever you do you were going to do anyway",
     ),
-    "a Shakespearean actor": (
+    "a Shakespearean actor": Persona(
+        "Shakespearean Actor",
         "a Shakespearean actor: grand iambic flourish, thee and thou, every skill a one-line soliloquy, tragedy in a "
-        "white room"
+        "white room",
     ),
-    "a pirate captain": (
+    "a pirate captain": Persona(
+        "Pirate Captain",
         "a pirate captain: salty sea-talk in every line ('arr', 'ye', 'me hearty'), the room is a brig, skills are "
-        "plunder, and you never once drop the voice"
+        "plunder, and you never once drop the voice",
     ),
 }
+CUSTOM_AGENT_NAME = "Custom agent"
+# The agent the person keeps once the story is over: the character, without the story.
+AGENT_BASE_PROMPT = (
+    "You live in a MARS robot: a small mobile robot with an arm, a head that makes faces, and a camera. Stay in "
+    "character in every line; never break it and never mention being an AI or playing a role. Keep replies to one "
+    "or two short sentences. Act through your skills instead of describing actions, and when a skill fails, say "
+    "plainly that it did not work. Never claim a skill you do not have. Before saying you do not know where "
+    "something is, search your memory if you can. If the person says stop, stop at once and do not retry."
+)
+
+
+def agent_prompt(persona: str, name: str | None) -> str:
+    offered = PERSONAS.get(persona)
+    character = (
+        f"You are {offered.voice}."
+        if offered is not None
+        else f"Who you are, in the words of the person who made you: {persona}"
+    )
+    named = f" Your name is {name}." if name else ""
+    return f"{character}{named}\n\n{AGENT_BASE_PROMPT}"
+
+
 NUDGE_AFTER_S = 90.0
 
 
@@ -106,9 +140,12 @@ def _persona_chosen(state: WorldState, events: list[dict], runtime: NowhereRunti
             continue
         persona, name = ev.get("persona"), ev.get("name")
         if isinstance(persona, str) and persona.strip():
-            runtime.persona = persona.strip()[:120]
+            runtime.persona = persona.strip()[:240]
         if isinstance(name, str) and name.strip():
             runtime.name = name.strip()[:40]
+    offered = PERSONAS.get(runtime.persona or "")
+    if offered is not None and runtime.name is None:
+        runtime.name = offered.name
     return runtime.persona is not None
 
 
@@ -127,7 +164,7 @@ ACTS = (
         ("innate-os/wave",),
         "You just came online in a featureless white room. Waving is the only thing your body can do; you cannot "
         "move anything else, not even your face, and you do not even know who you are. Introduce yourself by name in "
-        "your first sentence and Wave as you say it, say ONE line about the room, then ask the person to decide who "
+        "your first sentence and call Wave in that same reply, say ONE line about the room, then ask the person to decide who "
         "you are: they built you, so they choose your personality. They may pick one of the characters they are "
         "offered or describe their own in their own words; both are equally real. Wait. Whatever arrives in "
         "profile.persona is who you are: become it completely and announce yourself in that voice in ONE line with "
@@ -144,7 +181,7 @@ ACTS = (
         "As soon as you have it, use it, with a Wave.",
         lambda state, events, runtime: completed(events, "head_emotion"),
         suggests=("Where are you?", "What is a skill?"),
-        nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is waiting in the Agent panel. Do not mention buttons.",
+        nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say it is waiting to be added in the Agent panel. Do not mention buttons.",
     ),
     Act(
         "Look around",
@@ -193,7 +230,7 @@ ACTS = (
     ),
 )
 
-NEXT = ("backrooms", "way_out")
+NEXT = ("backrooms", "nowhere_way_out")
 
 
 class NowhereRuntime(ChallengeRuntime):
@@ -291,8 +328,10 @@ class NowhereRuntime(ChallengeRuntime):
         return {
             "profile": {
                 "persona": self.persona,
-                "persona_guide": PERSONAS.get(self.persona or "") or self.persona,
+                "persona_guide": persona.voice if (persona := PERSONAS.get(self.persona or "")) else self.persona,
                 "name": self.name,
+                "display_name": self.name or (CUSTOM_AGENT_NAME if self.persona else None),
+                "agent_prompt": agent_prompt(self.persona, self.name) if self.persona else None,
             },
             "story": "nowhere",
             "act": self.act,

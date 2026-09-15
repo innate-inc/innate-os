@@ -52,6 +52,7 @@ const THINKING_STALE_MS = 10_000;
  *   setComposerAsk: (ask: { placeholder: string, submit?: (text: string) => void } | null) => void,
  *   focusComposer: () => void,
  *   addNotice: (text: string) => void,
+ *   keepTranscript: () => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
  *   setOffers: (offers: import("./offerDeck.js").Offer[], title?: string) => void,
  *   submitText: (text: string, how?: { replyContext?: string }) => Promise<boolean>,
@@ -477,6 +478,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       syncComposerAction();
     },
     focusComposer,
+    keepTranscript: () => chat.keepTranscript(),
     /** @param {string} text */
     addNotice(text) {
       chat.addMessage("system", text, Date.now() / 1000);

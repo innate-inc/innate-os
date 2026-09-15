@@ -369,6 +369,8 @@ class Challenge:
     agent_guidance: str = field(default="", kw_only=True)
     # Optional authored first pose (x, y, yaw degrees), applied only on start.
     spawn: tuple[float, float, float] | None = field(default=None, kw_only=True)
+    # A story step the world starts itself (a runtime transition) stays out of the picker.
+    listed: bool = field(default=True, kw_only=True)
 
     def available_in(self, environment_id: str | None) -> bool:
         return self.environments is None or environment_id in self.environments
@@ -858,7 +860,7 @@ class ChallengeEngine:
         """Challenge briefs for this environment; sent on connection and world changes."""
         environment_id = self._environment_id()
         return [
-            {"id": c.id, "title": c.title, "brief": c.brief}
+            {"id": c.id, "title": c.title, "brief": c.brief, "listed": c.listed}
             for c in self.challenges.values()
             if c.available_in(environment_id)
         ]

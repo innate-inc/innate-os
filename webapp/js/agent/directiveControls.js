@@ -167,6 +167,23 @@ export function createDirectiveControls(agentState, opts) {
     const armed =
       (applying && selectedDirective) || currentDirective || lastDirective || demo?.id || (agents.find((a) => a.listed)?.id ?? "");
     directiveList.replaceChildren();
+    if (opts.onCreate && !compact) {
+      const create = document.createElement("button");
+      create.type = "button";
+      create.className = "agent-directive-option create";
+      create.setAttribute("role", "option");
+      create.setAttribute("aria-selected", "false");
+      create.innerHTML = '<span class="agent-directive-check" aria-hidden="true">+</span>';
+      const name = document.createElement("span");
+      name.className = "agent-directive-option-name";
+      name.textContent = "Create agent";
+      create.append(name);
+      create.addEventListener("click", () => {
+        setDirectiveOpen(false);
+        opts.onCreate?.();
+      });
+      directiveList.append(create);
+    }
     for (const agent of agents) {
       if (!agent.listed) continue; // a story fixture is armed by the story, never picked
       const option = document.createElement("button");
@@ -212,23 +229,6 @@ export function createDirectiveControls(agentState, opts) {
       empty.className = "agent-directive-empty";
       empty.textContent = "No agents available";
       directiveList.append(empty);
-    }
-    if (opts.onCreate && !compact) {
-      const create = document.createElement("button");
-      create.type = "button";
-      create.className = "agent-directive-option create";
-      create.setAttribute("role", "option");
-      create.setAttribute("aria-selected", "false");
-      create.innerHTML = '<span class="agent-directive-check" aria-hidden="true">+</span>';
-      const name = document.createElement("span");
-      name.className = "agent-directive-option-name";
-      name.textContent = "Create agent";
-      create.append(name);
-      create.addEventListener("click", () => {
-        setDirectiveOpen(false);
-        opts.onCreate?.();
-      });
-      directiveList.append(create);
     }
     const selectedAgent = agents.find((agent) => agent.id === armed);
     selectedDirective = selectedAgent?.id ?? "";

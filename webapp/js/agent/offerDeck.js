@@ -62,7 +62,7 @@ export function createOfferDeck(opts = {}) {
     button.innerHTML =
       `<span class="agent-offer-icon">${offer.icon ?? ICONS.sparkle}</span>` +
       '<span class="agent-offer-copy"><span class="agent-offer-name"></span><span class="agent-offer-detail"></span></span>' +
-      (offer.kind === "grant" ? `<span class="agent-offer-go">${ICONS.plus}<span>Grant</span></span>` : "");
+      (offer.kind === "grant" ? `<span class="agent-offer-go">${ICONS.plus}<span>Add</span></span>` : "");
     /** @type {HTMLElement} */ (button.querySelector(".agent-offer-name")).textContent = offer.label ?? offer.text;
     /** @type {HTMLElement} */ (button.querySelector(".agent-offer-detail")).textContent = offer.detail ?? "";
     button.addEventListener("click", () => offer.onSelect(offer.text));
