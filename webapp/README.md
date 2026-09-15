@@ -5,7 +5,7 @@ same modules:
 
 - **Agent** (`/`) — autonomous control, camera views, and the Brain monitor.
 - **Teleop** (`/teleop`) — live video, joystick/keyboard drive, head tilt,
-  robot speech, telemetry, and leader-arm USB follow.
+  robot speech, telemetry, leader-arm USB follow, and camera arm control.
 - **Nav** (`js/nav/`) — live navigation view: the map widget with laser scan /
   global costmap / traveled-path overlays, telemetry panels (pose, velocity,
   lidar, nav state, per-topic receive rates), and live strip charts (commanded
@@ -90,6 +90,8 @@ js/
   webrtcSession.js      camera + mic over WebRTC, signaled through rosbridge
   sharedVideoSession.js one app-level WebRtcSession shared by every video page
   dynamixel.js          leader-arm WebSerial reader (Protocol 2.0)
+  armControlLock.js     one driver at a time (leader arm vs camera control)
+  handControl/          camera arm control: hand tracker, mapping, arm IK, panel
   shell.js              icon rail on every page
   railLayout.js         the rail's grouped roster (pure — tests/railLayout.test.js)
   router.js             client-side routing, boot splash, background route warm-up
@@ -108,6 +110,7 @@ js/
 | Battery    | `/battery_state`              | `sensor_msgs/BatteryState` (0.2 Hz)       |
 | Robot info | `/robot/info`                 | JSON-in-String `{robot_name, version, …}` |
 | Arm follow | `/leader_positions`           | `Int32MultiArray` of 6 raw Dynamixel ticks (2048 = center); robot converts to `/mars/arm/commands` |
+| Arm stream | `/armsdk/stream_joints`       | `Float64MultiArray` of 6 joint targets (rad) — the SDK's `stream_joints()`: velocity-clamped slew, idles out 0.4 s after the last message |
 | Video/mic  | `/webrtc/start` → offer on `/webrtc/offer`, answer on `/webrtc/answer`, ICE via `/webrtc/ice_in` / `/webrtc/ice_out` | start payload `{data: '{"source":"live","audio":bool}'}`; the robot rebuilds its pipeline on every start, so toggling audio re-handshakes (debounced, freeze-frame kept) |
 
 Notes:
@@ -147,6 +150,48 @@ serial driver.
   holds its last pose.
 - Chrome/Edge only (WebSerial). Protocol layer is tested headlessly:
   `node tests/dynamixel.test.js`.
+
+## Camera arm control
+
+No leader arm, no USB: point a webcam at your hand and the claw follows it. The
+panel lives on the **Arm SDK** page and behind the teleop arm panel's *Camera
+control* button, and it works from anywhere the robot's HTTPS webapp does — the
+tracking runs in the operator's browser and only claw targets cross the network.
+
+- **How it maps.** Move your hand to move the claw (sideways, up/down, and
+  toward/away from the webcam to reach out and back), turn it to swivel the arm,
+  tilt it to aim the claw — down far enough to take something off the floor —
+  and separate thumb and index to open the jaws. Nothing else touches the
+  gripper. *Recentre* re-anchors your hand wherever it is. **Esc** stops on both
+  pages; on the Arm SDK page **Space** follows and **R** recentres (the teleop
+  page's Space already opens the skill launcher).
+- **Anchored on the arm, not on a calibration.** Following starts from the pose
+  the arm is already holding, so there is no ground-line setup and no jump. The
+  claw target is rate-limited and never allowed to run more than 8 cm ahead of
+  where the arm actually is.
+- **It rides the Arm SDK's joint stream.** `js/handControl/armKinematics.js`
+  solves the 5-joint arm in closed form in the browser (the chain is pinned from
+  `mars.urdf`, and `node tests/handControl.test.js` re-derives it from that file
+  to catch drift), then the result goes out on `/armsdk/stream_joints` — the same
+  topic the Arm SDK sliders use, so the robot's velocity clamp, stream idle-out
+  and motion lock are what bound this. There is no camera-specific robot service.
+- **Holding is the absence of commands.** Losing the hand, a stale frame, a
+  dropped socket, torque going off, hiding the tab or pressing Stop all stop the
+  stream; the robot's 0.4 s idle-out then parks the arm where it stands. Nothing
+  is ever queued. Coming back after a blink resumes the original mapping; after
+  longer, hold still briefly and control re-anchors on the achieved pose.
+- **One driver at a time.** Engaging leader-arm follow and camera control at once
+  would put two writers on the arm, so `js/armControlLock.js` lets only one hold
+  it; the Arm SDK page's jog, sliders and gripper buttons grey out while the
+  camera is driving (Torque off stays live — it is the abort path).
+- **MediaPipe is vendored, not fetched.** `public/vendor/mediapipe-0.10.32/`
+  carries the pinned Hand Landmarker model, its WASM runtime and the tasks-vision
+  bundle (~19 MB), loaded only when an operator enables the camera. The version
+  is in the directory name because the loader fetches its siblings by fixed
+  names, and the front door serves versioned vendor *directories* immutable for
+  the same reason it serves versioned filenames that way.
+- Needs a secure origin (the robot's HTTPS front door, or localhost) for camera
+  access, and a browser with WASM SIMD — every current one.
 
 ## Nav page
 

@@ -22,6 +22,10 @@ import {
   ARM_STATUS_TOPIC,
 } from "../constants.js";
 import { rebootArmAndEnableTorque } from "../armReboot.js";
+import { claimArmControl, armControlHolder, onArmControlChange } from "../armControlLock.js";
+import { loadHandControlPanel } from "../handControl/load.js";
+
+const LEADER_NAME = "Leader arm";
 
 const PUBLISH_MIN_GAP_MS = 15;
 const TICK_CENTER = 2048;
@@ -38,6 +42,7 @@ const TICK_SPAN = 2048; // ±half a revolution shown on the joint dots
  * @returns {{ destroy: () => void }}
  */
 export function createArmPanel(parent, rosClient, opts = {}) {
+  let destroyed = false;
   const wrap = document.createElement("div");
   wrap.className = "arm-panel";
 
@@ -75,6 +80,46 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   // of the leader-arm USB link, so they're available even where WebSerial is not.
   const armSvc = opts.hideServices ? null : buildArmServices(rosClient);
 
+  // Camera control needs no leader arm and no WebSerial, so it is offered on
+  // every browser -- including the ones that fall out of this function early.
+  const cameraBtn = document.createElement("button");
+  cameraBtn.className = "arm-button arm-camera";
+  cameraBtn.type = "button";
+  cameraBtn.textContent = "Camera control";
+  cameraBtn.title = "Drive the arm with your webcam — your hand moves the claw";
+
+  /** @type {{ destroy: () => void } | null} */
+  let cameraPanel = null;
+  let cameraPending = false;
+  function toggleCamera() {
+    if (cameraPanel) {
+      cameraPanel.destroy();
+      cameraPanel = null;
+      cameraBtn.classList.remove("active");
+      return;
+    }
+    if (cameraPending) return;
+    cameraPending = true;
+    cameraBtn.classList.add("active");
+    loadHandControlPanel(parent, rosClient, { onClose: toggleCamera }).then(
+      (panel) => {
+        cameraPending = false;
+        if (destroyed) panel.destroy();
+        else {
+          cameraPanel = panel;
+          parent.prepend(panel.el); // above the leader-arm column in the same overlay
+        }
+      },
+      (err) => {
+        cameraPending = false;
+        cameraBtn.classList.remove("active");
+        cameraBtn.textContent = "Camera control unavailable";
+        console.error("[armPanel] camera control failed to load:", err);
+      },
+    );
+  }
+  cameraBtn.addEventListener("click", toggleCamera);
+
   const serial = navigator.serial;
   if (!serial) {
     const hint = document.createElement("p");
@@ -102,11 +147,13 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     } else {
       hint.textContent = "Needs Chrome or Edge (WebSerial).";
     }
-    wrap.append(hint, ...extras, ...(armSvc ? [divider(), armSvc.el] : []));
+    wrap.append(hint, ...extras, divider(), cameraBtn, ...(armSvc ? [divider(), armSvc.el] : []));
     // No leader-arm link possible here — tell the gate it will never be ready.
     opts.onState?.({ engaged: false, reading: false, rate: 0 });
     return {
       destroy() {
+        destroyed = true;
+        cameraPanel?.destroy();
         armSvc?.destroy();
         wrap.remove();
       },
@@ -162,18 +209,27 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   const note = document.createElement("p");
   note.className = "arm-note microlabel";
 
-  wrap.append(status, joints, connectBtn, engageRow, note, ...(armSvc ? [divider(), armSvc.el] : []));
+  wrap.append(status, joints, connectBtn, engageRow, note, divider(), cameraBtn, ...(armSvc ? [divider(), armSvc.el] : []));
 
   // ---- state ------------------------------------------------------------
 
   let engaged = false;
   let lastPublishAt = 0;
-  let destroyed = false;
   const leader = new DynamixelLeader();
+
+  /** @type {(() => void) | null} */
+  let releaseArm = null;
 
   /** @param {boolean} on */
   function setEngaged(on) {
     if (engaged === on) return;
+    if (on) {
+      releaseArm = claimArmControl(LEADER_NAME);
+      if (!releaseArm) return; // camera control has the arm; render() says so
+    } else {
+      releaseArm?.();
+      releaseArm = null;
+    }
     engaged = on;
     render(leader.state);
   }
@@ -220,8 +276,11 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     engageBtn.textContent = engaged ? "Live — click to stop" : "Engage follow";
     engageBtn.classList.toggle("active", engaged);
 
-    note.hidden = !reading || engaged;
-    note.textContent = "follower snaps to leader pose";
+    const rival = armControlHolder();
+    const blocked = !!rival && rival !== LEADER_NAME;
+    engageBtn.disabled = blocked;
+    note.hidden = (!reading || engaged) && !blocked;
+    note.textContent = blocked ? `${rival} is driving the arm` : "follower snaps to leader pose";
 
     // The Collect gate mirrors the mobile app's isArmPublishing && rate > 0.
     opts.onState?.({ engaged, reading, rate: state.rate });
@@ -267,7 +326,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   const unsubLeader = leader.onChange((state) => {
     if (destroyed) return;
     if (engaged && (!state.connected || state.error)) {
-      engaged = false;
+      setEngaged(false);
     } else if (engaged && state.positions && rosClient.state === "connected") {
       publish(state.positions);
     }
@@ -277,6 +336,8 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   const unsubRos = rosClient.onStateChange((rosState) => {
     if (rosState !== "connected") setEngaged(false);
   });
+
+  const unsubLock = onArmControlChange(() => render(leader.state));
 
   const onVisibility = () => {
     if (document.visibilityState === "hidden") setEngaged(false);
@@ -299,8 +360,10 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     destroy() {
       destroyed = true;
       setEngaged(false);
+      cameraPanel?.destroy();
       unsubLeader();
       unsubRos();
+      unsubLock();
       document.removeEventListener("visibilitychange", onVisibility);
       serial.removeEventListener("connect", onSerialConnect);
       armSvc?.destroy();

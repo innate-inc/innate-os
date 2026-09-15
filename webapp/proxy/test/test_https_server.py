@@ -94,6 +94,11 @@ async def test_vendor_assets_cache_forever(tmp_path):
     vendor.mkdir(parents=True)
     (vendor / "three.module.min.r160.js").write_text("export const x = 1;\n" * 200)
     (vendor / "unversioned.js").write_text("export const y = 2;\n" * 200)
+    # A multi-file library whose loader fetches siblings by fixed names, so only
+    # the directory can carry the version (the vendored MediaPipe tracker).
+    pinned = vendor / "mediapipe-0.10.32" / "wasm"
+    pinned.mkdir(parents=True)
+    (pinned / "vision_wasm_internal.wasm").write_bytes(b"\0asm\x01\x00\x00\x00")
     async with serve(ROOT=root) as (s, base):
         r = await s.get(base + "/public/vendor/three.module.min.r160.js", headers={"Accept-Encoding": "gzip"})
         assert r.headers["Cache-Control"] == "public, max-age=31536000, immutable"
@@ -104,6 +109,11 @@ async def test_vendor_assets_cache_forever(tmp_path):
         r2 = await s.get(base + "/public/vendor/unversioned.js")
         assert r2.headers["Cache-Control"] == "no-cache"
         await r2.read()
+        r4 = await s.get(base + "/public/vendor/mediapipe-0.10.32/wasm/vision_wasm_internal.wasm")
+        assert r4.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+        # served as real wasm, or the browser refuses to stream-compile it
+        assert r4.headers["Content-Type"] == "application/wasm"
+        await r4.read()
         # everything outside public/vendor stays no-cache
         r3 = await s.get(base + "/assets/app.js")
         assert r3.headers["Cache-Control"] == "no-cache"

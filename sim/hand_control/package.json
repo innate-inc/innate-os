@@ -1,0 +1,22 @@
+{
+  "name": "innate-hand-control",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node prepare.mjs && vite build",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs",
+    "dev": "vite --host 127.0.0.1 --port 8842"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.32",
+    "three": "0.185.0",
+    "urdf-loader": "0.13.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "prettier": "^3.8.1",
+    "vite": "8.1.2"
+  }
+}
