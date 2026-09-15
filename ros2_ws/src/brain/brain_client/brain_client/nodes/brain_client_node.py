@@ -48,12 +48,12 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
+from brain_client.llm.routing import pick
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor
@@ -202,10 +202,17 @@ class BrainClientNode(Node):
         self.memory_store = MemoryStore(
             get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
         )
-        rest = pick_rest(self._proxy)
+        route = pick(
+            cfg.llm_model,
+            self._proxy,
+            base_url=cfg.llm_base_url,
+            extra_body=cfg.llm_extra_body,
+            logger=self.get_logger(),
+        )
+        recall = pick(cfg.memory_llm_model, self._proxy, logger=self.get_logger()) if cfg.memory_llm_model else route
         self.memory_search = (
-            MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
-            if rest is not None
+            MemorySearch(self.memory_store, recall.provider, logger=self.get_logger())
+            if recall.provider is not None
             else None
         )
         self.memory_recorder = MemoryRecorder(
@@ -247,7 +254,7 @@ class BrainClientNode(Node):
             roster=self.roster,
             chat=self.chat,
             gaze=self.gaze,
-            proxy=self._proxy,
+            route=route,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,

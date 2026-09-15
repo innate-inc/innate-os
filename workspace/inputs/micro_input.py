@@ -12,7 +12,7 @@ Three backends, selected by the ``stt_backend`` setting:
 
 - ``elevenlabs``       — ElevenLabs Scribe realtime WebSocket (default)
 - ``elevenlabs_batch`` — ElevenLabs Scribe batch, one POST per utterance
-- ``gemini``           — Gemini generateContent, one call per utterance
+- ``gemini``           — Gemini through pydantic-ai, one call per utterance
 
 Scribe realtime streams over a warm WebSocket and commits utterances from the
 same local endpointing the batch backends use — Silero VAD by default, an RMS
@@ -40,7 +40,6 @@ import time
 
 import numpy as np
 
-from brain_client.brain.transport import pick_rest
 from brain_client.common.logging import UniversalLogger
 from brain_client.inputs.batch_stt import (
     DEFAULT_KEYTERMS,
@@ -56,6 +55,7 @@ from brain_client.inputs.batch_stt import (
 )
 from brain_client.inputs.types import InputDevice
 from brain_client.inputs.vad import silero_detector
+from brain_client.llm.routing import pick
 from brain_client.perception.identity import IdentityMonitor
 
 DEFAULT_SAMPLE_RATE = 24_000
@@ -428,11 +428,11 @@ class MicroInput(InputDevice):
         """Start a batch-transcription session on Gemini. Returns the model id."""
         model = self.proxy.config.get("gemini_stt_model", "gemini-3.6-flash")
 
-        rest = pick_rest(self.proxy)
-        if rest is None:
+        route = pick(f"google:{model}", self.proxy)
+        if route.provider is None:
             raise RuntimeError("no Gemini access: proxy unavailable and GEMINI_API_KEY unset")
 
-        self._start_batch_session(gemini_transcriber(rest, model, self._stt_language(), self._stt_keyterms), model)
+        self._start_batch_session(gemini_transcriber(route.provider, self._stt_language(), self._stt_keyterms), model)
         return model
 
     def _start_batch_session(self, transcriber: Transcriber, model: str) -> None:

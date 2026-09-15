@@ -479,7 +479,7 @@ def resolve_brain_backend(env: dict[str, str]) -> str:
     """Which key the in-process brain (brain_client) will use to reach Gemini.
 
     The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
+    brain_client's `Backend` (llm/routing.py) makes the real choice and owns
     this precedence; the launcher runs on the host and cannot import it, so this
     restates the rule. Change one and change the other.
     """

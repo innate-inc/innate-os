@@ -1,0 +1,108 @@
+{
+  "systemInstruction": {
+    "parts": [
+      {
+        "text": "SYS"
+      }
+    ]
+  },
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Look at this."
+        },
+        {
+          "inlineData": {
+            "mimeType": "image/jpeg",
+            "data": "/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        }
+      ]
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "text": "On it.",
+          "thoughtSignature": "c2lnMTIz"
+        },
+        {
+          "functionCall": {
+            "name": "wave",
+            "args": {
+              "times": 2
+            },
+            "id": "call_1"
+          },
+          "thoughtSignature": "c2lnNDU2"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "functionResponse": {
+            "name": "wave",
+            "response": {
+              "outcome": "started"
+            },
+            "id": "call_1"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Now what?"
+        },
+        {
+          "inlineData": {
+            "mimeType": "image/jpeg",
+            "data": "/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {
+          "name": "wave",
+          "description": "Wave the arm.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "times": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "times"
+            ]
+          }
+        },
+        {
+          "name": "wait",
+          "description": "Do nothing.",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+    },
+    "maxOutputTokens": 1024
+  }
+}

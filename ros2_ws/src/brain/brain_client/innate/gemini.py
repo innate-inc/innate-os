@@ -1,78 +1,52 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Gemini vision for skills, through the Innate proxy or directly with
-GEMINI_API_KEY — the same precedence as the brain. Both routes take one
-OpenAI-compatible chat-completions body; a proxy service key needs "gemini"
-access or the proxy returns 403. Import as ``from innate import gemini``.
+"""Vision Q&A for skills on the brain's model. Import as ``from innate import gemini``.
+
+The name is historical: the model is whatever ``LLM_MODEL`` names (any
+provider the brain speaks, Gemini by default), reached through the Innate
+proxy or a vendor key exactly as the brain reaches it.
 """
 
-import json
+from __future__ import annotations
+
+import base64
 import os
-from collections.abc import Callable
+from collections.abc import Sequence
 
-import httpx
-
+from brain_client.llm import Image, Message, Provider, Request, Role, Text
+from brain_client.llm.routing import pick
 from brain_client.skills.types import cancellable_sleep
 from innate_proxy import ProxyClient
 
-SERVICE = "gemini"
-ENDPOINT = "/v1/chat/completions"
-DIRECT_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-MODEL = "gemini-3.5-flash"
-
-Client = Callable[[dict], dict]
+MODEL = os.environ.get("LLM_MODEL", "google:gemini-3.5-flash")
+_TIMEOUT_SECS = 60.0
 
 
-def make_client() -> Client | None:
-    """A chat-completions caller, or None when neither the proxy nor GEMINI_API_KEY is configured."""
-    proxy = ProxyClient()
-    if proxy.is_available():
-        return _proxy_client(proxy)
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    return _direct_client(api_key) if api_key else None
+def make_client() -> Provider | None:
+    """The model, or None if no route to it is configured."""
+    return pick(MODEL, ProxyClient()).provider
 
 
-def _proxy_client(proxy: ProxyClient) -> Client:
-    def complete(body: dict) -> dict:
-        with proxy.request_stream(SERVICE, ENDPOINT, method="POST", json=body) as resp:
-            resp.raise_for_status()
-            return json.loads(resp.read())
-
-    return complete
-
-
-def _direct_client(api_key: str) -> Client:
-    def complete(body: dict) -> dict:
-        resp = httpx.post(DIRECT_URL, json=body, headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0)
-        resp.raise_for_status()
-        return resp.json()
-
-    return complete
-
-
-def ask_image(client, images_b64, question, logger=None, retries=3):
+def ask_image(
+    client: Provider | None, images_b64: str | Sequence[str], question: str, logger=None, retries: int = 3
+) -> str | None:
     """JPEG(s) + question -> reply text. None if no client / all retries fail.
     images_b64: one base64 string or a list of them — sent in order, so the
-    question can refer to them as image 1, image 2, ... Frames go inline as
-    data URLs (640x480 JPEGs, at most two per call). Raises SkillCancelled
-    between attempts if the run is cancelled."""
+    question can refer to them as image 1, image 2, ... (640x480 JPEGs, at
+    most two per call). Raises SkillCancelled between attempts if the run is
+    cancelled."""
     if client is None:
         return None
     if isinstance(images_b64, str):
         images_b64 = [images_b64]
-    content = [{"type": "text", "text": question}]
-    content += [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images_b64]
-    body = {
-        "model": MODEL,
-        "temperature": 0.0,
-        "messages": [{"role": "user", "content": content}],
-    }
+    message = Message(Role.USER, (Text(question), *(Image(base64.b64decode(b)) for b in images_b64)))
+    request = Request(system="", messages=(message,), temperature=0.0)
     for attempt in range(retries):
         cancellable_sleep(0)
         try:
-            return client(body)["choices"][0]["message"]["content"] or ""
-        except Exception as e:  # noqa: BLE001
+            return client.run(request, timeout=_TIMEOUT_SECS).message.text()
+        except Exception as e:  # noqa: BLE001 — a failed attempt is retried, the last one reported
             if logger:
                 logger.warning(f"[gemini] vision call failed (try {attempt + 1}/{retries}): {e}")
             if attempt < retries - 1:

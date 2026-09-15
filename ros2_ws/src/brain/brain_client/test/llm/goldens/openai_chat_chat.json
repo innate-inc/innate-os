@@ -1,0 +1,94 @@
+{
+  "model": "gpt-5.4-mini",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "SYS"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Look at this."
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "On it.",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "wave",
+            "arguments": "{\"times\":2}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "content": "started"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Now what?"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "wave",
+        "description": "Wave the arm.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "times": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "times"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait",
+        "description": "Do nothing.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "max_tokens": 1024
+}

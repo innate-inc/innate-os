@@ -56,7 +56,7 @@ uvicorn[standard]
 # Other AI
 inspireface
 
-# Gemini (Google GenAI)
+# google-genai: the sim tools (the brain speaks each vendor's wire itself over httpx: brain_client/llm)
 google-genai
 
 # Input handling
