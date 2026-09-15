@@ -22,6 +22,7 @@ from brain_client.llm.types import (
     Event,
     Finish,
     Image,
+    Json,
     LlmError,
     Message,
     Part,
@@ -67,8 +68,8 @@ class AnthropicAdapter:
         thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
     )
 
-    def body(self, request: Request, model: str) -> dict:
-        body: dict = {"model": model, "max_tokens": request.max_tokens or _MAX_TOKENS, "stream": True}
+    def body(self, request: Request, model: str) -> Json:
+        body: Json = {"model": model, "max_tokens": request.max_tokens or _MAX_TOKENS, "stream": True}
         if request.system:
             body["system"] = [{"type": "text", "text": request.system}]
         pins = _breakpoints(request.messages)
@@ -92,8 +93,8 @@ class AnthropicAdapter:
                 yield delta
         yield stream.reply()
 
-    def _output_config(self, request: Request) -> dict:
-        config: dict = {}
+    def _output_config(self, request: Request) -> Json:
+        config: Json = {}
         effort = self.caps.clamp(request.thinking)
         if effort != Thinking.DEFAULT:
             config["effort"] = effort.value
@@ -101,14 +102,14 @@ class AnthropicAdapter:
             config["format"] = {"type": "json_schema", "schema": _schema(request.json_schema)}
         return config
 
-    def _message(self, message: Message, pin: bool) -> dict:
+    def _message(self, message: Message, pin: bool) -> Json:
         encoded = self._encode(message)
         content = encoded["content"]
         if not pin or not content:
             return encoded
         return {**encoded, "content": [*content[:-1], {**content[-1], "cache_control": dict(_EPHEMERAL)}]}
 
-    def _encode(self, message: Message) -> dict:
+    def _encode(self, message: Message) -> Json:
         if message.role == Role.TOOL:
             results = [_tool_result(p) for p in message.parts if isinstance(p, ToolResult)]
             return {"role": "user", "content": results}
@@ -123,16 +124,16 @@ class AnthropicAdapter:
 ADAPTER = AnthropicAdapter()
 
 
-def _thinking(summaries: bool) -> dict:
+def _thinking(summaries: bool) -> Json:
     return {"type": "adaptive", "display": "summarized"} if summaries else {"type": "adaptive"}
 
 
-def _schema(schema: dict) -> dict:
+def _schema(schema: Json) -> Json:
     """The schema without its ``title`` — a name this wire has no field for."""
     return {key: value for key, value in schema.items() if key != "title"}
 
 
-def _tool(tool: Tool) -> dict:
+def _tool(tool: Tool) -> Json:
     """No ``strict``: it requires ``additionalProperties: false``, which skill schemas do not carry."""
     return {"name": tool.name, "description": tool.description, "input_schema": tool.parameters}
 
@@ -143,20 +144,20 @@ def _breakpoints(messages: tuple[Message, ...]) -> frozenset[int]:
     return frozenset(pinned[-_BREAKPOINTS:])
 
 
-def _user_block(part: Text | Image) -> dict:
+def _user_block(part: Text | Image) -> Json:
     if isinstance(part, Text):
         return {"type": "text", "text": part.text}
     source = {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(part.jpeg).decode()}
     return {"type": "image", "source": source}
 
 
-def _assistant_block(part: Text | ToolCall) -> dict:
+def _assistant_block(part: Text | ToolCall) -> Json:
     if isinstance(part, Text):
         return {"type": "text", "text": part.text}
     return {"type": "tool_use", "id": part.id, "name": part.name, "input": part.args}
 
 
-def _tool_result(part: ToolResult) -> dict:
+def _tool_result(part: ToolResult) -> Json:
     return {"type": "tool_result", "tool_use_id": part.call_id, "content": part.text}
 
 
@@ -164,13 +165,13 @@ def _tool_result(part: ToolResult) -> dict:
 class _Stream:
     """One assistant turn assembled from its content blocks, keyed by the index the API opened them at."""
 
-    blocks: dict[int, dict] = field(default_factory=dict)
+    blocks: dict[int, Json] = field(default_factory=dict)
     fragments: dict[int, list[str]] = field(default_factory=dict)
     usage: Usage = Usage()
     stop_reason: str = ""
     started: bool = False
 
-    def consume(self, event: dict) -> TextDelta | ThoughtDelta | None:
+    def consume(self, event: Json) -> TextDelta | ThoughtDelta | None:
         kind = event.get("type", "")
         if kind == "message_start":
             self._open(event.get("message", {}).get("usage", {}))
@@ -196,14 +197,14 @@ class _Stream:
         message = Message(Role.ASSISTANT, parts, native=native)
         return Reply(message, self.usage, _finish(self.stop_reason, any(isinstance(p, ToolCall) for p in parts)))
 
-    def _open(self, usage: dict) -> None:
+    def _open(self, usage: Json) -> None:
         self.started = True
         cached = usage.get("cache_read_input_tokens", 0)
         # input_tokens is the uncached remainder here; every other wire's prompt count includes the cache.
         prompt = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + cached
         self.usage = replace(self.usage, prompt=prompt, cached=cached)
 
-    def _start(self, index: int, block: dict) -> None:
+    def _start(self, index: int, block: Json) -> None:
         kind = block.get("type", "")
         if kind == "text":
             self.blocks[index] = {"type": "text", "text": block.get("text", "")}
@@ -224,7 +225,7 @@ class _Stream:
             }
             self.fragments[index] = []
 
-    def _delta(self, index: int, delta: dict) -> TextDelta | ThoughtDelta | None:
+    def _delta(self, index: int, delta: Json) -> TextDelta | ThoughtDelta | None:
         block = self.blocks.get(index)
         if block is None:
             return None
@@ -249,24 +250,24 @@ class _Stream:
             return
         block["input"] = _arguments(self.fragments.get(index, []))
 
-    def _end(self, event: dict) -> None:
+    def _end(self, event: Json) -> None:
         self.stop_reason = event.get("delta", {}).get("stop_reason") or ""
         self.usage = replace(self.usage, output=event.get("usage", {}).get("output_tokens", 0))
 
 
-def _payload(line: str) -> dict:
+def _payload(line: str) -> Json:
     try:
         return json.loads(line)
     except json.JSONDecodeError as error:
         raise LlmError.protocol(f"unparsable event: {error}") from error
 
 
-def _detail(event: dict) -> str:
+def _detail(event: Json) -> str:
     error = event.get("error", {})
     return error.get("message") or error.get("type") or "unspecified stream error"
 
 
-def _arguments(fragments: list[str]) -> dict:
+def _arguments(fragments: list[str]) -> Json:
     payload = "".join(fragments).strip()
     if not payload:
         return {}
@@ -279,7 +280,7 @@ def _arguments(fragments: list[str]) -> dict:
     return args
 
 
-def _replayable(block: dict) -> bool:
+def _replayable(block: Json) -> bool:
     """The API rejects an unsigned thinking block (a stream cut before its signature) and an empty text block."""
     if block["type"] == "thinking":
         return bool(block["signature"])
@@ -288,7 +289,7 @@ def _replayable(block: dict) -> bool:
     return True
 
 
-def _parts(content: list[dict]) -> tuple[Part, ...]:
+def _parts(content: list[Json]) -> tuple[Part, ...]:
     parts: list[Part] = []
     for block in content:
         kind = block["type"]

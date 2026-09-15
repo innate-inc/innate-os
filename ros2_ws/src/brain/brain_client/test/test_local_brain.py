@@ -493,7 +493,7 @@ from types import SimpleNamespace  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
-from brain_client.llm.routing import Backend, LlmRoute  # noqa: E402
+from brain_client.llm import Backend, Llm  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
 
 
@@ -544,7 +544,7 @@ def agent_factory(monkeypatch):
             roster=SimpleNamespace(active_skill_ids=lambda: []),
             chat=chat,
             gaze=SimpleNamespace(pause=lambda: None),
-            route=LlmRoute("replay:m", Replay([reply(Text("ok"))]), Backend.DIRECT),
+            llm=Llm("replay:m", Replay([reply(Text("ok"))]), Backend.DIRECT),
             trace=trace,
             on_thinking_changed=on_thinking_changed,
         )

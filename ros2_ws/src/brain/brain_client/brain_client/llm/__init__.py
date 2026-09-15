@@ -2,12 +2,14 @@
 # Copyright (c) 2026 Innate Inc
 """One small provider library for the brain: four pure adapters, one Http mover, frozen values.
 
-Callers compose policy (:mod:`~brain_client.llm.policy`) into a frozen
-:class:`Request`, a :class:`Provider` runs the one I/O loop, and adapters only
-translate. Tests plug a :class:`~brain_client.llm.replay.Replay` in at the
-same seam.
+:func:`configure` turns a ``vendor:name`` setting and the keys at hand into an
+:class:`Llm`; callers compose policy (:mod:`~brain_client.llm.policy`) into a
+frozen :class:`Request`, a :class:`Provider` runs the one I/O loop, and
+adapters only translate. Tests plug a :class:`~brain_client.llm.replay.Replay`
+in at the same seam.
 """
 
+from brain_client.llm.configure import Backend, Llm, Vendor, configure
 from brain_client.llm.provider import Pinned, Provider
 from brain_client.llm.types import (
     Audio,
@@ -15,6 +17,7 @@ from brain_client.llm.types import (
     Event,
     Finish,
     Image,
+    Json,
     LlmError,
     Message,
     Part,
@@ -35,10 +38,13 @@ from brain_client.llm.types import (
 
 __all__ = [
     "Audio",
+    "Backend",
     "Capabilities",
     "Event",
     "Finish",
     "Image",
+    "Json",
+    "Llm",
     "LlmError",
     "Message",
     "Part",
@@ -56,5 +62,7 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "Usage",
+    "Vendor",
     "Wire",
+    "configure",
 ]

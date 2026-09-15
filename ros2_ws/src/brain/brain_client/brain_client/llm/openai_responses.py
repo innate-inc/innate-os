@@ -19,6 +19,7 @@ from brain_client.llm.types import (
     Event,
     Finish,
     Image,
+    Json,
     LlmError,
     Message,
     Part,
@@ -55,9 +56,9 @@ class OpenAIResponsesAdapter:
         thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
     )
 
-    def body(self, request: Request, model: str) -> dict:
+    def body(self, request: Request, model: str) -> Json:
         # store=false is what makes encrypted reasoning replayable: a stored response keeps it server-side instead.
-        body: dict = {
+        body: Json = {
             "model": model,
             "stream": True,
             "store": False,
@@ -89,7 +90,7 @@ class OpenAIResponsesAdapter:
         return body  # request.temperature is dropped here: the reasoning models on this wire reject it
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]:
-        items: list[dict] = []
+        items: list[Json] = []
         parts: list[Part] = []
         refused = False
         for line in lines:
@@ -113,8 +114,8 @@ class OpenAIResponsesAdapter:
                 raise LlmError.protocol(_detail(payload))
         raise LlmError.protocol("stream ended before response.completed")
 
-    def _reasoning(self, request: Request) -> dict:
-        reasoning: dict = {}
+    def _reasoning(self, request: Request) -> Json:
+        reasoning: Json = {}
         effort = self.caps.clamp(request.thinking)
         if effort != Thinking.DEFAULT:
             reasoning["effort"] = effort.value
@@ -122,7 +123,7 @@ class OpenAIResponsesAdapter:
             reasoning["summary"] = "auto"
         return reasoning
 
-    def _items(self, message: Message) -> list[dict]:
+    def _items(self, message: Message) -> list[Json]:
         if message.role == Role.USER:
             return [{"type": "message", "role": "user", "content": _user_content(message)}]
         if message.role == Role.TOOL:
@@ -139,8 +140,8 @@ class OpenAIResponsesAdapter:
 ADAPTER = OpenAIResponsesAdapter()
 
 
-def _user_content(message: Message) -> list[dict]:
-    content: list[dict] = []
+def _user_content(message: Message) -> list[Json]:
+    content: list[Json] = []
     for part in message.parts:
         if isinstance(part, Text):
             content.append({"type": "input_text", "text": part.text})
@@ -149,9 +150,9 @@ def _user_content(message: Message) -> list[dict]:
     return content
 
 
-def _assistant_items(message: Message) -> list[dict]:
+def _assistant_items(message: Message) -> list[Json]:
     """A turn with no signature of ours: its text and its calls, never its thought prose."""
-    items: list[dict] = []
+    items: list[Json] = []
     text = message.text()
     if text:
         items.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
@@ -166,7 +167,7 @@ def _data_url(jpeg: bytes) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode()}"
 
 
-def _part(item: dict) -> Part | None:
+def _part(item: Json) -> Part | None:
     kind = item.get("type", "")
     if kind == "message":
         text = "".join(b.get("text", "") for b in item.get("content") or [] if b.get("type") == "output_text")
@@ -179,11 +180,11 @@ def _part(item: dict) -> Part | None:
     return None
 
 
-def _has_refusal(item: dict) -> bool:
+def _has_refusal(item: Json) -> bool:
     return any(block.get("type") == "refusal" for block in item.get("content") or [])
 
 
-def _reply(response: dict, items: list[dict], parts: list[Part], refused: bool) -> Reply:
+def _reply(response: Json, items: list[Json], parts: list[Part], refused: bool) -> Reply:
     reason = (response.get("incomplete_details") or {}).get("reason") or ""
     message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_RESPONSES, {"items": items}))
     return Reply(message, _usage(response.get("usage") or {}), _finish(parts, reason, refused))
@@ -199,7 +200,7 @@ def _finish(parts: list[Part], reason: str, refused: bool) -> Finish:
     return Finish.STOP
 
 
-def _usage(usage: dict) -> Usage:
+def _usage(usage: Json) -> Usage:
     return Usage(
         prompt=usage.get("input_tokens") or 0,
         cached=(usage.get("input_tokens_details") or {}).get("cached_tokens") or 0,
@@ -208,7 +209,7 @@ def _usage(usage: dict) -> Usage:
     )
 
 
-def _args(arguments: str) -> dict:
+def _args(arguments: str) -> Json:
     if not arguments.strip():
         return {}
     try:
@@ -217,12 +218,12 @@ def _args(arguments: str) -> dict:
         raise LlmError.protocol(f"tool call arguments are not JSON: {error}") from error
 
 
-def _detail(payload: dict) -> str:
+def _detail(payload: Json) -> str:
     error = payload.get("error") or (payload.get("response") or {}).get("error") or {}
     return error.get("message") or payload.get("message") or "the response stream reported an error"
 
 
-def _parse(line: str) -> dict:
+def _parse(line: str) -> Json:
     try:
         return json.loads(line)
     except json.JSONDecodeError as error:

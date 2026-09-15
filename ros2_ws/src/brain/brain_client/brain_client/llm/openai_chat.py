@@ -21,6 +21,7 @@ from brain_client.llm.types import (
     Event,
     Finish,
     Image,
+    Json,
     LlmError,
     Message,
     Part,
@@ -59,10 +60,10 @@ class OpenAIChatAdapter:
         thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
     )
 
-    def body(self, request: Request, model: str) -> dict:
+    def body(self, request: Request, model: str) -> Json:
         messages = [{"role": "system", "content": request.system}] if request.system else []
         messages += [m for message in request.messages for m in self._messages(message)]
-        body: dict = {
+        body: Json = {
             "model": model,
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -99,7 +100,7 @@ class OpenAIChatAdapter:
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]:
         text: list[str] = []
-        calls: dict[int, dict] = {}
+        calls: dict[int, Json] = {}
         usage = Usage()
         reason = ""
         chunks = 0
@@ -125,7 +126,7 @@ class OpenAIChatAdapter:
             raise LlmError.protocol("stream ended without a completion chunk")
         yield _reply(text, calls, usage, reason)
 
-    def _messages(self, message: Message) -> list[dict]:
+    def _messages(self, message: Message) -> list[Json]:
         if message.role == Role.USER:
             return [{"role": "user", "content": _user_content(message)}]
         if message.role == Role.TOOL:
@@ -142,8 +143,8 @@ class OpenAIChatAdapter:
 ADAPTER = OpenAIChatAdapter()
 
 
-def _user_content(message: Message) -> list[dict]:
-    content: list[dict] = []
+def _user_content(message: Message) -> list[Json]:
+    content: list[Json] = []
     for part in message.parts:
         if isinstance(part, Text):
             content.append({"type": "text", "text": part.text})
@@ -156,16 +157,16 @@ def _user_content(message: Message) -> list[dict]:
     return content
 
 
-def _assistant_message(message: Message) -> dict:
+def _assistant_message(message: Message) -> Json:
     """A turn we did not produce: its text and its calls, never its thought prose."""
-    assistant: dict = {"role": "assistant", "content": message.text() or None}
+    assistant: Json = {"role": "assistant", "content": message.text() or None}
     calls = message.calls()
     if calls:
         assistant["tool_calls"] = [_wire_call(call.id, call.name, json.dumps(call.args)) for call in calls]
     return assistant
 
 
-def _wire_call(call_id: str, name: str, arguments: str) -> dict:
+def _wire_call(call_id: str, name: str, arguments: str) -> Json:
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
@@ -173,7 +174,7 @@ def _data_url(jpeg: bytes) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode()}"
 
 
-def _accumulate(calls: dict[int, dict], call: dict) -> None:
+def _accumulate(calls: dict[int, Json], call: Json) -> None:
     """Fold one streamed fragment into its call; ``arguments`` arrives split across chunks."""
     slot = calls.setdefault(call.get("index", 0), {"id": "", "name": "", "arguments": ""})
     function = call.get("function") or {}
@@ -184,11 +185,11 @@ def _accumulate(calls: dict[int, dict], call: dict) -> None:
     slot["arguments"] += function.get("arguments") or ""
 
 
-def _reply(text: list[str], calls: dict[int, dict], usage: Usage, reason: str) -> Reply:
+def _reply(text: list[str], calls: dict[int, Json], usage: Usage, reason: str) -> Reply:
     ordered = [calls[index] for index in sorted(calls)]
     parts: list[Part] = [Text("".join(text))] if text else []
     parts += [ToolCall(call["id"], call["name"], _args(call["arguments"])) for call in ordered]
-    assistant: dict = {"role": "assistant", "content": "".join(text) or None}
+    assistant: Json = {"role": "assistant", "content": "".join(text) or None}
     if ordered:
         assistant["tool_calls"] = [_wire_call(c["id"], c["name"], c["arguments"]) for c in ordered]
     message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_CHAT, assistant))
@@ -201,7 +202,7 @@ def _finish(has_calls: bool, reason: str) -> Finish:
     return Finish.TOOL_CALLS if has_calls and finish == Finish.STOP else finish
 
 
-def _usage(usage: dict) -> Usage:
+def _usage(usage: Json) -> Usage:
     return Usage(
         prompt=usage.get("prompt_tokens") or 0,
         cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
@@ -210,7 +211,7 @@ def _usage(usage: dict) -> Usage:
     )
 
 
-def _args(arguments: str) -> dict:
+def _args(arguments: str) -> Json:
     if not arguments.strip():
         return {}
     try:
@@ -219,14 +220,14 @@ def _args(arguments: str) -> dict:
         raise LlmError.protocol(f"tool call arguments are not JSON: {error}") from error
 
 
-def _detail(payload: dict) -> str:
+def _detail(payload: Json) -> str:
     error = payload.get("error")
     if isinstance(error, dict):
         return error.get("message") or "the completion stream reported an error"
     return str(error)
 
 
-def _parse(line: str) -> dict:
+def _parse(line: str) -> Json:
     try:
         return json.loads(line)
     except json.JSONDecodeError as error:

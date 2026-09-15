@@ -14,8 +14,7 @@ import base64
 import os
 from collections.abc import Sequence
 
-from brain_client.llm import Image, Message, Provider, Request, Role, Text
-from brain_client.llm.routing import pick
+from brain_client.llm import Image, Message, Provider, Request, Role, Text, configure
 from brain_client.skills.types import cancellable_sleep
 from innate_proxy import ProxyClient
 
@@ -25,7 +24,7 @@ _TIMEOUT_SECS = 60.0
 
 def make_client() -> Provider | None:
     """The model, or None if no route to it is configured."""
-    return pick(MODEL, ProxyClient()).provider
+    return configure(MODEL, ProxyClient()).provider
 
 
 def ask_image(

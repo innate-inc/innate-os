@@ -24,6 +24,7 @@ from brain_client.llm.types import (
     Event,
     Finish,
     Image,
+    Json,
     LlmError,
     Message,
     Part,
@@ -91,8 +92,8 @@ class GeminiAdapter:
         thinking_rungs=frozenset({Thinking.MINIMAL, Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH}),
     )
 
-    def body(self, request: Request, model: str) -> dict:
-        body: dict = {}
+    def body(self, request: Request, model: str) -> Json:
+        body: Json = {}
         if request.pinned:
             body["cachedContent"] = request.pinned  # the cache holds the system prompt and the tools
         elif request.system:
@@ -106,8 +107,8 @@ class GeminiAdapter:
         return body
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]:
-        raw: list[dict] = []
-        usage: dict = {}
+        raw: list[Json] = []
+        usage: Json = {}
         finish_reason = ""
         block_reason = ""
         for payload in lines:
@@ -138,7 +139,7 @@ class GeminiProvider(Provider):
     """The one wire with words for an explicit cache: contents pinned server-side, then named per request."""
 
     def pin(self, system: str, messages: Sequence[Message], *, ttl_s: int, display_name: str = "") -> str:
-        body: dict = {"model": f"models/{self.model}"}
+        body: Json = {"model": f"models/{self.model}"}
         if system:
             body["systemInstruction"] = _instruction(system)
         body["contents"] = [_content(message) for message in messages]
@@ -154,11 +155,11 @@ class GeminiProvider(Provider):
         self.http.delete(f"/v1beta/{handle}")
 
 
-def _instruction(system: str) -> dict:
+def _instruction(system: str) -> Json:
     return {"parts": [{"text": system}]}
 
 
-def _content(message: Message) -> dict:
+def _content(message: Message) -> Json:
     if message.role == Role.ASSISTANT:
         return _model_turn(message)
     if message.role == Role.TOOL:
@@ -168,17 +169,17 @@ def _content(message: Message) -> dict:
     return {"role": "user", "parts": [part for part in user if part is not None]}
 
 
-def _model_turn(message: Message) -> dict:
+def _model_turn(message: Message) -> Json:
     if message.native is not None and message.native[0] == Wire.GEMINI:
         return message.native[1]
-    parts: list[dict] = []
+    parts: list[Json] = []
     signed = False
     for part in message.parts:
         if isinstance(part, Text):
             parts.append({"text": part.text})
         elif isinstance(part, ToolCall):
             # Only the turn's first call is validated, so only it needs the sentinel.
-            encoded: dict = {"functionCall": _function_call(part)}
+            encoded: Json = {"functionCall": _function_call(part)}
             if not signed:
                 encoded["thoughtSignature"] = _SKIP_SIGNATURE
                 signed = True
@@ -186,7 +187,7 @@ def _model_turn(message: Message) -> dict:
     return {"role": "model", "parts": parts or [{"text": ""}]}  # a turn with no parts is rejected
 
 
-def _user_part(part: Part) -> dict | None:
+def _user_part(part: Part) -> Json | None:
     if isinstance(part, Text):
         return {"text": part.text}
     if isinstance(part, Image):
@@ -196,25 +197,25 @@ def _user_part(part: Part) -> dict | None:
     return None
 
 
-def _inline(data: bytes, mime_type: str) -> dict:
+def _inline(data: bytes, mime_type: str) -> Json:
     return {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(data).decode()}}
 
 
-def _function_call(call: ToolCall) -> dict:
+def _function_call(call: ToolCall) -> Json:
     encoded = {"name": call.name, "args": call.args}
     if call.id:
         encoded["id"] = call.id
     return encoded
 
 
-def _function_response(result: ToolResult) -> dict:
-    response: dict = {"name": result.name, "response": {"outcome": result.text}}
+def _function_response(result: ToolResult) -> Json:
+    response: Json = {"name": result.name, "response": {"outcome": result.text}}
     if result.call_id:
         response["id"] = result.call_id
     return {"functionResponse": response}
 
 
-def _declaration(tool: Tool) -> dict:
+def _declaration(tool: Tool) -> Json:
     return {
         "name": tool.name,
         "description": tool.description,
@@ -222,9 +223,9 @@ def _declaration(tool: Tool) -> dict:
     }
 
 
-def _generation_config(request: Request, thinking: Thinking) -> dict:
-    config: dict = {}
-    thinking_config: dict = {}
+def _generation_config(request: Request, thinking: Thinking) -> Json:
+    config: Json = {}
+    thinking_config: Json = {}
     if request.thought_summaries:
         thinking_config["includeThoughts"] = True
     if thinking != Thinking.DEFAULT:
@@ -241,9 +242,9 @@ def _generation_config(request: Request, thinking: Thinking) -> dict:
     return config
 
 
-def _pruned(schema: dict, dropped: frozenset[str]) -> dict:
+def _pruned(schema: Json, dropped: frozenset[str]) -> Json:
     """``schema`` without the ``dropped`` keywords, through every nested schema position."""
-    kept: dict = {}
+    kept: Json = {}
     for key, value in schema.items():
         if key in dropped:
             continue
@@ -258,7 +259,7 @@ def _pruned(schema: dict, dropped: frozenset[str]) -> dict:
     return kept
 
 
-def _chunk(payload: str) -> dict:
+def _chunk(payload: str) -> Json:
     try:
         chunk = json.loads(payload)
     except json.JSONDecodeError as error:
@@ -271,7 +272,7 @@ def _chunk(payload: str) -> dict:
     return chunk
 
 
-def _reply_parts(raw: list[dict]) -> list[Part]:
+def _reply_parts(raw: list[Json]) -> list[Part]:
     parts: list[Part] = []
     for part in raw:
         call = part.get("functionCall")
@@ -292,7 +293,7 @@ def _reply_parts(raw: list[dict]) -> list[Part]:
     return parts
 
 
-def _usage(usage: dict) -> Usage:
+def _usage(usage: Json) -> Usage:
     return Usage(
         prompt=usage.get("promptTokenCount", 0),
         cached=usage.get("cachedContentTokenCount", 0),

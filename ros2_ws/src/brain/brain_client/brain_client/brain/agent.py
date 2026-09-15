@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 
     from brain_client.core.config import BrainConfig
     from brain_client.core.state import BrainState, RunningSkill
-    from brain_client.llm.routing import LlmRoute
+    from brain_client.llm import Llm
     from brain_client.perception.battery import BatteryMonitor
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController
@@ -91,7 +91,7 @@ class BrainAgent:
         roster: SkillRoster,
         chat: ChatManager,
         gaze: GazeController,
-        route: LlmRoute,
+        llm: Llm,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
@@ -119,16 +119,16 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
-        self.backend = route.backend
+        self.backend = llm.backend
         self._context = (
             ChatContext(
-                route.provider,
+                llm.provider,
                 thinking=Thinking(config.llm_thinking),  # a settings typo fails here, at boot, not on the first turn
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
             )
-            if route.provider is not None
+            if llm.provider is not None
             else None
         )
 

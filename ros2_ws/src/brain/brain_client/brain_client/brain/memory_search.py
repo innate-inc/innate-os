@@ -32,7 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from brain_client.llm import Image, LlmError, Message, Pinned, Provider, Reply, Request, Role, Text, Thinking
+from brain_client.common.enums import StrEnum
+from brain_client.llm import Image, Json, LlmError, Message, Pinned, Provider, Reply, Request, Role, Text, Thinking
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,6 +85,15 @@ _RESPONSE_SCHEMA = {
 }
 
 
+class CacheState(StrEnum):
+    """How the next search will run (published to the webapp's map, so the values are wire-visible)."""
+
+    WARM = "warm"  # a cache handle serves, fresh or with a delta
+    COLD = "cold"  # enough frames to cache, none built yet
+    INLINE = "inline"  # under the cache floor: answered from frames, still quick
+    UNSUPPORTED = "unsupported"  # no Pinned provider, or the backend has no cache endpoint
+
+
 @dataclass(frozen=True)
 class _CacheHandle:
     name: str  # "cachedContents/…"
@@ -127,20 +137,17 @@ class MemorySearch:
         self._warming = threading.Lock()  # at most one cache rebuild
         # UI mirror, set by the composition root: every finished search's verdict
         # as a JSON-able dict (query, found, pose, explanation, latency, cached).
-        self.on_result: Callable[[dict], None] | None = None
+        self.on_result: Callable[[Json], None] | None = None
 
-    def cache_state(self) -> str:
-        """How the next search will run: warm | cold | inline | unsupported.
-
-        A stale-but-usable cache reports warm — the search rides it with a
-        delta, so recall is still instant (rebuilds are warm()'s business).
-        """
+    def cache_state(self) -> CacheState:
+        """A stale-but-usable cache reports WARM — the search rides it with a
+        delta, so recall is still instant (rebuilds are warm()'s business)."""
         if self._cache_unsupported:
-            return "unsupported"
+            return CacheState.UNSUPPORTED
         snapshot = self._store.snapshot()
         if len(snapshot.memories) < _MIN_FRAMES_TO_CACHE:
-            return "inline"  # under the cache floor — always answered from frames, still quick
-        return "warm" if self._usable_cache(snapshot) is not None else "cold"
+            return CacheState.INLINE
+        return CacheState.WARM if self._usable_cache(snapshot) is not None else CacheState.COLD
 
     def search(self, query: str) -> SearchVerdict:
         """Blocking: ask the model which remembered frame serves the query.
@@ -385,7 +392,7 @@ class MemorySearch:
         """Mirror a verdict to the UI topic; best-effort — it must never break a search."""
         if self.on_result is None:
             return
-        payload: dict = {"query": verdict.query, "found": verdict.found, "stamp": time.time()}
+        payload: Json = {"query": verdict.query, "found": verdict.found, "stamp": time.time()}
         if verdict.error:
             payload["error"] = verdict.error
         else:

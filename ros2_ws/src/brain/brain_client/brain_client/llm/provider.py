@@ -13,7 +13,18 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from brain_client.llm.types import Capabilities, Event, LlmError, Message, Reply, Request, TextDelta, ThoughtDelta, Wire
+from brain_client.llm.types import (
+    Capabilities,
+    Event,
+    Json,
+    LlmError,
+    Message,
+    Reply,
+    Request,
+    TextDelta,
+    ThoughtDelta,
+    Wire,
+)
 
 if TYPE_CHECKING:
     from brain_client.llm.http import Http
@@ -31,7 +42,7 @@ class Adapter(Protocol):
     @property
     def caps(self) -> Capabilities: ...
 
-    def body(self, request: Request, model: str) -> dict: ...
+    def body(self, request: Request, model: str) -> Json: ...
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]: ...
 
@@ -63,7 +74,7 @@ class Provider:
     adapter: Adapter
     http: Http
     model: str
-    extra_body: dict = field(default_factory=dict)  # merged last: a server's own knobs, never an adapter's job
+    extra_body: Json = field(default_factory=dict)  # merged last: a server's own knobs, never an adapter's job
 
     def stream(self, request: Request, *, timeout: float | None = None) -> Iterator[Event]:
         self.adapter.caps.check(request)

@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from brain_client.common.enums import StrEnum
+
+Json = dict[str, Any]
+"""A JSON object as a vendor sends or takes it: a wire body, a schema, a call's arguments."""
 
 
 class Role(StrEnum):
@@ -78,7 +82,7 @@ class Thought:
 class ToolCall:
     id: str
     name: str
-    args: dict
+    args: Json
 
 
 @dataclass(frozen=True)
@@ -96,7 +100,7 @@ class Message:
     role: Role
     parts: tuple[Part, ...]
     pin: bool = False  # "cache up to here": a hint adapters translate or ignore
-    native: tuple[Wire, dict] | None = None  # the vendor's own encoding of this turn, replayed on its wire only
+    native: tuple[Wire, Json] | None = None  # the vendor's own encoding of this turn, replayed on its wire only
 
     def texts(self) -> list[str]:
         return [part.text for part in self.parts if isinstance(part, Text)]
@@ -118,7 +122,7 @@ class Message:
 class Tool:
     name: str
     description: str
-    parameters: dict  # JSON Schema
+    parameters: Json  # JSON Schema
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,7 @@ class Request:
     tools: tuple[Tool, ...] = ()
     thinking: Thinking = Thinking.DEFAULT
     thought_summaries: bool = False  # stream the vendor's thought summaries back (where it has them)
-    json_schema: dict | None = None
+    json_schema: Json | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     pinned: str | None = None  # a handle from Pinned.pin: the pinned system and turns are not re-sent

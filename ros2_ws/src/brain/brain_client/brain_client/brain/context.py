@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from brain_client.llm import (
     Image,
+    Json,
     Message,
     Provider,
     Reply,
@@ -82,7 +83,7 @@ class ChatContext:
         # Observability tap: called with the request as the monitor renders it
         # (see :func:`trace_body`) just before it goes on the wire, from
         # generate's thread.
-        self.on_request: Callable[[dict], None] | None = None
+        self.on_request: Callable[[Json], None] | None = None
         # Token counts of the newest response — prompt/cached/output — surfaced
         # on the trace snapshot (cache-hit observability).
         self.last_usage: dict[str, int] = {}
@@ -226,7 +227,7 @@ def decision_from(message: Message) -> Decision:
     return decision
 
 
-def trace_body(request: Request) -> dict:
+def trace_body(request: Request) -> Json:
     """The request in the shape the webapp's brain monitor renders — a
     ``role``/``parts`` transcript with inline images, calls and results. It is
     the monitor's dialect, not any vendor's wire."""
@@ -244,12 +245,12 @@ def trace_body(request: Request) -> dict:
     }
 
 
-def _trace_content(message: Message) -> dict:
+def _trace_content(message: Message) -> Json:
     role = "model" if message.role == Role.ASSISTANT else "user"
     return {"role": role, "parts": [_trace_part(part) for part in message.parts]}
 
 
-def _trace_part(part: Part) -> dict:
+def _trace_part(part: Part) -> Json:
     if isinstance(part, Text):
         return {"text": part.text}
     if isinstance(part, Thought):

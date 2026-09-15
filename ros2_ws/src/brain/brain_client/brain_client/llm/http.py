@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 
 import httpx
 
-from brain_client.llm.types import LlmError
+from brain_client.llm.types import Json, LlmError
 
 _DETAIL_BYTES = 200
 
@@ -29,13 +29,13 @@ class Http:
             base_url=base_url, headers=dict(headers or {}), auth=auth, timeout=timeout, follow_redirects=True
         )
 
-    def post_json(self, path: str, body: dict, *, timeout: float | None = None) -> dict:
+    def post_json(self, path: str, body: Json, *, timeout: float | None = None) -> Json:
         return self._request("POST", path, body, timeout)
 
-    def delete(self, path: str, *, timeout: float | None = None) -> dict:
+    def delete(self, path: str, *, timeout: float | None = None) -> Json:
         return self._request("DELETE", path, None, timeout)
 
-    def sse(self, path: str, body: dict, *, timeout: float | None = None) -> Iterator[str]:
+    def sse(self, path: str, body: Json, *, timeout: float | None = None) -> Iterator[str]:
         """The ``data:`` payloads of a server-sent event stream, ending at ``[DONE]`` or EOF.
 
         Parsed per ``data:`` line, never per blank line: the Innate proxy's
@@ -59,7 +59,7 @@ class Http:
         except httpx.HTTPError as error:
             raise LlmError.transport(f"{type(error).__name__}: {error}") from error
 
-    def _request(self, method: str, path: str, body: dict | None, timeout: float | None) -> dict:
+    def _request(self, method: str, path: str, body: Json | None, timeout: float | None) -> Json:
         deadline = httpx.USE_CLIENT_DEFAULT if timeout is None else timeout
         try:
             response = self._client.request(method, path, json=body, timeout=deadline)

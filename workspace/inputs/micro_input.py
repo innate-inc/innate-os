@@ -55,7 +55,7 @@ from brain_client.inputs.batch_stt import (
 )
 from brain_client.inputs.types import InputDevice
 from brain_client.inputs.vad import silero_detector
-from brain_client.llm.routing import pick
+from brain_client.llm import configure
 from brain_client.perception.identity import IdentityMonitor
 
 DEFAULT_SAMPLE_RATE = 24_000
@@ -428,11 +428,11 @@ class MicroInput(InputDevice):
         """Start a batch-transcription session on Gemini. Returns the model id."""
         model = self.proxy.config.get("gemini_stt_model", "gemini-3.6-flash")
 
-        route = pick(f"google:{model}", self.proxy)
-        if route.provider is None:
+        llm = configure(f"google:{model}", self.proxy)
+        if llm.provider is None:
             raise RuntimeError("no Gemini access: proxy unavailable and GEMINI_API_KEY unset")
 
-        self._start_batch_session(gemini_transcriber(route.provider, self._stt_language(), self._stt_keyterms), model)
+        self._start_batch_session(gemini_transcriber(llm.provider, self._stt_language(), self._stt_keyterms), model)
         return model
 
     def _start_batch_session(self, transcriber: Transcriber, model: str) -> None:
