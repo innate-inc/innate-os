@@ -2,8 +2,9 @@
 
 Control a dedicated simulated MARS arm with a webcam. The browser renders the
 repository's MARS URDF and measured joints from `VirtualMars`, the same MuJoCo
-core used by the main simulator. This workspace needs no ROS or Docker and
-cannot send commands to a physical robot.
+core used by the main simulator. This workspace cannot send commands to a
+physical robot. The direct fingertip controller uses Innate KDL locally or in an
+isolated Innate Docker runtime; legacy profiles do not need that runtime.
 
 This is the bench where the hand-to-claw mapping is developed and calibrated.
 The mapping it produced ships in the robot's own webapp as **camera arm control**
@@ -153,6 +154,19 @@ the original coefficients remain in the profile. Replay the candidate on an
 isolated server before promoting it to the active profile. The two-second takes
 do not establish absolute hand position: use a comfortable live reference and
 Recenter after changing seating position or distance from the camera.
+
+### Additional rotation and grasp matches
+
+Open `/match.html?focus=refine` for 16 more matches: small and larger yaw in
+both directions, roll, downward pitch, combined yaw/pitch, and a floor grasp
+followed by a lift. The repeated combined pose and neutral pose are reserved
+for consistency checks. Keep the camera and your comfortable starting position
+the same throughout the exercise.
+
+Recordings use a separate browser session and `study-data/refine/SESSION_UUID/`.
+The earlier catalogues and active calibration stay unchanged. Complete the
+exercise, then compare the new recordings with the current calibration before
+fitting or applying a refinement.
 
 ## Default controls (without a fitted profile)
 
@@ -324,3 +338,94 @@ robot pose; use port 8841 to keep testing separate from the operator's studio.
 The operator's live webcam and closed-hand gestures remain a usability check;
 the saved dataset does not contain a dedicated thumb/index opening-and-closing recording.
 The synthetic rotation checks do not establish live orientation accuracy.
+
+### Pinch-centered personal control
+
+After completing the refinement exercise, produce and evaluate a candidate:
+
+```sh
+node calibrate_pinch.mjs BASE_PROFILE study-data/refine/SESSION artifacts/pinch-mapping/candidate.json
+node test/pinch-replay.mjs BASE_PROFILE artifacts/pinch-mapping/candidate.json study-data/refine/SESSION
+../.venv/bin/python server.py --port 8841 --profile artifacts/pinch-mapping/candidate.json
+# In another terminal, with the test server running:
+node test/pinch-browser.mjs study-data/refine/SESSION
+```
+
+The fitter reads the original, floor, and refinement recordings locally. It fits
+one sample per pose (the median landmark features), chooses regularization using
+leave-one-pose-out validation, and reserves every repeat pose for evaluation.
+It writes a candidate and report; it does not replace `study-data/active-profile.json`.
+Keep a copy of that file before activating a candidate and restarting the studio.
+
+The visible thumb–index midpoint controls sideways/vertical position. Palm scale
+controls reach, independently. The finger gap defines the jaw direction. The
+legacy pose-fitted mode uses the index's proximal segment for approach. During closing, a
+continuous grasp frame prevents finger curl from steering the claw away. When
+fingertips become observable again, that frame rejoins the absolute observation,
+even if the user reopens only partly. Grip uses palm-normalized 3D separation,
+with image contact overriding unreliable depth during an observed pinch.
+
+The simulator controls the midpoint of the actual fingertip pads, compensates for
+their changing offset as the jaws open, and cancels the gripper setpoint on pause
+or tracking timeout. Existing profiles retain their previous controller. MARS
+still has five arm joints: yaw swivels the arm about its base, so arbitrary
+six-axis rotation at a fixed point is not physically available.
+
+`npm test` includes closure cycles, partial reopening, rigid turns, reanchoring,
+and invalid tracking. `python -m unittest test_pinch_engine` checks measured pad
+positions and pause/watchdog behavior through MuJoCo physics. Browser replay uses
+saved held poses and interpolated test transitions, not a fabricated recording of
+human movement. Accuracy on a few reserved poses does not establish subjective
+intuitiveness or performance across all users and camera views.
+
+### Fingertip pose control with Innate IK
+
+Profiles with `pinch.rotation: "direct"` and `workspace.direct_rotation: true`
+use Innate OS's `mars_arm.kinematics.ArmKinematics`, the same URDF parser, KDL
+LMA solver, tolerances, and current/zero seed selection used by the ROS IK node.
+The old analytic routines remain only for legacy profiles and the historical
+study catalogue. They do not solve live direct-control poses.
+
+The thumb–index midpoint supplies position; their line and base-to-tip approach
+supply orientation. The rotation delta is `F_current * inverse(F_reference)` in
+fixed camera axes. A screen twist therefore becomes roll regardless of the
+initial pointing direction. Reversing that multiplication expressed the twist
+in the hand's local frame and could turn it into yaw. Touching fingertips still
+supply the visible midpoint; palm transport supplies orientation until their
+line can be observed again. Grip keeps its existing aperture calibration.
+
+On camera calibration or **Recenter**, the starting roll aligns the claw's
+actual closing axis (URDF local Y) with the visible thumb–index line, projected
+perpendicular to the claw's approach. This removes a quarter-turn starting
+offset without changing pitch, yaw, or the grasp midpoint. Separate the two
+fingertips slightly for calibration. Calibration waits if the line is collapsed
+or end-on; it never silently accepts an unobservable roll. Pause/resume and
+tracking recovery keep their previous hold behavior;
+they do not apply the alignment again. Joint limits still apply, and the roll
+does not wrap to the opposite stop during motion.
+
+Position and orientation are separate IK inputs. No yaw term swivels the
+position target. KDL resolves the reachable orientation while preserving the
+grasp point, and FK compensates the changing offset from `ee_link` to the pads.
+MARS has five arm joints, so some orientations cannot be reached at a fixed
+point; the UI reports those limits. Independent yaw no longer sweeps the arm
+sideways to manufacture the requested angle.
+
+IK runs outside the simulation loop with one request in flight. Pause or
+tracking loss invalidates pending results. A stalled worker holds the arm;
+watchdogs, ownership, joint speed limits, and real MuJoCo contacts remain active.
+Old browser code is rejected with a refresh message before control starts.
+
+On the robot, the worker uses installed PyKDL. On macOS it uses the existing
+Innate Docker image, or `INNATE_IK_IMAGE` if specified. The dedicated worker has
+no network, ROS node, or actuator connection; the repository mounts read-only.
+Start the Innate simulator runtime before this studio if PyKDL is unavailable.
+
+`npm test` includes raw camera-axis twists, mixed rotations, finger contact,
+vertical pitch, and midpoint stability. `python -m unittest test_direct_rotation_engine`
+checks actual KDL/MuJoCo poses, impossible yaw without lateral travel, pause,
+late results, worker failure, stale browser rejection, and floor grasps.
+From a fresh direct-profile server on 8841, `node test/direct-rotation-browser.mjs`
+checks the actual UI/transport/physics path using known synthetic landmarks.
+These checks establish the mapping and solver behavior; webcam estimation and
+live subjective feel remain separate from synthetic accuracy.

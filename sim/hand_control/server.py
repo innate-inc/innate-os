@@ -60,6 +60,12 @@ class ControlSession:
             raise ValueError("Expected a command object")
         op = message.get("op")
         if op == "begin":
+            if (
+                self.world.innate_ik
+                and message.get("mode") != "study"
+                and message.get("controller") != "innate-ik-camera-v1"
+            ):
+                raise ValueError("Refresh this studio to load the corrected hand controller")
             if self.owner is not None and self.owner is not client:
                 raise ValueError("Another tab is controlling this simulation")
             self.world.hold("ready")
@@ -148,13 +154,15 @@ async def main(port: int, study_dir: Path | None = None, profile_path: Path | No
     world = ArmWorld()
     poses = catalogue(world)
     floor_poses = catalogue(world, "floor")
+    refine_poses = catalogue(world, "refine")
     if profile:
         world = ArmWorld(profile["workspace"])
-    control = ControlSession(world, [*poses, *floor_poses])
+    control = ControlSession(world, [*poses, *floor_poses, *refine_poses])
     study_root = study_dir or ROOT / "study-data"
     studies = {
         "general": StudyStore(study_root, poses),
         "floor": StudyStore(Path(study_root) / "floor", floor_poses),
+        "refine": StudyStore(Path(study_root) / "refine", refine_poses),
     }
     study_lock = asyncio.Lock()
     clients = {}

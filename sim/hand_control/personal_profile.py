@@ -47,6 +47,8 @@ def load_profile(path: Path | str) -> dict[str, Any] | None:
         if not 0 <= closed < neutral < opened or not 0 < profile["grip"]["neutral"] < 1:
             raise ValueError("Invalid finger-gap calibration")
         workspace = profile["workspace"]
+        if (profile.get("pinch", {}).get("rotation") == "direct") != (workspace.get("direct_rotation") is True):
+            raise ValueError("Pinch rotation and simulator limits must agree")
         vector(workspace["center"], 3, 0.5)
         vector(workspace["span"], 3, 0.15)
         vector(workspace["angles"], 5, math.pi)
@@ -84,6 +86,31 @@ def load_profile(path: Path | str) -> dict[str, Any] | None:
                 raise ValueError("Invalid yaw calibration size")
             matrix(yaw["centers"], count, 5, 6)
             vector(yaw["coefficients"], count, 4)
+        if "pinch" in profile:
+            pinch = profile["pinch"]
+            if pinch.get("rotation") not in (None, "direct"):
+                raise ValueError("Invalid pinch rotation mode")
+            if pinch["version"] != 1 or workspace.get("pinch_point") is not True:
+                raise ValueError("Invalid pinch calibration version or grasp point")
+            if type(pinch["pose_count"]) is not int or not 1 <= pinch["pose_count"] <= 1024:
+                raise ValueError("Invalid pinch pose count")
+            for name, dimensions in (("orientation", 18), ("stable", 13)):
+                model = pinch[name]
+                vector([model["width"]], 1, 4)
+                if model["width"] < 0.1:
+                    raise ValueError("Invalid pinch model width")
+                count = len(model["centers"])
+                if not 1 <= count <= 64:
+                    raise ValueError("Invalid pinch calibration size")
+                matrix(model["centers"], count, dimensions, 3)
+                matrix(model["coefficients"], count, 3, 30)
+            vector(pinch["positionGain"], 3, 2)
+            if min(pinch["positionGain"]) <= 0:
+                raise ValueError("Invalid pinch position gain")
+            grip = pinch["grip"]
+            vector([grip["closed"], grip["open"], grip["visibleClosed"]], 3, 3)
+            if not 0 <= grip["closed"] < grip["open"] or not 0 < grip["visibleClosed"] < 1:
+                raise ValueError("Invalid pinch aperture calibration")
         return profile
     except (KeyError, TypeError) as error:
         raise ValueError("Incomplete personal calibration") from error

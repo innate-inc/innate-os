@@ -3,10 +3,12 @@
 import math
 import time
 from collections.abc import Sequence
+from itertools import product
 from typing import Any
 
 import mujoco
 import numpy as np
+from innate_ik import get_ik
 from mars_sim_driver.core import ASSETS_DIR, KP_JOINT, VirtualMars, joint2_min_target
 from mars_sim_driver.environments import Environment
 from mars_sim_driver.world import ARM_BACKLASH_RAD, BACKLASH_TANH_NM, STRUCT_STIFFNESS
@@ -41,7 +43,7 @@ def rotation_clearance(height: float) -> float:
 
 
 class ArmWorld:
-    def __init__(self, workspace: dict[str, Any] | None = None) -> None:
+    def __init__(self, workspace: dict[str, Any] | None = None, *, synchronous_ik: bool = False) -> None:
         self.sim = VirtualMars(environment=Environment.load("void", ASSETS_DIR))
         self.model, self.data = self.sim.model, self.sim.data
         self.names = [f"joint{i}" for i in range(1, 6)]
@@ -50,6 +52,14 @@ class ArmWorld:
         self.dadr = self.model.jnt_dofadr[ids]
         self.limits = self.model.jnt_range[ids].copy()
         self.ee = self.model.body("robot_ee_link").id
+        self.pinch_point = bool(workspace and workspace.get("pinch_point"))
+        self.direct_rotation = bool(workspace and workspace.get("direct_rotation"))
+        self.innate_ik = get_ik() if self.direct_rotation else None
+        self.ik_error = None
+        self.synchronous_ik = synchronous_ik
+        self.ik_pending = None
+        self.ik_epoch = 0
+        self.pads = [self.model.geom(f"robot_link6{i}_pad4").id for i in (1, 2)]
         self.shoulder = self.model.body_pos[self.model.body("robot_link1").id].copy()
         self.wrist = np.zeros(3)
         self.rotation_limited = False
@@ -61,6 +71,11 @@ class ArmWorld:
             # The taught controller uses absolute pitch. A 37-degree cap
             # prevented downward floor grasps even when the arm could reach them.
             self.wrist_max[1] = math.pi / 2
+        if self.direct_rotation:
+            # Direct angular mapping uses the roll/base joints' physical range.
+            # Pose-specific IK and floor clearance still limit achieved motion.
+            self.wrist_min = np.full(3, -math.pi / 2)
+            self.wrist_max = np.full(3, math.pi / 2)
         self.demonstration = None
         self.center = np.array(workspace["center"] if workspace else CENTER, dtype=float)
         self.span = np.array(workspace["span"] if workspace else SPAN, dtype=float)
@@ -69,7 +84,9 @@ class ArmWorld:
         b = self.model.body_pos[self.model.body("robot_link4").id][[0, 2]]
         self.link_lengths = (np.linalg.norm(a), np.linalg.norm(b))
         self.link_angles = (math.atan2(a[1], a[0]), math.atan2(b[1], b[0]))
-        self.tool_length = self.model.body_pos[self.model.body("robot_link5").id][0] + self.model.body_pos[self.ee][0]
+        self.fixed_tool_length = (
+            self.model.body_pos[self.model.body("robot_link5").id][0] + self.model.body_pos[self.ee][0]
+        )
         self.shoulder_height = self.shoulder[2] + self.model.body_pos[self.model.body("robot_link2").id][2]
         self.ground_geom = self.model.geom("ground").id
         self.finger_geoms = {
@@ -78,7 +95,12 @@ class ArmWorld:
             if self.model.body(self.model.geom_bodyid[i]).name in ("robot_link61", "robot_link62")
             and (self.model.geom_contype[i] or self.model.geom_conaffinity[i])
         }
+        self.box_corners = np.array(list(product((-1, 1), repeat=3)))
+        self.finger_local = None
         self.ik_data = mujoco.MjData(self.model)
+        self.tool_data = mujoco.MjData(self.model)
+        self.predicted_tool_length = None
+        self.grasp_offset = np.zeros(3)
         self.command = np.array([0.0, 0.4, -0.3, 0.5, 0.0])
         self.desired = self.center.copy()
         if workspace:
@@ -96,6 +118,7 @@ class ArmWorld:
         gripper = self.model.joint("robot_joint6")
         self.grip_limits = self.model.jnt_range[gripper.id].copy()
         self.grip_qadr = self.model.jnt_qposadr[gripper.id]
+        self.grip_mimic_qadr = self.model.jnt_qposadr[self.model.joint("robot_joint6M").id]
         self.grip_target = workspace["grip"] if workspace else 1.0
         self.sim.set_joint_target("joint6", float(self.grip_limits[0] + self.grip_target * np.ptp(self.grip_limits)))
         self.active = False
@@ -105,6 +128,133 @@ class ArmWorld:
             self.drive(self.command, 0.01, initialize=True)
             self.sim.step(0.01)
         self.hold("ready")
+
+    def grasp_point(self, data=None):
+        """Control the midpoint of the two fingertip pads in pinch mode."""
+        data = self.data if data is None else data
+        return data.geom_xpos[self.pads].mean(axis=0) if self.pinch_point else data.xpos[self.ee].copy()
+
+    @property
+    def tool_length(self):
+        if not self.pinch_point:
+            return self.fixed_tool_length
+        if self.predicted_tool_length is not None:
+            return self.predicted_tool_length
+        # Read the real pad geometry, including the current measured aperture.
+        # The URDF's fixed ee link is ~12 mm beyond the open jaws' midpoint.
+        forward = self.data.xmat[self.ee].reshape(3, 3)[:, 0]
+        return self.fixed_tool_length + float(forward @ (self.grasp_point() - self.data.xpos[self.ee]))
+
+    def anticipate_grasp(self):
+        """Lead jaw geometry slightly to cover the arm servos' response time.
+
+        Only the IK model is predicted; measured physics and reported contact
+        points are unchanged. Joint and Cartesian speed limits still apply.
+        """
+        if not self.pinch_point:
+            return
+        d = self.tool_data
+        d.qpos[:] = self.data.qpos
+        target = self.grip_limits[0] + self.grip_target * np.ptp(self.grip_limits)
+        measured = self.data.qpos[self.grip_qadr]
+        lead = self.grip_speed * 0.12
+        predicted = measured + np.clip(target - measured, -lead, lead)
+        d.qpos[self.grip_qadr] = predicted
+        d.qpos[self.grip_mimic_qadr] = -predicted
+        mujoco.mj_forward(self.model, d)
+        forward = d.xmat[self.ee].reshape(3, 3)[:, 0]
+        self.grasp_offset = d.xmat[self.ee].reshape(3, 3).T @ (self.grasp_point(d) - d.xpos[self.ee])
+        self.predicted_tool_length = self.fixed_tool_length + float(forward @ (self.grasp_point(d) - d.xpos[self.ee]))
+        if self.direct_rotation:
+            # Conservative collision envelopes, expressed around the actual
+            # grasp midpoint. Boxes are exact; hub cylinders use their boxes.
+            corners = []
+            for gid in self.finger_geoms:
+                kind = self.model.geom_type[gid]
+                size = self.model.geom_size[gid].copy()
+                if kind == mujoco.mjtGeom.mjGEOM_CYLINDER:
+                    size = np.array([size[0], size[0], size[1]])
+                elif kind != mujoco.mjtGeom.mjGEOM_BOX:
+                    size = np.full(3, self.model.geom_rbound[gid])
+                rotation = d.geom_xmat[gid].reshape(3, 3)
+                corners.append((self.box_corners * size) @ rotation.T + d.geom_xpos[gid])
+            self.finger_local = (np.concatenate(corners) - self.grasp_point(d)) @ d.xmat[self.ee].reshape(3, 3)
+
+    def safe_roll(self, requested, pitch, height):
+        if not self.direct_rotation:
+            return requested * rotation_clearance(height)
+        if self.finger_local is None:
+            return requested
+        x, y, z = self.finger_local.T
+
+        def clearance(roll):
+            return height + np.min(-math.sin(pitch) * x + math.cos(pitch) * (math.sin(roll) * y + math.cos(roll) * z))
+
+        # Preserve unit gain whenever the full sweep clears the floor. Stop
+        # at the first collision boundary instead of scaling every small roll.
+        low = 0.0
+        for high in np.linspace(0, requested, max(2, math.ceil(abs(requested) / math.radians(5)) + 1)):
+            if clearance(high) < 0.001:
+                for _ in range(12):
+                    middle = (low + high) / 2
+                    if clearance(middle) >= 0.001:
+                        low = middle
+                    else:
+                        high = middle
+                return low
+            low = high
+        return requested
+
+    def solve_innate(self, point):
+        """A fixed grasp point and orientation go to Innate's actual KDL IK.
+
+        The worker compensates the pad offset using achieved FK. The live
+        simulation never waits for it; a paused lease invalidates old results.
+        """
+        answer = None
+        if self.ik_pending:
+            future, epoch, started, clipped = self.ik_pending
+            if future.done():
+                self.ik_pending = None
+                result = future.result()
+                if epoch == self.ik_epoch and time.monotonic() - started < 0.3:
+                    answer = result
+                    self.rotation_limited = clipped
+            elif time.monotonic() - started > 0.3:
+                raise RuntimeError("Innate IK is taking too long; arm held")
+        if self.ik_pending is None:
+            requested = self.wrist.copy()
+            requested[0] = self.safe_roll(requested[0], requested[1], point[2])
+            clipped = bool(abs(requested[0] - self.wrist[0]) > 0.001)
+            base_rotation = self.data.xmat[self.base_body].reshape(3, 3)
+            point_local = base_rotation.T @ (point - self.data.xpos[self.base_body])
+            args = (point_local.tolist(), requested.tolist(), self.command.tolist(), self.grasp_offset.tolist())
+            if self.synchronous_ik:
+                answer = self.innate_ik.solve(*args)
+                self.rotation_limited = clipped
+            else:
+                self.ik_pending = (self.innate_ik.submit(*args), self.ik_epoch, time.monotonic(), clipped)
+        if answer is None:
+            return self.command.copy()
+        self.ik_error = None
+        if answer.get("solution") is None:
+            self.rotation_limited = True
+            return self.command.copy()
+        candidate = np.array(answer["solution"])
+        error = answer["grasp_error"]
+        self.rotation_limited = bool(self.rotation_limited or error > 0.002 or answer["rotation_error"] > 0.04)
+        if error > 0.004 or np.max(np.abs(candidate - self.constrain(candidate.copy(), physical=True))) > 1e-4:
+            self.rotation_limited = True
+            return self.command.copy()
+        return candidate
+
+    @property
+    def grip_speed(self):
+        # Near the floor, keeping the contact point fixed needs more shoulder
+        # travel per millimetre. Let the arm keep up with the opening jaws.
+        if self.pinch_point:
+            return 1.0 + 1.5 * rotation_clearance(self.grasp_point()[2])
+        return 2.5
 
     def constrain(self, values: np.ndarray, *, physical: bool = False) -> np.ndarray:
         values = np.clip(values, self.limits[:, 0], self.limits[:, 1])
@@ -119,10 +269,11 @@ class ArmWorld:
         for _ in range(35):
             d.qpos[self.qadr] = angles
             mujoco.mj_forward(self.model, d)
-            error = target - d.xpos[self.ee]
+            point = self.grasp_point(d)
+            error = target - point
             if np.linalg.norm(error) < 0.0008:
                 break
-            mujoco.mj_jacBody(self.model, d, jac, None, self.ee)
+            mujoco.mj_jac(self.model, d, jac, None, point, self.ee)
             arm_jac = jac[:, self.dadr]
             delta = arm_jac.T @ np.linalg.solve(arm_jac @ arm_jac.T + 0.02**2 * np.eye(3), error)
             angles = self.constrain(angles + np.clip(delta, -0.08, 0.08), physical=True)
@@ -266,7 +417,9 @@ class ArmWorld:
         self.wrist = np.clip(angles, self.wrist_min, self.wrist_max)
         # Yaw is a real base swivel, not an independent sixth arm joint.
         # It moves the claw along an arc about the shoulder.
-        self.desired = self.swivel(self.center + self.span * np.clip([r, h, v], -1, 1), self.wrist[2])
+        self.desired = self.center + self.span * np.clip([r, h, v], -1, 1)
+        if not self.innate_ik:
+            self.desired = self.swivel(self.desired, self.wrist[2])
         self.grip_target = g
         self.last_input = time.monotonic() if now is None else now
         self.active = True
@@ -282,25 +435,36 @@ class ArmWorld:
         self.reason = "pose_study"
 
     def hold(self, reason: str = "paused") -> None:
+        self.ik_epoch += 1
         self.demonstration = None
         self.active = False
+        self.predicted_tool_length = None
         self.reason = reason
         self.command = self.data.qpos[self.qadr].copy()
         self.pitch_target = float(sum(self.command[1:4]))
         if self.absolute_pitch:
             self.wrist[1] = np.clip(self.pitch_target, self.wrist_min[1], self.wrist_max[1])
-        self.desired = self.data.xpos[self.ee].copy()
+        if self.direct_rotation:
+            # The next rigid alignment starts from the achieved heading,
+            # including sideways translation, never a still-pending swivel.
+            self.wrist[2] = np.clip(self.command[0], self.wrist_min[2], self.wrist_max[2])
+        self.desired = self.grasp_point()
         self.path_target = self.desired.copy()
         if self.rotation_enabled:
             # Reanchoring after a pause uses the achieved wrist pose, rather
             # than resuming an ahead-of-arm rotation that never finished.
-            clearance = rotation_clearance(self.desired[2])
+            clearance = 1.0 if self.direct_rotation else rotation_clearance(self.desired[2])
             self.wrist[0] = (
-                np.clip(self.command[4] / clearance, -WRIST_LIMITS[0], WRIST_LIMITS[0]) if clearance > 0.01 else 0
+                np.clip(self.command[4] / clearance, self.wrist_min[0], self.wrist_max[0]) if clearance > 0.01 else 0
             )
         # Remove the ahead-of-arm setpoint immediately; physical inertia is
         # still handled by the PD servos and damping in VirtualMars.
         self.drive(self.command, 0, initialize=True)
+        if self.pinch_point:
+            # A stopped grasp must not keep closing toward an old setpoint.
+            measured = float(np.clip(self.data.qpos[self.grip_qadr], *self.grip_limits))
+            self.grip_target = float((measured - self.grip_limits[0]) / np.ptp(self.grip_limits))
+            self.sim.set_joint_target("joint6", measured)
 
     def tick(self, dt: float, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
@@ -312,13 +476,35 @@ class ArmWorld:
             lo, hi = self.grip_limits
             target = lo + self.grip_target * (hi - lo)
             current = self.sim.joint_targets()["joint6"]
-            self.sim.set_joint_target("joint6", float(current + np.clip(target - current, -2.5 * dt, 2.5 * dt)))
+            self.sim.set_joint_target(
+                "joint6", float(current + np.clip(target - current, -self.grip_speed * dt, self.grip_speed * dt))
+            )
             self.sim.step(dt)
             return
         if self.active:
+            self.anticipate_grasp()
+            if self.innate_ik:
+                distance = self.desired - self.path_target
+                self.path_target += distance * min(1, 0.18 * dt / max(np.linalg.norm(distance), 1e-9))
+                try:
+                    self.command = self.solve_innate(self.path_target)
+                except (RuntimeError, OSError) as error:
+                    self.ik_error = str(error)
+                    self.hold("ik_unavailable")
+                    self.sim.step(dt)
+                    return
+                self.drive(self.command, dt)
+                lo, hi = self.grip_limits
+                target = lo + self.grip_target * (hi - lo)
+                current = self.sim.joint_targets()["joint6"]
+                self.sim.set_joint_target(
+                    "joint6", float(current + np.clip(target - current, -self.grip_speed * dt, self.grip_speed * dt))
+                )
+                self.sim.step(dt)
+                return
             projected = (
                 self.project_personal_target(
-                    self.desired, self.wrist[0] * rotation_clearance(self.desired[2]), self.pitch_target
+                    self.desired, self.safe_roll(self.wrist[0], self.pitch_target, self.desired[2]), self.pitch_target
                 )
                 if self.absolute_pitch
                 else self.desired
@@ -329,12 +515,17 @@ class ArmWorld:
             # clamp handles singularities and difficult edge configurations.
             target = self.path_target + distance * min(1, 0.18 * dt / max(np.linalg.norm(distance), 1e-9))
             clearance = rotation_clearance(target[2])
-            roll = self.wrist[0] * clearance
+            roll = self.safe_roll(self.wrist[0], self.pitch_target, target[2])
             self.path_target = target
             # Keep a separate position-only posture. Reapplying a pitch offset
             # to the already tilted solution would accumulate rotation each tick.
             self.position_command = self.solve(target, self.position_command)
-            self.rotation_limited = bool(reach_limited or (clearance < 0.95 and abs(self.wrist[0]) > 0.06))
+            roll_limited = (
+                abs(roll - self.wrist[0]) > 0.001
+                if self.direct_rotation
+                else (clearance < 0.95 and abs(self.wrist[0]) > 0.06)
+            )
+            self.rotation_limited = bool(reach_limited or roll_limited)
             self.command = (
                 self.solve_wrist(target, roll, self.pitch_target)
                 if self.rotation_enabled
@@ -348,7 +539,9 @@ class ArmWorld:
             lo, hi = self.grip_limits
             target = lo + self.grip_target * (hi - lo)
             current = self.sim.joint_targets()["joint6"]
-            self.sim.set_joint_target("joint6", float(current + np.clip(target - current, -2.5 * dt, 2.5 * dt)))
+            self.sim.set_joint_target(
+                "joint6", float(current + np.clip(target - current, -self.grip_speed * dt, self.grip_speed * dt))
+            )
         self.sim.step(dt)
 
     def ground_contacts(self) -> list[Any]:
@@ -364,9 +557,9 @@ class ArmWorld:
             name: float(self.data.qpos[self.model.jnt_qposadr[self.model.joint(f"robot_{name}").id]])
             for name in (*self.names, "joint6", "joint_head")
         }
-        ee = self.data.xpos[self.ee]
+        ee = self.grasp_point()
         grounded = bool(self.ground_contacts())
-        unrotated = self.swivel(self.desired, -self.wrist[2])
+        unrotated = self.desired if self.innate_ik else self.swivel(self.desired, -self.wrist[2])
         return {
             "type": "state",
             "simulated": True,
@@ -385,6 +578,8 @@ class ArmWorld:
             "pitch_target": self.pitch_target,
             "wrist_measured": [angles["joint5"], sum(angles[f"joint{i}"] for i in (2, 3, 4)), angles["joint1"]],
             "rotation_limited": self.rotation_limited,
+            "ik_solver": "innate_kdl" if self.innate_ik else "legacy_study",
+            "ik_error": self.ik_error,
             "ground_z": GROUND_Z,
             "grounded": grounded,
             "height_mm": 0.0 if grounded else float(max(0, ee[2] - GROUND_Z) * 1000),

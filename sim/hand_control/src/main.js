@@ -8,6 +8,8 @@ import {
 } from "./control.mjs";
 import { WristMapper } from "./orientation.mjs";
 import { PersonalMapper, personalSample } from "./personal.mjs";
+import { PinchMapper, pinchSample } from "./pinch.mjs";
+import { canAlignJawRoll } from "./fingertip-rotation.mjs";
 import { createScene } from "./scene.js";
 
 const $ = (id) => document.getElementById(id);
@@ -32,6 +34,7 @@ let stream = null,
   cameraGeneration = 0;
 let phase = "off",
   calibrated = false,
+  alignRollPending = true,
   armed = false,
   token = null,
   pendingBegin = 0,
@@ -64,6 +67,16 @@ const CAMERA_ICON =
   '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="3"/><path d="m15 10 6-3v10l-6-3"/></svg>';
 const PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z"/></svg>';
 const PAUSE_ICON = '<svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>';
+const ROLL_ALIGNMENT_HINT =
+  "Separate your thumb and index and turn them slightly so the jaw line is visible.";
+
+function rollReady(sample) {
+  return (
+    !personal?.rotation ||
+    !alignRollPending ||
+    canAlignJawRoll(sample, state.wrist)
+  );
+}
 
 function send(message) {
   if (ws?.readyState === WebSocket.OPEN && ws.bufferedAmount < 4096) {
@@ -111,12 +124,17 @@ function begin() {
     performance.now() - lastResultAt > 400
   )
     return;
+  if (!rollReady(lastSample)) {
+    feedback = ROLL_ALIGNMENT_HINT;
+    render();
+    return;
+  }
   const request = ++pendingBegin;
   beginPending = true;
   phase = "holding";
   heldSince = performance.now();
   feedback = "Connecting your hand to MARS…";
-  if (!send({ op: "begin", request })) {
+  if (!send({ op: "begin", request, controller: "innate-ik-camera-v1" })) {
     beginPending = false;
     feedback = "Waiting for the connection…";
   }
@@ -156,22 +174,34 @@ function connect() {
         profileIdentity(message.personal_profile) !== profileIdentity(profile)
       ) {
         profile = message.personal_profile || null;
-        personal = profile ? new PersonalMapper(profile) : null;
+        personal = profile?.pinch
+          ? new PinchMapper(profile)
+          : profile
+            ? new PersonalMapper(profile)
+            : null;
         if (personal) personal.sensitivity = mapper.sensitivity;
         calibration = personal ? new Calibration() : new GroundCalibration();
         calibrated = false;
+        alignRollPending = true;
         mapper.heightRange = null;
         if (stream) phase = "calibrating";
         $("personal-status").hidden = !personal;
-        $("personal-status").textContent = profile?.floor
-          ? "Tuned from your 23 poses · including floor grasps"
-          : "Tuned from your 16 poses · recenter anywhere";
+        $("personal-status").textContent =
+          profile?.pinch?.rotation === "direct"
+            ? "Pinch center · fingertip pose control"
+            : profile?.pinch
+              ? `Tuned from your ${profile.pinch.pose_count} poses · thumb + index control`
+              : profile?.floor
+                ? "Tuned from your 23 poses · including floor grasps"
+                : "Tuned from your 16 poses · recenter anywhere";
         $("movement-detail").textContent = personal
           ? "Start comfortably. Move your hand to move the claw."
           : "The bottom line is ground. Lift to raise.";
-        $("rotation-note").textContent = personal
-          ? "Turn your hand to swivel the arm. Tilt to aim the claw; pinch thumb + index to grasp. Recenter for a fresh starting position."
-          : "Point and tilt your thumb + index to aim the claw. Yaw swivels the whole arm.";
+        $("rotation-note").textContent = personal?.rotation
+          ? "Twist to roll the claw; tilt your fingers to aim. The point between them stays your grasp point."
+          : personal
+            ? "Turn your hand to swivel the arm. Tilt to aim the claw; pinch thumb + index to grasp. Recenter for a fresh starting position."
+            : "Point and tilt your thumb + index to aim the claw. Yaw swivels the whole arm.";
       }
       lastStateAt = performance.now();
       render();
@@ -180,6 +210,11 @@ function connect() {
       state = message;
       lastStateAt = performance.now();
       scene?.update(state);
+      if (state.ik_error && armed) {
+        errorText =
+          "The arm solver is unavailable. Restart the studio to reconnect.";
+        pause("Arm held safely");
+      }
     }
     if (message.type === "begun") {
       // A delayed acknowledgment must not cancel a more recent start request.
@@ -199,12 +234,20 @@ function connect() {
       wristMapper.anchor(lastSample.orientation, state.wrist);
       if (
         personal &&
-        !personal.anchor(lastSample, message.offset, state.grip, state.wrist)
+        !personal.anchor(lastSample, message.offset, state.grip, state.wrist, {
+          alignRoll: alignRollPending,
+        })
       ) {
-        holdTracking("Hold your relaxed hand in view to begin");
+        stopLease();
+        holdTracking(
+          alignRollPending
+            ? ROLL_ALIGNMENT_HINT
+            : "Hold your relaxed hand in view to begin",
+        );
         return;
       }
       previousHand = lastSample;
+      alignRollPending = false;
       phase = "following";
       feedback = "You’re in control. Move slowly to explore.";
       render();
@@ -295,28 +338,34 @@ async function initTracker() {
     if (inferenceTimes.length > 30) inferenceTimes.shift();
     inferenceMs =
       inferenceTimes.reduce((a, b) => a + b, 0) / inferenceTimes.length;
-    const sample = (personal ? personalSample : measureHand)(
-      data.result,
-      video.videoWidth,
-      video.videoHeight,
-    );
+    const sample = (
+      profile?.pinch ? pinchSample : personal ? personalSample : measureHand
+    )(data.result, video.videoWidth, video.videoHeight);
     lastSample = sample;
     draw(sample);
     if (!calibrated) {
-      const result = calibration.update(sample, now);
+      const calibrationSample =
+        sample.valid && !rollReady(sample)
+          ? { ...sample, valid: false, reason: ROLL_ALIGNMENT_HINT }
+          : sample;
+      const result = calibration.update(calibrationSample, now);
       progress = result.progress;
-      feedback = sample.valid
-        ? personal
-          ? "Hold your relaxed hand here for a moment."
-          : result.reason
-        : sample.reason;
+      feedback = calibrationSample.valid
+        ? personal?.rotation
+          ? "Separate your thumb and index slightly. Hold still to align the jaws."
+          : personal
+            ? "Hold your relaxed hand here for a moment."
+            : result.reason
+        : calibrationSample.reason;
       if (result.ready) {
         calibrated = true;
         if (!personal) mapper.setGround(result.bounds);
         phase = "ready";
-        feedback = personal
-          ? "Starting pose set. Start following to try your taught gestures."
-          : "Ground set. Raise your hand to lift the arm.";
+        feedback = personal?.rotation
+          ? "Start following to align the jaws with your fingers."
+          : personal
+            ? "Starting pose set. Start following to try your taught gestures."
+            : "Ground set. Raise your hand to lift the arm.";
       }
     } else if (armed) {
       if (!sample.valid) {
@@ -363,21 +412,26 @@ async function initTracker() {
             if (!ok) holdTracking("Waiting for the connection to catch up…");
             else {
               previousHand = sample;
-              feedback = state.rotation_limited
-                ? personal
-                  ? "At the edge of this pose. Move a little toward your starting position."
-                  : "At a joint limit. Tilt back the other way to move freely."
-                : !sample.orientation
-                  ? "Finding finger orientation · claw rotation holds"
-                  : personal
-                    ? "Your gestures are connected. Tilt, roll and pinch naturally."
-                    : value.position[1] < -0.97
-                      ? "At ground level. Lift your hand to raise the arm."
-                      : Math.max(...value.position.map(Math.abs)) > 0.97
-                        ? "At the edge of your reach. Move back toward center."
-                        : !sample.gripValid
-                          ? "Thumb or index fingertip out of view · gripper holds"
-                          : "Point and tilt your thumb + index. Pinch to grip.";
+              feedback =
+                state.rotation_limited || personal?.rotation?.limited
+                  ? personal?.rotation
+                    ? "Angle limited here. Move or tilt back to reach it."
+                    : personal
+                      ? "At the edge of this pose. Move a little toward your starting position."
+                      : "At a joint limit. Tilt back the other way to move freely."
+                  : personal?.rotation
+                    ? "Twist and tilt to aim the claw. Pinch to grip."
+                    : !sample.orientation
+                      ? "Finding finger orientation · claw rotation holds"
+                      : personal
+                        ? "Your gestures are connected. Tilt, roll and pinch naturally."
+                        : value.position[1] < -0.97
+                          ? "At ground level. Lift your hand to raise the arm."
+                          : Math.max(...value.position.map(Math.abs)) > 0.97
+                            ? "At the edge of your reach. Move back toward center."
+                            : !sample.gripValid
+                              ? "Thumb or index fingertip out of view · gripper holds"
+                              : "Point and tilt your thumb + index. Pinch to grip.";
             }
           } else if (personal)
             holdTracking("Bring your hand back toward its relaxed pose");
@@ -527,6 +581,7 @@ async function enableCamera() {
   }
   if (generation !== cameraGeneration) return;
   calibrated = false;
+  alignRollPending = true;
   mapper.heightRange = null;
   calibration.reset();
   phase = "calibrating";
@@ -566,6 +621,7 @@ function recenter() {
   if (!stream || !trackerReady) return;
   pause();
   calibrated = false;
+  alignRollPending = true;
   mapper.heightRange = null;
   calibration.reset();
   phase = "calibrating";
@@ -603,9 +659,11 @@ function render() {
     ],
     calibrating: [
       personal ? "Choose your starting pose" : "Set your ground level",
-      personal
-        ? "Hold your relaxed hand comfortably in view."
-        : "Lower your palm to the line. Keep it in view.",
+      personal?.rotation
+        ? "Separate your thumb and index slightly. Hold still to align the jaws."
+        : personal
+          ? "Hold your relaxed hand comfortably in view."
+          : "Lower your palm to the line. Keep it in view.",
       "Calibrating…",
     ],
     ready: [

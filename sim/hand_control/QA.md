@@ -302,3 +302,127 @@ The test instance ran separately on 8841. The main ROS/Docker simulator, recorde
 benchmark recordings and physical robot were not modified. At that stage, depth
 was estimated from a single camera and wrist orientation was not retargeted.
 The scene still provides free-space control without a pick-and-place object task.
+
+## Pinch-centered refinement — 2026-09-15
+
+The original studio now has an optional pinch controller, preserving the existing
+personal profile as a fallback. Calibration uses the completed 16-pose refinement
+alongside the original and floor sessions; all four repeats are excluded from
+fitting and hyperparameter selection.
+
+Final local checks:
+
+- `test/pinch-replay.mjs`: four reserved held-pose repeats, per-axis orientation
+  RMS **11.49° → 4.83°** versus the previous personal mapper.
+- `npm test`: **30 passed**, including 20 close/open cycles, partial reopening,
+  fixed-midpoint closure, rigid edge-on turns, and reanchoring.
+- Simulator suite: **33 tests passed** before the additional profile-validation
+  case; the final focused six engine/profile tests also passed. Grasp-pad errors
+  stay below **3 mm** during opening/closing at normal height and **7 mm** near
+  the floor; settled error is below **4 mm**. All use measured MuJoCo geometry.
+- Browser replay from a fresh simulator: floor approach **76.1°**, closed grasp
+  **74.5°**, closed lift **74.9°**. The measured grasp point rose from **16.3 mm**
+  to **57.2 mm** during the lift. The jaws closed fully. Returning to the identical
+  reference restored the original target within **2 mm**. Tracking loss,
+  recovery, pause, rendering, and the browser error checks passed.
+- Build, Ruff, and formatting checks passed.
+
+Reports, the previous profile/source snapshots, and browser screenshots are local
+under `artifacts/pinch-refinement/` and `artifacts/pinch-browser/`. The browser test
+interpolates transitions between held-pose recordings; it does not claim those
+transitions were observed human motion. Four reserved poses are a limited check,
+and subjective feel still requires live use. Full opening corresponds to actual
+finger separation, so a recording labelled “open” is not forced to 100% opening.
+
+## Direct fingertip rotation — 2026-09-15
+
+Superseded by the Innate IK correction below. These checks used rotations in
+the starting hand frame and missed the camera-axis twist reported by the user.
+
+The operator requested one-to-one roll, pitch and yaw while keeping the existing
+midpoint. Direct mode bypasses angular pose fitting and uses one rigid
+alignment of the thumb–index frame. Position/grip coefficients are unchanged;
+unit tests also compare their frame-by-frame outputs with the previous mapper.
+The earlier **4.83°** held-pose result above describes the learned mapper, not
+this direct mode or live tracking accuracy.
+
+- **40 JavaScript tests passed.** Each axis has unit gain at ±20°, ±40°, and ±60°;
+  mixed rotations, fingertip-only motion, contact/reopening, mirrored jaw order,
+  vertical pitch, sensitivity independence, and reanchoring are covered.
+- **36 Python engine/profile tests passed**, including interrupted-yaw
+  reanchoring, grasp-point stability, watchdogs, transport ownership, and pause.
+- Measured MuJoCo checks include ±60° yaw, 75° roll, combined rotations, and an
+  80° downward grasp at a 12 mm target height with ±60° roll. Safe roll retains
+  its full angle near the floor; a separate case checks clipping at the floor
+  clearance boundary. Existing 1 rad/s setpoint limits remain enforced.
+- Eleven synthetic browser poses passed through the actual UI, WebSocket, and
+  physics. Maximum commanded rigid-rotation error was **0.000003°**; maximum
+  settled joint-orientation error versus the reachable target was **0.064°**.
+  Open-hand rotations preserve all three position commands. Closed-hand turns,
+  reopening, tracking loss/recovery, pause, rendering, and browser errors passed.
+- Yaw is the real base joint. The browser test explicitly accounts for heading
+  caused by lateral translation; it does not claim an independent yaw wrist.
+  Screenshots and full reports are in `artifacts/direct-rotation/`.
+- Production build, Ruff, and JavaScript formatting passed. The original live
+  profile and modified source files were copied to the report's `baseline/`
+  directory before editing.
+
+Synthetic geometry establishes controller gain, not monocular estimation
+accuracy. Two coincident tips do not define a rotation frame; palm transport
+preserves the last reliable alignment until the tips separate again.
+
+## Innate IK and camera-axis correction — 2026-09-15
+
+Reproduction with raw camera-space geometry: a **40° screen twist** became
+**39.99° yaw** in the preceding controller. Its artificial shoulder swivel
+then displaced the target sideways by **169.7 mm**. The corrected mapper
+produces **40° roll**, with pitch/yaw effectively zero. See
+`artifacts/innate-ik/twist-regression.json`.
+
+The live path now calls `mars_arm.kinematics.ArmKinematics`, shared directly
+with the Innate ROS IK node. It sends independent position and orientation
+targets and compensates the grasp pad offset using KDL forward kinematics.
+Unreachable orientation is limited at the requested point; it does not move
+the point around the shoulder. Twisting a closed pinch no longer follows the
+palm's incidental translation.
+
+The actual IK runs in an isolated worker, with one asynchronous request in
+flight. Camera tracking, physics, and control ownership continue independently.
+Pausing invalidates old results. Native PyKDL is used when available; the Mac
+uses the existing Innate image in a dedicated container without networking or
+actuator access. No physical robot or running ROS stack is controlled by tests.
+
+Regression tests use fixed camera-axis motion instead of deriving input axes
+from the implementation's hand frame. Engine checks cover roll without lateral
+sweep, fixed-point unreachable yaw, downward grasps, JSON state serialization,
+late solver results, worker failure, and rejecting stale browser code. Browser
+checks use the real app, WebSocket, and KDL-driven MuJoCo physics with synthetic
+landmarks. Live hand-estimation accuracy and subjective feel remain unmeasured.
+
+Final verification: 40 JavaScript tests, the 40-case Python regression run,
+the final 10-case KDL engine suite, and the actual ROS-node smoke test passed.
+All 12 browser poses used `innate_kdl`; maximum settled grasp-point error was
+**0.287 mm**, and maximum orientation error against the reachable target was
+**0.403°**. Impossible yaw was explicitly limited with the point held, rather
+than counted as an achieved yaw rotation. The separate floor cases allow
+sub-degree KDL/servo tilt error and require less than 3 mm grasp-point error.
+Build, Ruff, formatting, tracking recovery, pause, and browser rendering passed.
+
+### Roll alignment regression — 2026-09-16
+
+Calibration now projects the observed thumb–index line into the actual gripper's
+closing plane and chooses the nearest reachable roll. This removes a quarter-turn
+starting offset while preserving the existing pitch, yaw and fingertip midpoint.
+Calibration waits for a visible, nondegenerate line. A pause or tracking recovery
+anchors to the held wrist without repeating the calibration correction.
+
+Validation on the PR checkout: 44 JavaScript tests and the production build pass;
+35 legacy physics/profile/study cases pass, as do all 11 direct KDL/MuJoCo cases.
+The new physics case checks the actual finger-pad line at both ±90° roll endpoints
+and holds the grasp point within 2 mm. The isolated ROS node smoke test verifies
+its five-joint output, FK and next-solve seed. Repository pre-commit checks pass.
+The browser regression also exercises closed-finger calibration, quarter-turn
+recentring and pause/resume through the real studio UI and simulator.
+
+These are deterministic controller and physics checks using synthetic landmarks,
+not a measurement of live webcam pose accuracy or subjective comfort.

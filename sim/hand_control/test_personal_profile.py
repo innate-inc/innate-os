@@ -8,6 +8,39 @@ from personal_profile import load_profile
 
 
 class PersonalProfileTests(unittest.TestCase):
+    def test_pinch_models_are_optional_and_validated_before_driving_the_sim(self):
+        profile = self.profile()
+        profile["workspace"]["pinch_point"] = True
+        profile["pinch"] = {
+            "version": 1,
+            "pose_count": 39,
+            "orientation": {"width": 2.8, "centers": [[0] * 18], "coefficients": [[0, 0, 0]]},
+            "stable": {"width": 2.8, "centers": [[0] * 13], "coefficients": [[0, 0, 0]]},
+            "positionGain": [0.08, 0.4, 0.4],
+            "grip": {"closed": 0.18, "open": 1, "visibleClosed": 0.32},
+        }
+        self.assertEqual(self.read(profile), profile)
+        direct = copy.deepcopy(profile)
+        direct["pinch"]["rotation"] = "direct"
+        direct["workspace"]["direct_rotation"] = True
+        self.assertEqual(self.read(direct), direct)
+        for mutate in (
+            lambda p: p["pinch"].update(rotation="unknown"),
+            lambda p: p["pinch"].update(rotation="direct"),
+            lambda p: p["workspace"].update(direct_rotation=True),
+            lambda p: p["workspace"].update(pinch_point=False),
+            lambda p: p["pinch"].update(pose_count=-1),
+            lambda p: p["pinch"].update(positionGain=[0, 0.4, 0.4]),
+            lambda p: p["pinch"]["orientation"].update(width=float("nan")),
+            lambda p: p["pinch"]["orientation"].update(centers=[[0] * 17]),
+            lambda p: p["pinch"]["stable"].update(coefficients=[[float("inf"), 0, 0]]),
+            lambda p: p["pinch"]["grip"].update(open=0.18),
+        ):
+            invalid = copy.deepcopy(profile)
+            mutate(invalid)
+            with self.assertRaises(ValueError):
+                self.read(invalid)
+
     def profile(self):
         return {
             "version": 1,
@@ -45,6 +78,12 @@ class PersonalProfileTests(unittest.TestCase):
         self.assertEqual(self.read(profile), profile)
         del profile["floor"]
         self.assertEqual(self.read(profile), profile)
+
+    def test_direct_rotation_requires_a_pinch_controller(self):
+        profile = self.profile()
+        profile["workspace"]["direct_rotation"] = True
+        with self.assertRaises(ValueError):
+            self.read(profile)
 
     def test_bad_dimensions_and_singular_grip_curves_are_rejected_before_use(self):
         for mutation in (

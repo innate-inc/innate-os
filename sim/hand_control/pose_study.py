@@ -66,6 +66,53 @@ def catalogue(world: "ArmWorld", focus: str = "general") -> list[dict[str, Any]]
             ),
             ("floor_repeat", "Return to the level claw", {"reach": 0.32, "height": 0.07}),
         ]
+    elif focus == "refine":
+        definitions = [
+            ("refine_reference", "Start relaxed, with the claw half open", {}),
+            ("refine_yaw_left_small", "Claw turned a little left", {"yaw": 0.2}),
+            ("refine_yaw_left", "Claw turned farther left", {"yaw": 0.45}),
+            ("refine_yaw_right_small", "Claw turned a little right", {"yaw": -0.2}),
+            ("refine_yaw_right", "Claw turned farther right", {"yaw": -0.45}),
+            ("refine_roll_left", "Claw rolled to one side", {"roll": -0.55}),
+            ("refine_roll_right", "Claw rolled to the other side", {"roll": 0.55}),
+            ("refine_pitch_mid", "Claw tilted partway down", {"reach": 0.32, "height": 0.07, "pitch": 0.65}),
+            (
+                "refine_pitch_steep",
+                "Claw pointing almost straight down",
+                {"reach": 0.32, "height": 0.07, "pitch": math.radians(80)},
+            ),
+            (
+                "refine_down_left",
+                "Claw turned left and tilted down",
+                {"reach": 0.32, "height": 0.07, "yaw": 0.35, "pitch": 0.9},
+            ),
+            (
+                "refine_down_right",
+                "Claw turned right and tilted down",
+                {"reach": 0.32, "height": 0.07, "yaw": -0.35, "pitch": 0.9},
+            ),
+            (
+                "refine_floor_open",
+                "Claw open, ready to grasp from the floor",
+                {"reach": 0.32, "height": 0.012, "pitch": math.radians(80), "grip": 1},
+            ),
+            (
+                "refine_floor_closed",
+                "Same floor pose, with the claw closed",
+                {"reach": 0.32, "height": 0.012, "pitch": math.radians(80), "grip": 0},
+            ),
+            (
+                "refine_lift",
+                "Lift the closed claw from the floor",
+                {"reach": 0.32, "height": 0.09, "pitch": math.radians(80), "grip": 0},
+            ),
+            (
+                "refine_down_left_repeat",
+                "Return to the leftward, downward grasp",
+                {"reach": 0.32, "height": 0.07, "yaw": 0.35, "pitch": 0.9},
+            ),
+            ("refine_reference_repeat", "Back to your relaxed starting gesture", {}),
+        ]
     elif focus != "general":
         raise ValueError("Unknown pose exercise")
     poses = []
@@ -93,7 +140,7 @@ def catalogue(world: "ArmWorld", focus: str = "general") -> list[dict[str, Any]]
                 "ee": world.ik_data.xpos[world.ee].tolist(),
                 "grip": grip,
                 "orientation_matrix": world.ik_data.xmat[world.ee].tolist(),
-                "role": "repeat_check" if key in ("neutral_repeat", "floor_repeat") else "fit",
+                "role": "repeat_check" if key.endswith("_repeat") else "fit",
             }
         )
     return poses

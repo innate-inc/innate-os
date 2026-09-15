@@ -7,10 +7,13 @@ const video = $("camera"),
   overlay = $("landmarks"),
   ctx = overlay.getContext("2d");
 const FLOOR = new URLSearchParams(location.search).get("focus") === "floor";
-const STUDY = FLOOR ? "floor" : "general";
-const KEY = FLOOR
-  ? "innate-floor-matching-session-v1"
-  : "innate-pose-matching-session-v1";
+const REFINE = new URLSearchParams(location.search).get("focus") === "refine";
+const STUDY = FLOOR ? "floor" : REFINE ? "refine" : "general";
+const KEY = {
+  floor: "innate-floor-matching-session-v1",
+  refine: "innate-refine-matching-session-v1",
+  general: "innate-pose-matching-session-v1",
+}[STUDY];
 if (FLOOR) {
   document.title = "Teach floor grasps · Innate";
   document.querySelector(".product-name").textContent =
@@ -21,6 +24,16 @@ if (FLOOR) {
     "Imagine your thumb and index are the claw. Show the gesture that feels natural for each tilt, grasp and lift.";
   document.querySelector("#complete > p").innerHTML =
     "Tell me <strong>“floor poses done”</strong>. I’ll use these matches to tune the deeper pitch and check that pinching and lifting still feel natural.";
+}
+if (REFINE) {
+  document.title = "Refine your hand control · Innate";
+  document.querySelector(".product-name").textContent = "Refine your hand control";
+  document.querySelector(".eyebrow").textContent = "A CLOSER MATCH TO YOU.";
+  $("step-count").textContent = "16 poses · about 4 minutes";
+  $("instruction").textContent =
+    "Imagine your thumb and index are the claw. Match each turn, tilt and grasp in the way that feels natural. Keep the same comfortable starting position throughout.";
+  document.querySelector("#complete > p").innerHTML =
+    "Tell me <strong>“extra poses done”</strong>. I’ll compare these matches with your current calibration before changing the controls.";
 }
 let scene,
   ws,
