@@ -5,6 +5,13 @@ repository's MARS URDF and measured joints from `VirtualMars`, the same MuJoCo
 core used by the main simulator. This workspace needs no ROS or Docker and
 cannot send commands to a physical robot.
 
+This is the bench where the hand-to-claw mapping is developed and calibrated.
+The mapping it produced ships in the robot's own webapp as **camera arm control**
+(`webapp/js/handControl/`, on the Arm SDK and Teleop pages), which drives a real
+or simulated MARS over rosbridge instead of this loopback simulator — see
+[webapp/README.md](../../webapp/README.md#camera-arm-control). Personal profiles
+and recordings stay here and are never shipped.
+
 From the repository root:
 
 ```sh

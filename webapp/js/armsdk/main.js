@@ -13,6 +13,7 @@
 import { copyToButton, ICON_COPY } from "../clipboard.js";
 import { ARM_STATUS_TOPIC } from "../constants.js";
 import { ros } from "../rosClient.js";
+import { armControlHolder, onArmControlChange } from "../armControlLock.js";
 
 const ARM_ACTION = "/armsdk/command";
 const ARM_ACTION_TYPE = "brain_messages/action/ExecuteArmCommand";
@@ -20,6 +21,15 @@ const STREAM_TOPIC = "/armsdk/stream_joints";
 const ARM_STATE_TOPIC = "/mars/arm/state";
 const FK_POSE_TOPIC = "/fk_pose";
 const STATE_THROTTLE_MS = 100;
+
+/** The camera panel's module graph (hand tracker, kinematics, MediaPipe loader) is
+ * fetched only when an operator actually opens it.
+ * @param {HTMLElement} parent
+ * @param {import("../rosClient.js").RosClient} rosClient
+ * @param {{ floating?: boolean, onClose?: () => void }} [opts]
+ * @returns {Promise<{ el: HTMLElement, destroy: () => void }>} */
+const buildCameraPanel = (parent, rosClient, opts) =>
+  import("../handControl/panel.js").then((m) => m.createHandControlPanel(parent, rosClient, opts));
 
 /** createArmViz with its module fetched on demand — viz.js pulls in the vendored three.js, by far the
  * heaviest module in the app, and only this page ever renders it.
@@ -131,6 +141,7 @@ const CSS = `
 .armsdk-jog button.key-flash { border-color: var(--accent); color: var(--accent); background: var(--accent-faint); }
 .armsdk-jog button.key-flash kbd { color: var(--accent); border-color: var(--accent); }
 .armsdk-hint { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+.armsdk-cam { margin-bottom: 14px; }
 .armsdk-jname { width: 108px; display: inline-block; color: var(--muted); font-size: 12px; }
 .armsdk-jval { width: 56px; display: inline-block; text-align: right; color: var(--accent); font-size: 12px;
   font-family: var(--mono, ui-monospace, monospace); }
@@ -224,6 +235,8 @@ const PAGE_HTML = `
           <button data-el="fillBtn" title="Fill the fields from the live pose">← from current</button>
         </div>
       </div>
+
+      <div class="armsdk-card armsdk-cam" data-el="cameraCard"></div>
 
       <div class="armsdk-card">
         <h2>Gripper</h2>
@@ -380,6 +393,9 @@ export function mount(stage) {
   let liveResyncTimer;
 
   function queueLive() {
+    // The camera stream and these sliders feed the same topic; two writers
+    // would fight inside the server's slew loop.
+    if (armControlHolder()) return;
     clearTimeout(liveResyncTimer);
     const vals = sliders.map((sl) => +sl.value);
     livePending = j6Touched ? vals : vals.slice(0, 5);
@@ -457,6 +473,11 @@ export function mount(stage) {
 
   /** @param {string} name @param {Record<string, any>} [body] */
   async function cmd(name, body = {}) {
+    const holder = armControlHolder();
+    if (holder && name !== "torque_off") {
+      log(`${holder} is driving the arm — stop it first (Torque off still aborts)`, "err");
+      return;
+    }
     // Torque off is the abort path — it must fire even while a motion is in
     // flight (the server exempts it from the motion lock; the motion then
     // fails fast on the disabled arm). It leaves the busy latch alone.
@@ -572,6 +593,7 @@ export function mount(stage) {
   const onKey = (e) => {
     const target = /** @type {HTMLElement} */ (e.target);
     if (target.tagName === "INPUT" || target.tagName === "SELECT") return;
+    if (armControlHolder()) return; // camera control owns the arm (and R = recentre)
     /** @type {Record<string, [string, number]>} */
     const map = { w: ["dx", 1], s: ["dx", -1], a: ["dy", 1], d: ["dy", -1], r: ["dz", 1], f: ["dz", -1] };
     const key = e.key.toLowerCase();
@@ -626,6 +648,23 @@ export function mount(stage) {
       "mars_msgs/msg/ArmStatus",
     ),
   ];
+  /** @type {{ destroy: () => void } | null} */
+  let cameraPanel = null;
+  buildCameraPanel(el("cameraCard"), ros, {}).then(
+    (panel) => (destroyed ? panel.destroy() : (cameraPanel = panel)),
+    (err) => {
+      el("cameraCard").innerHTML = `<div class="armsdk-hint">Camera arm control unavailable (${err?.message || err})</div>`;
+    },
+  );
+  // While the camera drives the arm, every other control on this page would be
+  // a second writer into the same stream; grey them out rather than let them
+  // fight. Torque off stays live: it is the abort path.
+  const OWNED = "[data-cmd]:not([data-cmd=torque_off]), [data-jog], [data-rjog], [data-el=goBtn], [data-el=open100], [data-el=open50], [data-el=closeBtn], [data-el=syncBtn]";
+  const unsubLock = onArmControlChange((holder) => {
+    root.querySelectorAll(OWNED).forEach((b) => ((/** @type {HTMLButtonElement} */ (b)).disabled = !!holder));
+    sliders.forEach((slider) => (slider.disabled = !!holder));
+  });
+
   const showBanner = () => el("banner").classList.toggle("show", ros.state !== "connected");
   const unsubConn = ros.onStateChange(showBanner);
   showBanner();
@@ -639,6 +678,8 @@ export function mount(stage) {
       livePending = null; // stop the pump loop from sending more
       for (const unsub of unsubs) unsub();
       unsubConn();
+      unsubLock();
+      cameraPanel?.destroy();
       document.removeEventListener("keydown", onKey);
       viz?.destroy();
       root.remove();

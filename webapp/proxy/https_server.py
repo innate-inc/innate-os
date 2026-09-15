@@ -173,6 +173,11 @@ CONTENT_TYPES = {
     ".md": "text/plain; charset=utf-8",
     ".tgz": "application/gzip",
     ".mp4": "video/mp4",
+    # Vendored MediaPipe hand tracker (public/vendor/mediapipe-*): the WASM
+    # runtime must arrive as application/wasm or the browser refuses to stream
+    # it, and .task is the model bundle the tracker fetches as bytes.
+    ".wasm": "application/wasm",
+    ".task": "application/octet-stream",
     # Sim viewer assets.
     ".glb": "model/gltf-binary",
     ".obj": "text/plain; charset=utf-8",
@@ -294,6 +299,11 @@ def _gzip_candidate(path: Path, request: web.Request) -> "os.stat_result | None"
 # A vendor filename that names its version, e.g. three.module.min.r160.js — the
 # segment before the extension starts with a digit (an optional r/v prefix allowed).
 _VENDOR_VERSIONED = re.compile(r"\.[rv]?\d[\w.]*\.\w+$")
+# A vendor *directory* that names its version, e.g. mediapipe-0.10.32/ — a
+# multi-file library whose loader fetches siblings by their own fixed names
+# (MediaPipe's wasm/vision_wasm_internal.js), so the version can only ride on
+# the directory. Same contract as the filename rule: a bump is a new URL.
+_VENDOR_VERSIONED_DIR = re.compile(r"[-.][rv]?\d[\w.]*$")
 
 
 async def _serve_static(path: Path, request: web.Request) -> web.StreamResponse:
@@ -309,7 +319,11 @@ async def _serve_static(path: Path, request: web.Request) -> web.StreamResponse:
     # these for good without `immutable` ever pinning a stale copy — which is
     # why an unversioned vendor file gets no-cache like everything else (the
     # zero-build app's "deploy" is a file edit).
-    vendored = path.is_relative_to(ROOT / "public" / "vendor") and _VENDOR_VERSIONED.search(path.name)
+    vendor_root = ROOT / "public" / "vendor"
+    vendored = path.is_relative_to(vendor_root) and (
+        bool(_VENDOR_VERSIONED.search(path.name))
+        or any(_VENDOR_VERSIONED_DIR.search(part) for part in path.relative_to(vendor_root).parts[:-1])
+    )
     cache = "public, max-age=31536000, immutable" if vendored else "no-cache"
     headers = {"Content-Type": _content_type(path), "Cache-Control": cache}
     if path.suffix in COMPRESSIBLE:
