@@ -157,12 +157,15 @@ def test_a_budget_model_gets_budget_tokens_and_no_effort() -> None:
     assert "output_config" not in body
 
 
-def test_xhigh_clamps_to_high_where_the_model_stops_there() -> None:
+def test_a_rung_the_model_skips_rounds_up_to_its_next() -> None:
+    # Sonnet 4.6 has low/medium/high/max, no xhigh: the ask rounds up, as minimal does to low.
     body = ADAPTER.body(
         Request(system="", messages=(MESSAGES[0],), thinking=Thinking.XHIGH), resolve("claude-sonnet-4-6")
     )
-    assert body["output_config"] == {"effort": "high"}
+    assert body["output_config"] == {"effort": "max"}
     assert ADAPTER.body(CHAT, MODEL)["output_config"]["effort"] == "low"
+    top = ADAPTER.body(Request(system="", messages=(MESSAGES[0],), thinking=Thinking.MAX), MODEL)
+    assert top["output_config"] == {"effort": "max"}
 
 
 def test_only_the_last_four_pins_become_breakpoints() -> None:

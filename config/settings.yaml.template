@@ -210,7 +210,7 @@
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
 #     llm_model: "google:gemini-3.6-flash"  # provider:name — google | openai | anthropic; openai-chat + llm_base_url for a LAN server
-#     llm_thinking: "minimal"        # minimal | low | medium | high | xhigh; "" = model default
+#     llm_thinking: "minimal"        # minimal | low | medium | high | xhigh | max; "" = model default
 #     llm_base_url: ""               # openai-chat only: a LAN server's ".../v1" root (vLLM, Ollama, NIM); key via LLM_API_KEY
 #     llm_extra_body: ""             # JSON object merged into every request (server-specific knobs); "" = none
 #     memory_llm_model: ""           # recall's model, same syntax and the same llm_base_url / llm_extra_body; "" = the brain's

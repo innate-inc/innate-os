@@ -179,8 +179,9 @@ def test_tool_schema_drops_the_keywords_gemini_rejects() -> None:
 def test_thinking_is_clamped_and_omitted_by_default() -> None:
     plain = ADAPTER.body(Request(system="", messages=(MESSAGES[0],)), MODEL)
     assert "generationConfig" not in plain
-    top = ADAPTER.body(Request(system="", messages=(MESSAGES[0],), thinking=Thinking.XHIGH), MODEL)
-    assert top["generationConfig"] == {"thinkingConfig": {"thinkingLevel": "high"}}
+    for past_the_end in (Thinking.XHIGH, Thinking.MAX):
+        top = ADAPTER.body(Request(system="", messages=(MESSAGES[0],), thinking=past_the_end), MODEL)
+        assert top["generationConfig"] == {"thinkingConfig": {"thinkingLevel": "high"}}
 
 
 def test_pinned_request_sends_only_the_handle() -> None:

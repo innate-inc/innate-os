@@ -45,7 +45,7 @@ class BrainConfig:
     # --- Local brain (LLM) ---
     llm_model: str  # "provider:name" — google | openai | anthropic | openai-chat; a bare name infers its vendor
     llm_base_url: str  # openai-chat only: the server's ".../v1" root (LAN vLLM, Ollama, NIM); key optional
-    llm_thinking: str  # "minimal" | "low" | "medium" | "high" | "xhigh"; "" = model default
+    llm_thinking: str  # "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; "" = model default
     llm_extra_body: str  # JSON object merged into every request (server-specific knobs)
     memory_llm_model: str  # recall's model, same syntax and the same base_url/extra_body; "" = the brain's
     idle_turn_interval: float  # seconds between looks when no skill is running

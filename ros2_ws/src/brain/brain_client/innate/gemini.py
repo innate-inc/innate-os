@@ -25,20 +25,25 @@ from innate_proxy import ProxyClient
 
 MODEL = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 _TIMEOUT_SECS = 60.0
-_llm: Llm | None = None  # one connection pool for the process, not one per skill run
+_llms: dict[str, Llm] = {}  # one connection pool per model for the process, not one per skill run
 
 
-def make_client() -> Provider | None:
-    """The model, or None if no route to it is configured."""
-    global _llm
-    if _llm is None:
-        _llm = configure(
-            MODEL,
+def make_client(model: str | None = None) -> Provider | None:
+    """The model, or None if no route to it is configured.
+
+    ``model`` is a ``vendor:name`` spec for a skill that wants its own — a
+    cheap fast one for a yes/no look — reached the same way the default is;
+    omitted, it is the brain's default from ``LLM_MODEL``.
+    """
+    spec = model or MODEL
+    if spec not in _llms:
+        _llms[spec] = configure(
+            spec,
             ProxyClient(),
             base_url=os.environ.get("LLM_BASE_URL", ""),
             extra_body=os.environ.get("LLM_EXTRA_BODY", ""),
         )
-    return _llm.provider
+    return _llms[spec].provider
 
 
 def ask_image(

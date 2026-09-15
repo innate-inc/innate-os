@@ -59,7 +59,7 @@ class OpenAIChatAdapter:
         thought_summaries=False,
         json_schema=True,
         pinned=False,
-        thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
+        thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH, Thinking.MAX}),
     )
 
     def body(self, request: Request, model: Model) -> Json:

@@ -55,9 +55,17 @@ class Thinking(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
 
 
-LADDER: tuple[Thinking, ...] = (Thinking.MINIMAL, Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH)
+LADDER: tuple[Thinking, ...] = (
+    Thinking.MINIMAL,
+    Thinking.LOW,
+    Thinking.MEDIUM,
+    Thinking.HIGH,
+    Thinking.XHIGH,
+    Thinking.MAX,
+)
 
 
 class Finish(StrEnum):

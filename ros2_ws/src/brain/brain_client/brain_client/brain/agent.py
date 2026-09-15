@@ -130,7 +130,7 @@ class BrainAgent:
         self._context = (
             ChatContext(
                 provider,
-                thinking=Thinking(config.llm_thinking),  # a settings typo fails here, at boot, not on the first turn
+                thinking=self._thinking_level(config.llm_thinking),
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
@@ -171,6 +171,14 @@ class BrainAgent:
             return False
         self._timezone = zone
         return True
+
+    def _thinking_level(self, raw: str) -> Thinking:
+        try:
+            return Thinking(raw.strip().lower())
+        except ValueError:
+            levels = ", ".join(level.value or '""' for level in Thinking)
+            self._logger.warn(f"[Brain] Unknown llm_thinking '{raw}' — using the model's default (one of {levels})")
+            return Thinking.DEFAULT
 
     @property
     def available(self) -> bool:

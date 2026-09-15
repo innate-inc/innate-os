@@ -100,6 +100,16 @@ const STT_BACKEND_OPTIONS = [
 // The robot's OS ships on Etc/UTC, so the agent's clock has to be told where the
 // robot physically stands — not where an operator is teleoperating from. A shortlist
 // plus Custom: the full IANA set is ~600 names, unusable as a dropdown.
+const THINKING_OPTIONS = [
+  { value: "", label: "Model default" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
+  { value: "max", label: "Max" },
+];
+
 const TIMEZONE_OPTIONS = [
   { value: "", label: "Robot system setting" },
   { value: "America/Los_Angeles", label: "Los Angeles (US Pacific)" },
@@ -336,7 +346,7 @@ export const SETTINGS_PAGES = [
         note: "The brain and the speech-to-text path use separate models. The transcribe backend picks which STT model knob applies.",
         knobs: [
           { path: ["brain_client_node", P, "llm_model"], label: "Brain model", default: "google:gemini-3.6-flash", type: "string", doc: "provider:name — google:gemini-3.6-flash, anthropic:claude-sonnet-5, openai:gpt-5.4-mini", subsection: "Brain" },
-          { path: ["brain_client_node", P, "llm_thinking"], label: "Brain thinking", default: "minimal", type: "string", doc: "minimal · low · medium · high · xhigh; empty = the model's default", subsection: "Brain" },
+          { path: ["brain_client_node", P, "llm_thinking"], label: "Brain thinking", default: "minimal", type: "string", doc: "How long the model reasons before each reply. A level the model lacks rounds to its nearest; Model default lets the vendor choose.", options: THINKING_OPTIONS, subsection: "Brain" },
           { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "elevenlabs_batch_stt_model"], label: "Scribe batch model", default: "scribe_v2", type: "string", doc: "ElevenLabs model for the elevenlabs_batch backend", subsection: "Speech to text" },

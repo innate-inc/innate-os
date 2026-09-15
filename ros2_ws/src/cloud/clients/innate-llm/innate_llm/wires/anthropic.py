@@ -55,6 +55,7 @@ _BUDGETS = {
     Thinking.MEDIUM: 4096,
     Thinking.HIGH: 8192,
     Thinking.XHIGH: 16384,
+    Thinking.MAX: 32768,
 }
 _FINISH = {
     "tool_use": Finish.TOOL_CALLS,
@@ -74,7 +75,7 @@ class AnthropicAdapter:
         thought_summaries=True,
         json_schema=True,
         pinned=False,
-        thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
+        thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH, Thinking.MAX}),
     )
 
     def body(self, request: Request, model: Model) -> Json:
