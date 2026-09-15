@@ -95,6 +95,19 @@ const CAM_CENTRES: [number, number][] = [
   [-0.0303, -0.000275],
 ];
 
+// base.STL models the drive wheels as part of the chassis; they are cut out by
+// position. Axle and track match the base_wheel_* collisions in mars.urdf.
+// Inboard of |y|=75.5mm sits the motor mount, which does not turn.
+const WHEEL_LINK = "base_link";
+const WHEEL_AXLE_Z = 0.0372;
+const WHEEL_RADIUS = 0.0372;
+const WHEEL_HALF_TRACK = 0.0877;
+const WHEEL_INBOARD_Y = 0.0755;
+const WHEEL_CUT_RADIUS = 0.039; // the tread's scallops stand ~1mm proud of the radius
+// Per-frame pose steps beyond these are a snap (hidden tab, reset), not driving.
+const WHEEL_MAX_STEP_M = 0.1;
+const WHEEL_MAX_STEP_RAD = 0.5;
+
 // Room streaming order: the spaces the operator looks at first load first.
 // Matched as substrings of the room name (from the source glb, Portuguese:
 // "Sala" = living room, "Corredor" = hallway); anything unmatched keeps
@@ -190,6 +203,9 @@ export class SimScene {
   private robotRoot = new THREE.Group();
   private robot?: URDFRobot;
   private followPrevXY: [number, number] = [0, 0];
+  private prevYaw = 0;
+  /** Left, right: pivots on each drive axle, spun about +Y by rollWheels. */
+  private wheels?: [THREE.Group, THREE.Group];
   private glossyMaterialCache = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   private orange?: THREE.MeshStandardMaterial;
   private optic?: THREE.MeshStandardMaterial;
@@ -796,6 +812,12 @@ export class SimScene {
       });
     });
 
+    const baseMeshes: THREE.Mesh[] = [];
+    robot.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !obj.userData.collider && nearestLinkName(obj) === WHEEL_LINK) baseMeshes.push(obj);
+    });
+    for (const mesh of baseMeshes) this.wheels ??= splitWheels(mesh);
+
     let camerasSplit = false;
     robot.traverse((obj) => {
       if (obj.userData.collider) return;
@@ -1221,6 +1243,7 @@ export class SimScene {
     this.frameFacing(x, y, yaw);
     this.renderer.domElement.style.visibility = "";
     this.followPrevXY = [x, y];
+    this.prevYaw = yaw;
   }
 
   /** Re-frame on the robot where it stands (see simStage's attach). */
@@ -1266,14 +1289,26 @@ export class SimScene {
     // it was away as one jump.
     const [prevX, prevY] = this.followPrevXY;
     this.followPrevXY = [x, y];
+    const dx = x - prevX;
+    const dy = y - prevY;
+    this.rollWheels(dx, dy, yaw);
     if (this.followCamera && this.cameraMode === "free") {
-      const dx = x - prevX;
-      const dy = y - prevY;
       this.camera.position.x += dx;
       this.camera.position.y += dy;
       this.controls.target.x += dx;
       this.controls.target.y += dy;
     }
+  }
+
+  /** Turn each wheel by the ground its contact patch covered: differential drive, no slip. */
+  private rollWheels(dx: number, dy: number, yaw: number): void {
+    const dyaw = Math.atan2(Math.sin(yaw - this.prevYaw), Math.cos(yaw - this.prevYaw));
+    this.prevYaw = yaw;
+    if (!this.wheels || Math.hypot(dx, dy) > WHEEL_MAX_STEP_M || Math.abs(dyaw) > WHEEL_MAX_STEP_RAD) return;
+    const forward = dx * Math.cos(yaw) + dy * Math.sin(yaw);
+    const [left, right] = this.wheels;
+    left.rotation.y = (left.rotation.y + (forward - dyaw * WHEEL_HALF_TRACK) / WHEEL_RADIUS) % (2 * Math.PI);
+    right.rotation.y = (right.rotation.y + (forward + dyaw * WHEEL_HALF_TRACK) / WHEEL_RADIUS) % (2 * Math.PI);
   }
 
   render(): void {
@@ -1465,6 +1500,61 @@ function splitCameraGroups(geometry: THREE.BufferGeometry): boolean {
   geometry.addGroup(shell.length * 3, glass.length * 3, 1);
   geometry.computeVertexNormals();
   return true;
+}
+
+/** Move each drive wheel's triangles out of base.STL's geometry into their own
+ * mesh on a pivot at its axle, so it can turn. Undefined when the mesh has no wheels. */
+function splitWheels(base: THREE.Mesh): [THREE.Group, THREE.Group] | undefined {
+  const geometry = base.geometry;
+  const position = geometry.getAttribute("position");
+  if (geometry.index !== null || !(position instanceof THREE.BufferAttribute)) return undefined;
+
+  const chassis: number[] = [];
+  const left: number[] = [];
+  const right: number[] = [];
+  for (let triangle = 0; triangle < position.count / 3; triangle++) {
+    const side = wheelSide(position, triangle);
+    (side === 1 ? left : side === -1 ? right : chassis).push(triangle);
+  }
+  if (left.length === 0 || right.length === 0) return undefined;
+
+  base.geometry = triangleSubset(geometry, chassis, new THREE.Vector3());
+  const pivotFor = (triangles: number[], side: 1 | -1): THREE.Group => {
+    const axle = new THREE.Vector3(0, side * WHEEL_HALF_TRACK, WHEEL_AXLE_Z);
+    const pivot = new THREE.Group();
+    pivot.position.copy(axle);
+    pivot.add(new THREE.Mesh(triangleSubset(geometry, triangles, axle), base.material));
+    base.add(pivot);
+    return pivot;
+  };
+  const pivots: [THREE.Group, THREE.Group] = [pivotFor(left, 1), pivotFor(right, -1)];
+  geometry.dispose();
+  return pivots;
+}
+
+/** +1 left wheel, -1 right wheel, 0 chassis: all three vertices must lie in one wheel. */
+function wheelSide(position: THREE.BufferAttribute, triangle: number): 1 | -1 | 0 {
+  const side = Math.sign(position.getY(triangle * 3));
+  for (let vertex = triangle * 3; vertex < triangle * 3 + 3; vertex++) {
+    const y = position.getY(vertex);
+    if (Math.sign(y) !== side || Math.abs(y) < WHEEL_INBOARD_Y) return 0;
+    if (Math.hypot(position.getX(vertex), position.getZ(vertex) - WHEEL_AXLE_Z) > WHEEL_CUT_RADIUS) return 0;
+  }
+  return side === 1 ? 1 : -1;
+}
+
+/** A non-indexed copy of the given triangles, re-origined on `origin`. */
+function triangleSubset(source: THREE.BufferGeometry, triangles: number[], origin: THREE.Vector3): THREE.BufferGeometry {
+  const subset = new THREE.BufferGeometry();
+  for (const [name, attribute] of Object.entries(source.attributes)) {
+    if (!(attribute instanceof THREE.BufferAttribute)) continue;
+    const stride = attribute.itemSize * 3;
+    const array = new Float32Array(triangles.length * stride);
+    triangles.forEach((triangle, i) => array.set(attribute.array.subarray(triangle * stride, (triangle + 1) * stride), i * stride));
+    subset.setAttribute(name, new THREE.BufferAttribute(array, attribute.itemSize));
+  }
+  subset.translate(-origin.x, -origin.y, -origin.z);
+  return subset;
 }
 
 /** All three vertices inside ONE dome -- testing them against the pair instead
