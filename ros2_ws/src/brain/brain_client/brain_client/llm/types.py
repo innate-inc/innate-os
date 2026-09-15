@@ -155,6 +155,7 @@ class Reply:
     message: Message
     usage: Usage
     finish: Finish
+    detail: str = ""  # the vendor's own finish/block reason, for logs (MALFORMED_FUNCTION_CALL, SAFETY, …)
 
 
 @dataclass(frozen=True)

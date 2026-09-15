@@ -7,7 +7,8 @@ A setting names the model as ``vendor:name`` — ``google:gemini-3.6-flash``,
 its own wire (native Gemini, Anthropic Messages, OpenAI Responses). A bare
 name infers its vendor from its prefix, so the retired ``gemini-3.6-flash``
 setting still works. ``openai-chat`` with ``base_url`` points the Chat
-Completions wire at any OpenAI-compatible server (a LAN vLLM, Ollama, NIM).
+Completions wire at any OpenAI-compatible server (a LAN vLLM, Ollama, NIM);
+``base_url`` means nothing to the other vendors' wires and is ignored there.
 
 The way there: the Innate proxy when the robot has a service key (it holds
 the vendor keys and passes each API through under its own service name),
@@ -57,6 +58,7 @@ class Backend(StrEnum):
     UNCONFIGURED = "unconfigured"
 
 
+_VENDORS = frozenset(vendor.value for vendor in Vendor)
 _KEY_ENV: dict[Vendor, str] = {
     Vendor.GOOGLE: "GEMINI_API_KEY",
     Vendor.OPENAI: "OPENAI_API_KEY",
@@ -97,18 +99,19 @@ class Llm:
 
 
 def split_spec(spec: str, *, base_url: str = "") -> tuple[Vendor, str]:
-    """``"vendor:name"`` -> (vendor, name); a bare name infers its vendor."""
+    """``"vendor:name"`` -> (vendor, name); a bare name infers its vendor.
+
+    With a ``base_url`` any name that is not ``vendor:``-prefixed is the server's
+    own — an Ollama tag such as ``qwen2.5:7b`` carries a colon of its own.
+    """
     spec = spec.strip()
-    if ":" in spec:
-        prefix, name = spec.split(":", 1)
-        try:
-            return Vendor(prefix), name
-        except ValueError:
-            raise ValueError(
-                f"unknown LLM vendor {prefix!r} in {spec!r} (one of {[v.value for v in Vendor]})"
-            ) from None
+    prefix, colon, name = spec.partition(":")
+    if colon and prefix in _VENDORS:
+        return Vendor(prefix), name
     if base_url:
         return Vendor.OPENAI_CHAT, spec
+    if colon:
+        raise ValueError(f"unknown LLM vendor {prefix!r} in {spec!r} (one of {sorted(_VENDORS)})")
     if spec.startswith("claude"):
         return Vendor.ANTHROPIC, spec
     if spec.startswith(("gpt", "o1", "o3", "o4")):
@@ -128,16 +131,16 @@ def configure(
     resolved = f"{vendor}:{name}"
     extra: Json = json.loads(extra_body) if extra_body else {}
     adapter = _ADAPTER[vendor]
-    key = vendor_key(vendor, base_url=base_url)
+    server = base_url.rstrip("/") if vendor == Vendor.OPENAI_CHAT else ""
+    key = vendor_key(vendor, base_url=server)
     proxied = proxy is not None and proxy.is_available() and vendor in _PROXY_SERVICE
 
     def llm(http: Http, backend: Backend) -> Llm:
         return Llm(resolved, _provider(adapter, http, name, extra), backend)
 
-    if base_url:
-        if not key:
-            return Llm(resolved, None, Backend.UNCONFIGURED)
-        return llm(Http(base_url.rstrip("/"), headers=_bearer(key), timeout=TURN_TIMEOUT_SECS), Backend.DIRECT)
+    if server:
+        # A LAN server usually takes no key at all; LLM_API_KEY is only for the ones that do.
+        return llm(Http(server, headers=_bearer(key) if key else None, timeout=TURN_TIMEOUT_SECS), Backend.DIRECT)
     if vendor == Vendor.ANTHROPIC and key:
         return llm(Http(_BASE_URL[vendor], headers=vendor_headers(vendor, key)), Backend.DIRECT)
     if proxied and proxy is not None:

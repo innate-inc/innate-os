@@ -12,7 +12,7 @@ Three backends, selected by the ``stt_backend`` setting:
 
 - ``elevenlabs``       — ElevenLabs Scribe realtime WebSocket (default)
 - ``elevenlabs_batch`` — ElevenLabs Scribe batch, one POST per utterance
-- ``gemini``           — Gemini through pydantic-ai, one call per utterance
+- ``gemini``           — Gemini through the brain's provider library, one call per utterance
 
 Scribe realtime streams over a warm WebSocket and commits utterances from the
 same local endpointing the batch backends use — Silero VAD by default, an RMS

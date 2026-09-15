@@ -187,7 +187,8 @@ def _has_refusal(item: Json) -> bool:
 def _reply(response: Json, items: list[Json], parts: list[Part], refused: bool) -> Reply:
     reason = (response.get("incomplete_details") or {}).get("reason") or ""
     message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_RESPONSES, {"items": items}))
-    return Reply(message, _usage(response.get("usage") or {}), _finish(parts, reason, refused))
+    finish = _finish(parts, reason, refused)
+    return Reply(message, _usage(response.get("usage") or {}), finish, "refusal" if refused else reason)
 
 
 def _finish(parts: list[Part], reason: str, refused: bool) -> Finish:

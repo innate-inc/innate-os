@@ -209,7 +209,17 @@ class BrainClientNode(Node):
             extra_body=cfg.llm_extra_body,
             logger=self.get_logger(),
         )
-        recall = configure(cfg.memory_llm_model, self._proxy, logger=self.get_logger()) if cfg.memory_llm_model else llm
+        recall = (
+            configure(
+                cfg.memory_llm_model,
+                self._proxy,
+                base_url=cfg.llm_base_url,
+                extra_body=cfg.llm_extra_body,
+                logger=self.get_logger(),
+            )
+            if cfg.memory_llm_model
+            else llm
+        )
         self.memory_search = (
             MemorySearch(self.memory_store, recall.provider, logger=self.get_logger())
             if recall.provider is not None

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
@@ -47,6 +48,16 @@ API_VERSION = "2023-06-01"  # routing sends it as the anthropic-version header, 
 _MAX_TOKENS = 16000  # the wire requires a cap; a turn that needs more is a bug upstream
 _BREAKPOINTS = 4  # the API takes at most 4 cache_control blocks per request
 _EPHEMERAL = {"type": "ephemeral"}
+# Haiku 4.5, Sonnet/Opus 4.5 and older: adaptive thinking and output_config.effort are 400s
+# there — thinking is a token budget, and only when a rung is asked for.
+_BUDGET_MODEL = re.compile(r"claude-(?:3-|(?:opus|sonnet)-4(?:-[0-5])?(?:-\d{8}|$)|haiku-4-5)")
+_BUDGETS = {
+    Thinking.MINIMAL: 1024,
+    Thinking.LOW: 2048,
+    Thinking.MEDIUM: 4096,
+    Thinking.HIGH: 8192,
+    Thinking.XHIGH: 16384,
+}
 _FINISH = {
     "tool_use": Finish.TOOL_CALLS,
     "max_tokens": Finish.LENGTH,
@@ -69,15 +80,20 @@ class AnthropicAdapter:
     )
 
     def body(self, request: Request, model: str) -> Json:
-        body: Json = {"model": model, "max_tokens": request.max_tokens or _MAX_TOKENS, "stream": True}
+        max_tokens = request.max_tokens or _MAX_TOKENS
+        body: Json = {"model": model, "max_tokens": max_tokens, "stream": True}
         if request.system:
             body["system"] = [{"type": "text", "text": request.system}]
         pins = _breakpoints(request.messages)
         body["messages"] = [self._message(m, i in pins) for i, m in enumerate(request.messages)]
         if request.tools:
             body["tools"] = [_tool(tool) for tool in request.tools]
-        body["thinking"] = _thinking(request.thought_summaries)
-        output = self._output_config(request)
+        budgeted = _BUDGET_MODEL.search(model) is not None
+        if not budgeted:
+            body["thinking"] = _thinking(request.thought_summaries)
+        elif budget := self._budget(request, max_tokens):
+            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        output = self._output_config(request, effort=not budgeted)
         if output:
             body["output_config"] = output
         return body
@@ -93,11 +109,19 @@ class AnthropicAdapter:
                 yield delta
         yield stream.reply()
 
-    def _output_config(self, request: Request) -> Json:
+    def _budget(self, request: Request, max_tokens: int) -> int:
+        """A budget model's thinking allowance for the asked rung: 0 when none is asked or none fits."""
+        rung = self.caps.clamp(request.thinking)
+        if rung == Thinking.DEFAULT:
+            return 0
+        budget = min(_BUDGETS[rung], max_tokens - 1024)  # must stay under max_tokens
+        return budget if budget >= 1024 else 0
+
+    def _output_config(self, request: Request, *, effort: bool) -> Json:
         config: Json = {}
-        effort = self.caps.clamp(request.thinking)
-        if effort != Thinking.DEFAULT:
-            config["effort"] = effort.value
+        rung = self.caps.clamp(request.thinking)
+        if effort and rung != Thinking.DEFAULT:
+            config["effort"] = rung.value
         if request.json_schema is not None:
             config["format"] = {"type": "json_schema", "schema": _schema(request.json_schema)}
         return config
@@ -195,7 +219,8 @@ class _Stream:
         parts = _parts(content)
         native = (Wire.ANTHROPIC, {"role": "assistant", "content": content})
         message = Message(Role.ASSISTANT, parts, native=native)
-        return Reply(message, self.usage, _finish(self.stop_reason, any(isinstance(p, ToolCall) for p in parts)))
+        finish = _finish(self.stop_reason, any(isinstance(p, ToolCall) for p in parts))
+        return Reply(message, self.usage, finish, self.stop_reason)
 
     def _open(self, usage: Json) -> None:
         self.started = True

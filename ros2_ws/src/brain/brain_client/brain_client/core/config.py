@@ -9,8 +9,8 @@ which keeps every consumer testable without a ROS runtime.
 Credentials deliberately stay out of the ROS parameter surface: the brain
 reaches its model through the Innate proxy (INNATE_SERVICE_KEY) or directly
 with the vendor's key — ``GEMINI_API_KEY``, ``OPENAI_API_KEY``,
-``ANTHROPIC_API_KEY``, or ``LLM_API_KEY`` for an ``llm_base_url`` server
-(loaded from ``.env`` by launch).
+``ANTHROPIC_API_KEY``, or ``LLM_API_KEY`` for an ``llm_base_url`` server that
+wants one (loaded from ``.env`` by launch).
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ class BrainConfig:
 
     # --- Local brain (LLM) ---
     llm_model: str  # "provider:name" — google | openai | anthropic | openai-chat; a bare name infers its vendor
-    llm_base_url: str  # OpenAI-compatible ".../v1" root (LAN vLLM, Ollama, NIM); "" = the vendor's own API
+    llm_base_url: str  # openai-chat only: the server's ".../v1" root (LAN vLLM, Ollama, NIM); key optional
     llm_thinking: str  # "minimal" | "low" | "medium" | "high" | "xhigh"; "" = model default
     llm_extra_body: str  # JSON object merged into every request (server-specific knobs)
-    memory_llm_model: str  # recall's model, same syntax; "" = the brain's
+    memory_llm_model: str  # recall's model, same syntax and the same base_url/extra_body; "" = the brain's
     idle_turn_interval: float  # seconds between looks when no skill is running
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model

@@ -89,11 +89,7 @@
         },
         {
           "name": "wait",
-          "description": "Do nothing.",
-          "parameters": {
-            "type": "object",
-            "properties": {}
-          }
+          "description": "Do nothing."
         }
       ]
     }

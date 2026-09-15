@@ -193,7 +193,7 @@ def _reply(text: list[str], calls: dict[int, Json], usage: Usage, reason: str) -
     if ordered:
         assistant["tool_calls"] = [_wire_call(c["id"], c["name"], c["arguments"]) for c in ordered]
     message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_CHAT, assistant))
-    return Reply(message, usage, _finish(bool(ordered), reason))
+    return Reply(message, usage, _finish(bool(ordered), reason), reason)
 
 
 def _finish(has_calls: bool, reason: str) -> Finish:

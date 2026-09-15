@@ -91,13 +91,22 @@ PUBLISHED_PORT_ENV = {
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
 }
-# How brain_client reaches Gemini: through the Innate proxy with a service key,
-# straight at Google with a Gemini key, or not at all.
+# How brain_client reaches its model: through the Innate proxy with a service key,
+# straight at the vendor with its key, an LLM_BASE_URL server, or not at all.
 INNATE_BACKEND = "innate"
-GEMINI_BACKEND = "gemini"
+VENDOR_BACKEND = "vendor"
+SERVER_BACKEND = "server"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
+DEFAULT_LLM_MODEL = "google:gemini-3.6-flash"
+# The vendor prefixes brain_client/llm/configure.py knows, and the key each one reads.
+VENDOR_API_KEYS = {
+    "google": GEMINI_API_KEY,
+    "openai": "OPENAI_API_KEY",
+    "openai-chat": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
 DEFAULT_SIM_OS_IMAGE = "ghcr.io/innate-inc/innate-os-sim-ros"
@@ -254,6 +263,8 @@ LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
 SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+# Also forwarded from the shell into the container env, beside the keys setup manages.
+VENDOR_ENV_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY")
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -475,19 +486,43 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
     return None
 
 
-def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+def llm_vendor(spec: str, base_url: str = "") -> str:
+    """The vendor prefix of an LLM_MODEL setting, inferred for a bare name the way
+    brain_client/llm/configure.py:split_spec does."""
+    spec = spec.strip()
+    prefix, colon, _ = spec.partition(":")
+    if colon and prefix in VENDOR_API_KEYS:
+        return prefix
+    if base_url:
+        return "openai-chat"
+    if spec.startswith("claude"):
+        return "anthropic"
+    if spec.startswith(("gpt", "o1", "o3", "o4")):
+        return "openai"
+    return "google"
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (llm/configure.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
-    restates the rule. Change one and change the other.
+
+def resolve_brain_backend(env: dict[str, str]) -> str:
+    """How the in-process brain (brain_client) will reach the model LLM_MODEL names.
+
+    A server (LLM_BASE_URL) needs no key; Claude uses its key before the proxy;
+    otherwise the service key wins (it also buys voice, which a vendor key does
+    not), then the vendor's own key. brain_client's `configure()`
+    (llm/configure.py) makes the real choice and owns this precedence; the
+    launcher runs on the host and cannot import it, so this restates the rule.
+    Change one and change the other.
     """
+    base_url = env.get("LLM_BASE_URL", "").strip()
+    vendor = llm_vendor(env.get("LLM_MODEL") or env.get("GEMINI_MODEL") or DEFAULT_LLM_MODEL, base_url)
+    if vendor == "openai-chat" and base_url:
+        return SERVER_BACKEND
+    key_env = VENDOR_API_KEYS[vendor]
+    has_key = is_configured_secret_value(key_env, env.get(key_env, ""))
+    if vendor == "anthropic":
+        return VENDOR_BACKEND if has_key else NO_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
-    if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):
-        return GEMINI_BACKEND
-    return NO_BACKEND
+    return VENDOR_BACKEND if has_key else NO_BACKEND
 
 
 def require_path(path: Path, label: str) -> Path:
@@ -781,7 +816,7 @@ def get_config() -> dict[str, object]:
 
     user_env = parse_env_file(ENV_PATH)
     raw_env = dict(user_env)
-    for key in SECRET_ENV_KEYS:
+    for key in (*SECRET_ENV_KEYS, *VENDOR_ENV_KEYS):
         value = os.environ.get(key, "").strip()
         if is_configured_secret_value(key, value):
             raw_env[key] = value

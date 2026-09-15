@@ -367,21 +367,6 @@ _migrate_extra_script_dirs() {
 # The 0.8 STT rework removed the OpenAI backend and the stt_realtime_* knobs.
 # Undeclared ROS params load with no warning at all, so a settings.yaml still
 # carrying them would silently lose its tuning — comment them out loudly here.
-# The brain's model became provider-neutral: gemini_model → llm_model
-# ("google:" + the old value), gemini_thinking_level → llm_thinking.
-_migrate_llm_settings() {
-    local settings="$1/config/settings.yaml"
-    [ -f "$settings" ] || return 0
-    if grep -qE '^\s*gemini_model:' "$settings"; then
-        sed -i -E 's|^(\s*)gemini_model:\s*"?([^"#[:space:]]+)"?\s*(#.*)?$|\1llm_model: "google:\2"  # was gemini_model|' "$settings"
-        _mig_log "settings.yaml: gemini_model renamed to llm_model (google:<model>)."
-    fi
-    if grep -qE '^\s*gemini_thinking_level:' "$settings"; then
-        sed -i -E 's|^(\s*)gemini_thinking_level:|\1llm_thinking:|' "$settings"
-        _mig_log "settings.yaml: gemini_thinking_level renamed to llm_thinking."
-    fi
-}
-
 _migrate_stt_settings() {
     local settings="$1/config/settings.yaml"
     [ -f "$settings" ] || return 0
@@ -397,6 +382,21 @@ _migrate_stt_settings() {
             _mig_log "WARNING: settings.yaml sets ${key}, which no longer exists — commented out (local endpointing is tuned by stt_vad_silence_secs / stt_vad_threshold)."
         fi
     done
+}
+
+# The brain's model became provider-neutral: gemini_model → llm_model
+# ("google:" + the old value), gemini_thinking_level → llm_thinking.
+_migrate_llm_settings() {
+    local settings="$1/config/settings.yaml"
+    [ -f "$settings" ] || return 0
+    if grep -qE '^\s*gemini_model:' "$settings"; then
+        sed -i -E 's|^(\s*)gemini_model:\s*"?([^"#[:space:]]+)"?\s*(#.*)?$|\1llm_model: "google:\2"  # was gemini_model|' "$settings"
+        _mig_log "settings.yaml: gemini_model renamed to llm_model (google:<model>)."
+    fi
+    if grep -qE '^\s*gemini_thinking_level:' "$settings"; then
+        sed -i -E 's|^(\s*)gemini_thinking_level:|\1llm_thinking:|' "$settings"
+        _mig_log "settings.yaml: gemini_thinking_level renamed to llm_thinking."
+    fi
 }
 
 run_user_data_migrations() {

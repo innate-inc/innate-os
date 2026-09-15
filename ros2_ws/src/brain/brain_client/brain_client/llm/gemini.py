@@ -95,11 +95,13 @@ class GeminiAdapter:
     def body(self, request: Request, model: str) -> Json:
         body: Json = {}
         if request.pinned:
-            body["cachedContent"] = request.pinned  # the cache holds the system prompt and the tools
+            if request.tools:
+                raise LlmError.unsupported("tools with a pinned context", self.wire)  # pin() caches no declarations
+            body["cachedContent"] = request.pinned  # the cache holds the system prompt
         elif request.system:
             body["systemInstruction"] = _instruction(request.system)
         body["contents"] = [_content(message) for message in request.messages]
-        if request.tools and not request.pinned:
+        if request.tools:
             body["tools"] = [{"functionDeclarations": [_declaration(tool) for tool in request.tools]}]
         config = _generation_config(request, self.caps.clamp(request.thinking))
         if config:
@@ -128,7 +130,7 @@ class GeminiAdapter:
         # keeps every other part exactly as it arrived, signatures included.
         kept = [part for part in raw if not part.get("thought")] or [{"text": ""}]
         message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.GEMINI, {"role": "model", "parts": kept}))
-        yield Reply(message, _usage(usage), _finish(parts, finish_reason, block_reason))
+        yield Reply(message, _usage(usage), _finish(parts, finish_reason, block_reason), block_reason or finish_reason)
 
 
 ADAPTER = GeminiAdapter()
@@ -216,11 +218,10 @@ def _function_response(result: ToolResult) -> Json:
 
 
 def _declaration(tool: Tool) -> Json:
-    return {
-        "name": tool.name,
-        "description": tool.description,
-        "parameters": _pruned(tool.parameters, _UNSUPPORTED_SCHEMA_KEYS),
-    }
+    declaration: Json = {"name": tool.name, "description": tool.description}
+    if tool.parameters.get("properties"):  # an OBJECT schema with no properties is rejected; no schema is fine
+        declaration["parameters"] = _pruned(tool.parameters, _UNSUPPORTED_SCHEMA_KEYS)
+    return declaration
 
 
 def _generation_config(request: Request, thinking: Thinking) -> Json:

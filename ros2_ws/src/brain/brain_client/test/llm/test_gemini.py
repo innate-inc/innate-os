@@ -182,10 +182,15 @@ def test_thinking_is_clamped_and_omitted_by_default() -> None:
 
 
 def test_pinned_request_sends_only_the_handle() -> None:
-    body = ADAPTER.body(Request(system=SYSTEM, messages=MESSAGES, tools=TOOLS, pinned="cachedContents/c1"), MODEL)
+    body = ADAPTER.body(Request(system=SYSTEM, messages=MESSAGES, pinned="cachedContents/c1"), MODEL)
     assert body["cachedContent"] == "cachedContents/c1"
     assert "systemInstruction" not in body
     assert "tools" not in body
+
+
+def test_pinned_request_refuses_tools_the_cache_never_held() -> None:
+    with pytest.raises(LlmError, match="pinned"):
+        ADAPTER.body(Request(system=SYSTEM, messages=MESSAGES, tools=TOOLS, pinned="cachedContents/c1"), MODEL)
 
 
 def test_pin_posts_the_cached_contents_body() -> None:

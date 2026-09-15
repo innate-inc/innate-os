@@ -153,7 +153,8 @@ class ChatContext:
             # empty candidate): committing it would record a silent, answerless
             # exchange — raise instead, so the turn's retry path keeps the
             # events queued and the failure is visible.
-            raise RuntimeError(f"{self._provider.model} returned no content: finish={reply.finish}")
+            why = f"{reply.finish}" + (f" ({reply.detail})" if reply.detail else "")
+            raise RuntimeError(f"{self._provider.model} returned no content: finish={why}")
         # Usage rides the reply and is committed by absorb, on the loop
         # thread: writing self.last_usage here would let an abandoned turn's
         # orphaned request overwrite the committed turn's counts.
