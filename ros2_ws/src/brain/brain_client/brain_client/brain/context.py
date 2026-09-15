@@ -5,7 +5,7 @@
 One :meth:`ChatContext.generate` per agent turn: the reply streams in — text
 deltas feed the speaker as they arrive — and is distilled into a plain
 :class:`Decision` the loop acts on. Vendors' thought summaries surface as
-:class:`~brain_client.llm.Thought` parts and reach the app as robot thoughts.
+:class:`~innate_llm.Thought` parts and reach the app as robot thoughts.
 The bounded history is compacted in chunks — old camera frames masked,
 oldest turns evicted — so requests stay small while consecutive requests keep
 the shared prefix every vendor's prompt cache needs (see :meth:`_prune`).
@@ -34,16 +34,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from brain_client.brain.history import (
-    History,
-    evict_to,
-    image_turns,
-    mask_latest_only,
-    pin_prefix,
-    strip_thoughts,
-    window_images,
-)
-from brain_client.llm import (
+from innate_llm import (
     Image,
     Json,
     Message,
@@ -59,8 +50,18 @@ from brain_client.llm import (
     ToolResult,
 )
 
+from brain_client.brain.history import (
+    History,
+    evict_to,
+    image_turns,
+    mask_latest_only,
+    pin_prefix,
+    strip_thoughts,
+    window_images,
+)
+
 if TYPE_CHECKING:
-    from brain_client.llm.types import Part
+    from innate_llm.types import Part
 
 Prefix = tuple[str, tuple[Tool, ...]]
 """What a request puts before the history: the system prompt and the tool set."""

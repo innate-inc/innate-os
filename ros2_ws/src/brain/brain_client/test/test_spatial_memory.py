@@ -18,11 +18,11 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
+from innate_llm import Event, Finish, Image, LlmError, Message, Reply, Request, Role, Text, Usage
+from innate_llm.replay import Replay
 
 from brain_client.brain import memory_search as memory_search_module
 from brain_client.brain.memory_search import MemorySearch, verdict_text
-from brain_client.llm import Event, Finish, Image, LlmError, Message, Reply, Request, Role, Text, Usage
-from brain_client.llm.replay import Replay
 from brain_client.memory import recorder as recorder_module
 from brain_client.memory import selection as selection_module
 from brain_client.memory.coverage import Coverage, wedge_mask

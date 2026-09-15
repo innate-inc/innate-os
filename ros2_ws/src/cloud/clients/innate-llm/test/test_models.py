@@ -5,9 +5,8 @@
 from __future__ import annotations
 
 import pytest
-
-from brain_client.llm.models import resolve, split_spec
-from brain_client.llm.types import LADDER, Image, LlmError, Message, Model, Request, Role, Thinking, Vendor
+from innate_llm.models import resolve, split_spec
+from innate_llm.types import LADDER, Image, LlmError, Message, Model, Request, Role, Thinking, Vendor
 
 
 def test_the_longest_prefix_wins_so_exceptions_sit_under_their_family() -> None:

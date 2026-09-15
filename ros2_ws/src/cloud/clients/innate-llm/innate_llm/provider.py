@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from brain_client.llm.types import (
+from innate_llm.types import (
     Capabilities,
     Event,
     Json,
@@ -28,7 +28,7 @@ from brain_client.llm.types import (
 )
 
 if TYPE_CHECKING:
-    from brain_client.llm.http import Http
+    from innate_llm.http import Http
 
 Callback = Callable[[str], None] | None
 

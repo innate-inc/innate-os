@@ -29,6 +29,7 @@ from brain_messages.srv import (
     SaveAgent,
 )
 from geometry_msgs.msg import Twist
+from innate_llm import configure
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -53,7 +54,6 @@ from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
-from brain_client.llm import configure
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from brain_client.llm import Image, Message, Role, Text
+from innate_llm import Image, Message, Role, Text
 
 if TYPE_CHECKING:
     from brain_client.perception.identity import RobotIdentity

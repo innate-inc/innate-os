@@ -56,7 +56,7 @@ uvicorn[standard]
 # Other AI
 inspireface
 
-# google-genai: the sim tools (the brain speaks each vendor's wire itself over httpx: brain_client/llm)
+# google-genai: the sim tools (the brain speaks each vendor's wire itself over httpx: innate_llm)
 google-genai
 
 # Input handling

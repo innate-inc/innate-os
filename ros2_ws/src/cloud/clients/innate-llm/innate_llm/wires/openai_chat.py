@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from brain_client.llm.types import (
+from innate_llm.types import (
     Audio,
     Capabilities,
     Event,

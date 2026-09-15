@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""A scripted stand-in for :class:`~brain_client.llm.provider.Provider`, for tests without a vendor."""
+"""A scripted stand-in for :class:`~innate_llm.provider.Provider`, for tests without a vendor."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 
-from brain_client.llm.models import resolve
-from brain_client.llm.provider import Callback, fold
-from brain_client.llm.types import Event, Model, Reply, Request
+from innate_llm.models import resolve
+from innate_llm.provider import Callback, fold
+from innate_llm.types import Event, Model, Reply, Request
 
 Script = Callable[[Request], Iterable[Event]]
 

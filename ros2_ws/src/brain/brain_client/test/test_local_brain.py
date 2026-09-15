@@ -14,17 +14,7 @@ subject.
 import json
 
 import pytest
-
-from brain_client.brain.context import ChatContext, decision_from
-from brain_client.brain.prompt import build_system_prompt
-from brain_client.brain.tools import (
-    STOP_SKILL,
-    WAIT,
-    assign_tool_names,
-    build_tools,
-    tool_name,
-)
-from brain_client.llm import (
+from innate_llm import (
     Finish,
     LlmError,
     Message,
@@ -41,7 +31,17 @@ from brain_client.llm import (
     ToolResult,
     Usage,
 )
-from brain_client.llm.replay import Replay
+from innate_llm.replay import Replay
+
+from brain_client.brain.context import ChatContext, decision_from
+from brain_client.brain.prompt import build_system_prompt
+from brain_client.brain.tools import (
+    STOP_SKILL,
+    WAIT,
+    assign_tool_names,
+    build_tools,
+    tool_name,
+)
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
 
@@ -508,10 +508,11 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from innate_llm import Backend, Llm  # noqa: E402
+
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
-from brain_client.llm import Backend, Llm  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
 
 

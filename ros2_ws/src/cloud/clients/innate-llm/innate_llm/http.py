@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 
 import httpx
 
-from brain_client.llm.types import Json, LlmError
+from innate_llm.types import Json, LlmError
 
 _DETAIL_BYTES = 200
 

@@ -17,8 +17,9 @@ import base64
 import os
 from collections.abc import Sequence
 
-from brain_client.llm import Image, Llm, Message, Provider, Request, Role, Text, configure
-from brain_client.llm.configure import DEFAULT_MODEL
+from innate_llm import Image, Llm, Message, Provider, Request, Role, Text, configure
+from innate_llm.configure import DEFAULT_MODEL
+
 from brain_client.skills.types import cancellable_sleep
 from innate_proxy import ProxyClient
 

@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from brain_client.common.enums import StrEnum
+from innate_llm.enums import StrEnum
 
 if TYPE_CHECKING:
-    from brain_client.llm.types import Wire
+    from innate_llm.types import Wire
 
 
 class Kind(StrEnum):

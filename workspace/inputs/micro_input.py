@@ -39,6 +39,7 @@ import threading
 import time
 
 import numpy as np
+from innate_llm import configure
 
 from brain_client.common.logging import UniversalLogger
 from brain_client.inputs.batch_stt import (
@@ -55,7 +56,6 @@ from brain_client.inputs.batch_stt import (
 )
 from brain_client.inputs.types import InputDevice
 from brain_client.inputs.vad import silero_detector
-from brain_client.llm import configure
 from brain_client.perception.identity import IdentityMonitor
 
 DEFAULT_SAMPLE_RATE = 24_000

@@ -100,7 +100,7 @@ NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
 DEFAULT_LLM_MODEL = "google:gemini-3.6-flash"
-# The vendor prefixes brain_client/llm/configure.py knows, and the key each one reads.
+# The vendor prefixes innate_llm/configure.py knows, and the key each one reads.
 VENDOR_API_KEYS = {
     "google": GEMINI_API_KEY,
     "openai": "OPENAI_API_KEY",
@@ -488,7 +488,7 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 def llm_vendor(spec: str, base_url: str = "") -> str:
     """The vendor prefix of an LLM_MODEL setting, inferred for a bare name the way
-    brain_client/llm/models.py:split_spec does."""
+    innate_llm/models.py:split_spec does."""
     spec = spec.strip()
     prefix, colon, _ = spec.partition(":")
     if colon and prefix in VENDOR_API_KEYS:

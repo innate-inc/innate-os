@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from brain_client.llm.types import Image, Message, Request, Role, Text, Thought
+from innate_llm.types import Image, Message, Request, Role, Text, Thought
 
 FRAME_REMOVED = "[older camera frame removed]"
 WRIST_FRAME_REMOVED = "[older wrist camera frame removed]"

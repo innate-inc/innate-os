@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from brain_client.llm.types import LADDER, Model, Thinking, Vendor
+from innate_llm.types import LADDER, Model, Thinking, Vendor
 
 _NO_XHIGH = frozenset(LADDER) - {Thinking.XHIGH}
 

@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import re
 
-from brain_client.llm import Tool
+from innate_llm import Tool
+
 from brain_client.skills.registry import SkillMeta
 
 STOP_SKILL = "stop_current_skill"

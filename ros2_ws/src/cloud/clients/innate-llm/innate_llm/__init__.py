@@ -3,15 +3,15 @@
 """One small provider library for the brain: four pure adapters, one Http mover, frozen values.
 
 :func:`configure` turns a ``vendor:name`` setting and the keys at hand into an
-:class:`Llm`; callers compose policy (:mod:`~brain_client.brain.history`) into a
+:class:`Llm`; callers compose their own policy into a
 frozen :class:`Request`, a :class:`Provider` runs the one I/O loop, and
-adapters only translate. Tests plug a :class:`~brain_client.llm.replay.Replay`
+adapters only translate. Tests plug a :class:`~innate_llm.replay.Replay`
 in at the same seam.
 """
 
-from brain_client.llm.configure import Backend, Llm, Vendor, configure
-from brain_client.llm.provider import Pinned, Provider
-from brain_client.llm.types import (
+from innate_llm.configure import Backend, Llm, Vendor, configure
+from innate_llm.provider import Pinned, Provider
+from innate_llm.types import (
     Audio,
     Capabilities,
     Event,

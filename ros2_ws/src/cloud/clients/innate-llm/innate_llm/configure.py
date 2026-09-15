@@ -5,7 +5,7 @@
 A setting names the model as ``vendor:name`` — ``google:gemini-3.6-flash``,
 ``anthropic:claude-sonnet-5``, ``openai:gpt-5.4-mini`` — and each vendor has
 its own wire (native Gemini, Anthropic Messages, OpenAI Responses); the
-catalog (:mod:`~brain_client.llm.models`) supplies what the named model
+catalog (:mod:`~innate_llm.models`) supplies what the named model
 accepts. ``openai-chat`` with ``base_url`` points the Chat Completions wire at
 any OpenAI-compatible server (a LAN vLLM, Ollama, NIM); ``base_url`` means
 nothing to the other vendors' wires and is ignored there.
@@ -23,19 +23,24 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from brain_client.common.enums import StrEnum
-from brain_client.llm.http import Http
-from brain_client.llm.models import lookup, resolve
-from brain_client.llm.provider import Adapter, Provider
-from brain_client.llm.types import Json, Model, Vendor
-from brain_client.llm.wires import anthropic, gemini, openai_chat, openai_responses
+from innate_llm.enums import StrEnum
+from innate_llm.http import Http
+from innate_llm.models import lookup, resolve
+from innate_llm.provider import Adapter, Provider
+from innate_llm.types import Json, Model, Vendor
+from innate_llm.wires import anthropic, gemini, openai_chat, openai_responses
 
 if TYPE_CHECKING:
-    from rclpy.impl.rcutils_logger import RcutilsLogger
-
     from innate_proxy import ProxyClient
+
+
+class Warns(Protocol):
+    """The one logger method configure() needs — satisfied by rclpy's logger and the stdlib's alike."""
+
+    def warn(self, message: str) -> None: ...
+
 
 DEFAULT_MODEL = "google:gemini-3.6-flash"
 LLM_API_KEY_ENV = "LLM_API_KEY"
@@ -95,13 +100,13 @@ def configure(
     *,
     base_url: str = "",
     extra_body: str = "",
-    logger: RcutilsLogger | None = None,
+    logger: Warns | None = None,
 ) -> Llm:
     model = resolve(spec or DEFAULT_MODEL, base_url=base_url)
     vendor = model.vendor
     resolved = f"{vendor}:{model.name}"
     if logger is not None and not base_url and lookup(model.name) is None:
-        logger.warn(f"[Brain] {model.name} is not in the model catalog — assuming {vendor}'s defaults")
+        logger.warn(f"[LLM] {model.name} is not in the model catalog — assuming {vendor}'s defaults")
     extra: Json = json.loads(extra_body) if extra_body else {}
     adapter = _ADAPTER[vendor]
     server = base_url.rstrip("/") if vendor == Vendor.OPENAI_CHAT else ""
@@ -120,7 +125,7 @@ def configure(
         return llm(proxy_http(proxy, _PROXY_SERVICE[vendor]), Backend.PROXY)
     if not key:
         if logger is not None:
-            logger.warn(f"[Brain] no way to reach {resolved}: no Innate service key and no {_KEY_ENV[vendor]}")
+            logger.warn(f"[LLM] no way to reach {resolved}: no Innate service key and no {_KEY_ENV[vendor]}")
         return Llm(resolved, None, Backend.UNCONFIGURED)
     return llm(Http(_BASE_URL[vendor], headers=vendor_headers(vendor, key)), Backend.DIRECT)
 

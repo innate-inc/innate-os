@@ -15,8 +15,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from brain_client.common.enums import StrEnum
-from brain_client.llm.errors import Kind, LlmError
+from innate_llm.enums import StrEnum
+from innate_llm.errors import Kind, LlmError
 
 Json = dict[str, Any]
 """A JSON object as a vendor sends or takes it: a wire body, a schema, a call's arguments."""

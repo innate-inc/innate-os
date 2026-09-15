@@ -29,6 +29,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from innate_llm import Message, Reply, Thinking, Tool, ToolCall
+
 from brain_client.brain import grounding
 from brain_client.brain.context import ChatContext, Decision
 from brain_client.brain.loop import LoopThread
@@ -46,18 +48,17 @@ from brain_client.brain.utils import (
     parse_view_point,
     resolve_timezone,
 )
-from brain_client.llm import Message, Reply, Thinking, Tool, ToolCall
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from innate_llm import Llm
     from rclpy.node import Node
 
     from brain_client.core.config import BrainConfig
     from brain_client.core.state import BrainState, RunningSkill
-    from brain_client.llm import Llm
     from brain_client.perception.battery import BatteryMonitor
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController

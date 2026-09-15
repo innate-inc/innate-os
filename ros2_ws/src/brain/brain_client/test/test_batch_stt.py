@@ -9,6 +9,9 @@ import json
 
 import httpx
 import pytest
+from innate_llm import Audio, Finish, LlmError, Message, Reply, Role, Text, Thinking, Usage
+from innate_llm.http import Http
+from innate_llm.replay import Replay
 
 from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
@@ -18,9 +21,6 @@ from brain_client.inputs.batch_stt import (
     gemini_transcriber,
     pcm_to_wav,
 )
-from brain_client.llm import Audio, Finish, LlmError, Message, Reply, Role, Text, Thinking, Usage
-from brain_client.llm.http import Http
-from brain_client.llm.replay import Replay
 
 # A real container: the ElevenLabs transcriber now parses it to build the
 # raw-PCM upload form.

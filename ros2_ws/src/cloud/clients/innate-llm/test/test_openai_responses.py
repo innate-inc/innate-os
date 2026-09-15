@@ -8,9 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
-
-from brain_client.llm.models import resolve
-from brain_client.llm.types import (
+from innate_llm.models import resolve
+from innate_llm.types import (
     Finish,
     Image,
     LlmError,
@@ -29,7 +28,7 @@ from brain_client.llm.types import (
     Usage,
     Wire,
 )
-from brain_client.llm.wires.openai_responses import ADAPTER
+from innate_llm.wires.openai_responses import ADAPTER
 
 GOLDENS = Path(__file__).parent / "goldens"
 MODEL = resolve("gpt-5.4-mini")

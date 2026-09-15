@@ -32,15 +32,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from innate_llm import Image, Json, LlmError, Message, Pinned, Provider, Reply, Request, Role, Text, Thinking
+
 from brain_client.common.enums import StrEnum
-from brain_client.llm import Image, Json, LlmError, Message, Pinned, Provider, Reply, Request, Role, Text, Thinking
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from innate_llm.types import Part
     from rclpy.impl.rcutils_logger import RcutilsLogger
 
-    from brain_client.llm.types import Part
     from brain_client.memory.store import Memory, MemorySnapshot, MemoryStore
 
 _TTL_SEC = 12 * 3600  # ~20k-token cache: 12h of storage costs ~$0.24, cheap insurance against cold starts

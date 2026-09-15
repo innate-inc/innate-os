@@ -26,13 +26,14 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
+from innate_llm import Audio, Message, Request, Role, Text, Thinking
 
 from brain_client.inputs.vad import MIC_SAMPLE_RATE, pcm16_to_f32, resample_24k_to_16k
-from brain_client.llm import Audio, Message, Request, Role, Text, Thinking
 
 if TYPE_CHECKING:
+    from innate_llm import Provider
+
     from brain_client.common.logging import UniversalLogger
-    from brain_client.llm import Provider
     from innate_proxy import ProxyClient
 
 # Runtime aliases, not TYPE_CHECKING-only: workspace/inputs/micro_input.py
