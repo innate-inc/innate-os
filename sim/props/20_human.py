@@ -23,9 +23,15 @@ PROP = Prop(
     margin=0.007,
     rgba=(0.65, 0.6, 0.55, 1.0),
     rest_z=0.3,
-    # Released high enough that the lying hull (which reaches ~0.24m below the
-    # body origin) starts clear of sofas and beds instead of inside them.
-    drop_z=1.5,
+    # 0.45, not the original 1.5: a 1.7 m rigid convex hull free-falling
+    # 1.5 m builds real angular momentum before first contact, and a body
+    # authored to LAND lying flat instead tumbled -- verified by rendering
+    # the settled result (not just checking rest position/drift, which both
+    # looked fine while the body was resting diagonally on a nearby prop).
+    # 0.45 clears the same furniture lips the original height was chosen for
+    # (rest_z=0.3 plus a working margin) while being too short a fall to
+    # accumulate meaningful tumble.
+    drop_z=0.45,
     reach=(1.5, 0.0),
     # The scan's origin is at the FEET; without this a Near() against it would
     # measure to the feet of a 1.7m body.

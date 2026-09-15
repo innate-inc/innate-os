@@ -60,8 +60,18 @@ export function createAgentSheet(panel, opts = {}) {
     for (const name of STATES) panel.classList.toggle(`sheet-${name}`, name === next);
     grab.setAttribute("aria-expanded", String(next !== "closed"));
     grab.setAttribute("aria-label", next === "closed" ? "Open chat" : "Close chat");
-    if (next !== "closed") opts.onOpen?.();
+    if (next !== "closed") {
+      opts.onOpen?.();
+      if (enabled) document.dispatchEvent(new CustomEvent("innate:panel-open", { detail: { panel: "agent-chat" } }));
+    }
   }
+
+  // On compact screens, the chat and scene panels share the same space.
+  const onPanelOpen = (/** @type {Event} */ event) => {
+    const opened = /** @type {CustomEvent<{panel?: string}>} */ (event).detail?.panel;
+    if (enabled && opened && opened !== "agent-chat") setState("closed");
+  };
+  document.addEventListener("innate:panel-open", onPanelOpen);
 
   const stageHeight = () => panel.parentElement?.clientHeight || window.innerHeight;
   // Mirrors the CSS, including half's floor.
@@ -144,6 +154,7 @@ export function createAgentSheet(panel, opts = {}) {
       for (const name of STATES) panel.classList.remove(`sheet-${name}`);
     },
     destroy() {
+      document.removeEventListener("innate:panel-open", onPanelOpen);
       header.remove();
     },
   };

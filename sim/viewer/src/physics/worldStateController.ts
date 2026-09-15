@@ -4,6 +4,8 @@
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import type { FireState } from "../fire";
+import type { RoomInfo } from "../roomManifest";
 import type { TrafficManifest, TrafficState } from "../trafficState";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
@@ -12,6 +14,9 @@ export interface ChallengeInfo {
   id: string;
   title: string;
   brief: string;
+  prompt?: string;
+  goals?: string[];
+  time_limit_s?: number | null;
 }
 
 /** A challenge's persisted record (workspace/challenges.json). */
@@ -82,6 +87,7 @@ export interface WorldState {
   traffic: TrafficState | null;
   /** Challenge judge state; null on servers that predate it. */
   challenge: ChallengeBlock | null;
+  fire?: FireState | null;
 }
 
 export class WorldStateController {
@@ -90,6 +96,8 @@ export class WorldStateController {
   onProps?: (props: PropInfo[]) => void;
   /** Traffic actor roster, empty outside Crossroads. */
   onTrafficManifest?: (manifest: TrafficManifest) => void;
+  /** Primitive-authored rooms (statics.py), empty for a mesh world like the apartment. */
+  onRooms?: (rooms: RoomInfo[]) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
   /** The environment roster: in the opening frame, and again on every switch. */
@@ -142,8 +150,10 @@ export class WorldStateController {
   /** Send a stage command (e.g. place_group) back up the observer socket.
    * Dropped silently while the socket is (re)connecting -- it is a button
    * press, not something worth queueing. */
-  send(cmd: object): void {
-    if (this.#ws.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(cmd));
+  send(cmd: object): boolean {
+    if (this.#ws.readyState !== WebSocket.OPEN) return false;
+    this.#ws.send(JSON.stringify(cmd));
+    return true;
   }
 
   dispose(): void {
@@ -159,6 +169,7 @@ export class WorldStateController {
       environments?: EnvironmentSummary[];
       switch?: EnvironmentRoster["switch"];
       traffic_manifest?: TrafficManifest;
+      rooms?: RoomInfo[];
     };
     if (
       "props" in parsed ||
@@ -166,7 +177,8 @@ export class WorldStateController {
       "environment" in parsed ||
       "environments" in parsed ||
       "switch" in parsed ||
-      "traffic_manifest" in parsed
+      "traffic_manifest" in parsed ||
+      "rooms" in parsed
     ) {
       // Roster frame, not a state frame: it has no clock, opens the stream and
       // returns whenever the world changes (see world_server.serve_state).
@@ -178,6 +190,7 @@ export class WorldStateController {
       if (parsed.props) this.onProps?.(parsed.props);
       if (parsed.challenges) this.onChallenges?.(parsed.challenges);
       if ("traffic_manifest" in parsed) this.onTrafficManifest?.(parsed.traffic_manifest ?? []);
+      if ("rooms" in parsed) this.onRooms?.(parsed.rooms ?? []);
       return;
     }
     const msg = parsed as unknown as {
@@ -189,6 +202,7 @@ export class WorldStateController {
       objects?: Record<string, number[]> | null;
       traffic?: TrafficState | null;
       challenge?: ChallengeBlock | null;
+      fire?: FireState | null;
     };
     const joints = msg.joints;
     // joint6M: the gripper's mirrored finger (URDF mimic of joint6, x-1).
@@ -204,6 +218,7 @@ export class WorldStateController {
       objects: msg.objects ?? {},
       traffic: msg.traffic ?? null,
       challenge: msg.challenge ?? null,
+      fire: msg.fire ?? null,
     });
   }
 }

@@ -392,7 +392,7 @@ export const STEREO_CALIB_DEFAULT_MIN_CORNERS = 10;
 // zero-new-ROS-code proxy for "the robot currently has a calibration file".
 export const MAIN_CAMERA_DEPTH_TOPIC = "/mars/main_camera/depth/image_rect_raw";
 
-// Sim only: put the robot back at its spawn pose, arm home, every prop parked.
+// Sim only: reset the robot and restore the world’s default objects.
 // std_msgs/Bool for the same rws reason as STEREO_CALIB_CAPTURE_TOPIC above.
 export const SIM_RESPAWN_TOPIC = "/virtual_mars/reset";
 

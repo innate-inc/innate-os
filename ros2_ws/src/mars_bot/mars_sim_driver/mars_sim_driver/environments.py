@@ -3,7 +3,17 @@
 """Environment packs: one directory per world the simulator can load, holding
 a manifest.json that binds its MuJoCo geometry, Nav2 map, browser assets and
 spawn pose. Tracked packs live in sim/environments; licensed ones the repo
-must not ship go in sim/environments.local (gitignored)."""
+must not ship go in sim/environments.local (gitignored).
+
+A pack's geometry is one of two kinds. `physics` names scanned meshes under
+sim/assets (the apartment, the backrooms). `bundle` names a directory under
+sim/ authored as MuJoCo primitives with its props and challenges beside it --
+sim/bundles/<name>/{rooms,props,challenges}, the benchmark's layout -- whose
+rooms are statics.py sidecars inlined into the MJCF, so there is nothing to
+decompose and nothing for the browser to download: the viewer draws them from
+the roster frame. Such a pack carries its Nav2 map itself, map/<id>.yaml
+beside the manifest, since no asset image bakes one for it; the launcher
+stages it into sim/assets/map before the stack boots."""
 
 from __future__ import annotations
 
@@ -41,6 +51,23 @@ class Environment:
     spawn: tuple[float, float, float]
     viewer: dict[str, str]
     traffic: bool = False
+    # The directory holding the manifest (sim/environments/<id> or the .local one).
+    pack_dir: Path | None = None
+    # sim/bundles/<name> for a primitive-authored pack (see the module docstring);
+    # None for a mesh pack. Its rooms/, props/ and challenges/ join the world.
+    bundle: Path | None = None
+
+    @property
+    def rooms_dir(self) -> Path | None:
+        return self.bundle / "rooms" if self.bundle is not None else None
+
+    @property
+    def props_dir(self) -> Path | None:
+        return self.bundle / "props" if self.bundle is not None else None
+
+    @property
+    def challenges_dir(self) -> Path | None:
+        return self.bundle / "challenges" if self.bundle is not None else None
 
     @classmethod
     def load(cls, environment_id: str, assets_dir: Path | None = None) -> Environment:
@@ -52,7 +79,19 @@ class Environment:
                 f"unknown environment {environment_id!r}; available: {', '.join(available_ids()) or 'none'}"
             ) from None
         assets = assets_dir or world.default_assets_dir()
-        physics, navigation, spawn = manifest["physics"], manifest["navigation"], manifest["spawn"]
+        navigation, spawn = manifest["navigation"], manifest["spawn"]
+        physics, bundle = manifest.get("physics"), manifest.get("bundle")
+        if physics is None and bundle is None:
+            raise ValueError(f"{path}: a pack needs `physics` (scanned meshes) or `bundle` (primitive rooms)")
+        bundle_dir = None
+        if bundle is not None:
+            bundle_dir = (world.repo_root() / "sim" / str(bundle)).resolve()
+            if not (bundle_dir / "rooms").is_dir():
+                raise ValueError(f"{path}: bundle {bundle!r} has no rooms/ under sim/")
+        # A bundle's collision and visual dirs follow the mesh packs' naming
+        # and are allowed not to exist: world.py treats a missing dir as no
+        # rooms of that kind, and the bundle's statics are the rooms.
+        physics = physics or {"collision_dir": f"{environment_id}_split_v2", "visual_dir": f"{environment_id}_visual"}
         pose = (float(spawn["x"]), float(spawn["y"]), float(spawn["yaw_degrees"]))
         if not all(math.isfinite(value) for value in pose):
             raise ValueError(f"{path}: spawn pose must be finite")
@@ -68,6 +107,8 @@ class Environment:
             spawn=pose,
             viewer={key: str(value) for key, value in manifest["viewer"].items()},
             traffic=traffic,
+            pack_dir=path.parent,
+            bundle=bundle_dir,
         )
 
     @classmethod

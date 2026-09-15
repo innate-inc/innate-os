@@ -653,7 +653,13 @@ def read_environment_assets(repo_root: Path, environment_id: str) -> Environment
     """
     try:
         manifest = json.loads(environment_manifest_path(repo_root, environment_id).read_text(encoding="utf-8"))
-        physics, viewer = manifest["physics"], manifest["viewer"]
+        viewer = manifest["viewer"]
+        if manifest.get("bundle") and "physics" not in manifest and viewer.get("type") == "primitives":
+            # Primitive rooms, prop meshes and navigation maps ship in the
+            # checkout. Maps and viewer models are staged by the launcher;
+            # none of this world's geometry needs an asset-image unit.
+            return EnvironmentAssets(assets=(), viewer=())
+        physics = manifest["physics"]
         return EnvironmentAssets(
             assets=(
                 str(physics["collision_dir"]),

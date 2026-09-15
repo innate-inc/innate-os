@@ -123,7 +123,7 @@ class WorldServer:
         self.state_cond = threading.Condition()
         # Challenge judge: evaluated on each published state, driven by
         # observer commands, fed skill events by SkillEventBridge (main()).
-        self.challenges = ChallengeEngine(sim, self.lock)
+        self.challenges = ChallengeEngine(sim, self.lock, packs=self.environments)
         self._challenge_error_at = 0.0  # last throttled challenge-failure log
 
     # --- physics (side thread; MuJoCo stepping is pure CPU) ---
@@ -186,6 +186,8 @@ class WorldServer:
                 self._challenge_error_at = time.time()
                 print(f"[world-server] challenge tick failed: {exc!r}", flush=True)
         self._apply_world_actions()
+        with self.lock:
+            fire = self.sim.fire.public() if self.sim.world_epoch == world_epoch else None
         # t = sim clock (playback timeline); wall = shared clock for lag HUDs.
         payload = json.dumps(
             {
@@ -196,6 +198,7 @@ class WorldServer:
                 "joints": joints,
                 "objects": objects,
                 "traffic": traffic,
+                "fire": fire,
                 "challenge": challenge,
             }
         )
@@ -241,8 +244,9 @@ class WorldServer:
         if op == "drop_prop_at":  # user picked the spot: release + settle
             name, x, y = str(cmd["name"]), float(cmd["x"]), float(cmd["y"])
             yaw = float(cmd.get("yaw", 0.0))
+            z = float(cmd["z"]) if cmd.get("z") is not None else None
             with self.lock:
-                ok = self.sim.drop_prop_at(name, x, y, yaw)
+                ok = self.sim.drop_prop_at(name, x, y, yaw, z=z)
         elif op == "place_prop_at_robot":  # at rest, at the prop's own reach offset
             name = str(cmd["name"])
             with self.lock:
@@ -260,7 +264,10 @@ class WorldServer:
                 self.sim.remove_all_props()
             ok = True
         elif op == "start_challenge":  # sets its own scene up; see challenges.py
-            self.challenges.start(str(cmd.get("id", "")))
+            # A run started from the web app has nobody else to speak the
+            # narrator's lines, so they go to the robot over chat; the live
+            # runner speaks them itself and sends chat_cues: false.
+            self.challenges.start(str(cmd.get("id", "")), chat_cues=bool(cmd.get("chat_cues", True)))
             self.publish_state()
             return
         elif op == "abort_challenge":
@@ -324,6 +331,12 @@ class WorldServer:
                 "props": self.sim.prop_manifest(),
                 "traffic_manifest": self.sim.traffic_manifest(),
                 "challenges": self.challenges.roster(),
+                # Primitive-authored world geometry (statics.py). The apartment
+                # is a mesh the viewer loads from the asset bundle, so the
+                # roster never had to describe the world; an authored room
+                # ships no mesh, and without this the 3D view is an empty white
+                # box while the sim is running the map perfectly well.
+                "rooms": self.sim.room_manifest(),
                 "environment": environment.public() if environment else None,
                 "environments": [candidate.summary() for candidate in self.environments],
                 "switch": self.switch,
@@ -637,7 +650,14 @@ def main() -> None:
         print("[world-server] `websockets` not installed -- observer state stream disabled", flush=True)
     else:
         for bind in binds:
-            state_server = ws_serve(server.serve_state, bind, args.state_port)
+            # ping_interval=None: the physics thread can hold this process for
+            # longer than the 20 s keepalive default while it steps and renders,
+            # and the server then closes a perfectly healthy observer with
+            # "keepalive ping timeout". Three live benchmark episodes died at
+            # ~42 s that way (20 s ping + 20 s timeout) and were scored as agent
+            # failures. This is a localhost stream between two processes that
+            # already have a heartbeat in the state messages themselves.
+            state_server = ws_serve(server.serve_state, bind, args.state_port, ping_interval=None)
             threading.Thread(target=state_server.serve_forever, daemon=True).start()
         server.state_port = args.state_port
         print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)

@@ -4,7 +4,14 @@ set -eo pipefail
 ROS_WS="${INNATE_OS_ROS_WS:-$HOME/innate-os/ros2_ws}"
 PREBUILT_ROOT="${INNATE_OS_PREBUILT_ROS_ROOT:-/opt/innate-os-prebuilt/ros2_ws}"
 
+# ROS's setup.zsh runs an eval that calls bash's `complete` builtin, which zsh does not
+# have. The environment is still set correctly (verified: sourcing without `set -e`
+# reaches the end and colcon runs), but the failed builtin returns 127 and `set -e`
+# turns a cosmetic warning into a fatal abort. Guarded the same way as
+# colcon_build_with_retry below.
+set +e
 source /opt/ros/humble/setup.zsh
+set -e
 cd "$ROS_WS"
 
 colcon_build() {

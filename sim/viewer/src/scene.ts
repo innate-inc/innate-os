@@ -17,6 +17,9 @@ import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
 import { TrafficLibrary } from "./traffic";
 import type { TrafficManifest, TrafficState } from "./trafficState";
+import { RoomLibrary } from "./rooms";
+import { FireEffect, type FireState } from "./fire";
+import type { RoomInfo } from "./roomManifest";
 
 /** An environment pack's browser assets as its manifest names them: paths
  * under sim/viewer/public, which the webapp serves at /models and /physics
@@ -234,6 +237,9 @@ export class SimScene {
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
   private traffic: TrafficLibrary;
+  // A primitive-authored world (statics.py), drawn from the roster's "rooms".
+  private rooms: RoomLibrary;
+  private fire: FireEffect;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -289,6 +295,8 @@ export class SimScene {
       (model) => this.warmTextures(model),
     );
     this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
+    this.rooms = new RoomLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
+    this.fire = new FireEffect(this.scene);
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -467,7 +475,11 @@ export class SimScene {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
     this.traffic.setHullsVisible(visible);
-    if (visible && !this.hullsPromise) {
+    this.rooms.setHullsVisible(visible);
+    // A primitive pack's geometry IS its collision shape (drawn by RoomLibrary
+    // above); it publishes no hull soup, and the apartment fallback below
+    // would draw the apartment's hulls inside it.
+    if (visible && !this.hullsPromise && this.environmentViewer.type !== "primitives") {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
       this.hullsPromise = this.loadCollisionHulls().catch((err) => {
@@ -545,6 +557,10 @@ export class SimScene {
     this.scene.add(group);
     this.layoutGroup = group;
 
+    // A primitive-authored pack (the benchmark worlds) ships no glb at all:
+    // its rooms arrive in the roster frame and setRoomManifest draws them.
+    if (viewer.type === "primitives") return { group, rooms: [], monolith: false, baseUrl: "" };
+
     const manifestUrl = viewer.type === "glb" || !viewer.manifest ? null : publicUrl(viewer.manifest);
     let manifest: ApartmentManifest | null = null;
     if (manifestUrl) {
@@ -585,7 +601,9 @@ export class SimScene {
 
   /** Dispose environment assets; retain the robot and props for the next pose. */
   unloadEnvironment(): void {
+    this.fire.update(null, 0);
     this.traffic.unloadEnvironment();
+    this.rooms.unloadEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);
@@ -671,7 +689,12 @@ export class SimScene {
     if (bounds.isEmpty()) return;
     this.layoutBounds = bounds;
     if (this.spawned) return;
+    this.frameBounds(bounds);
+  }
 
+  /** Orbit-camera overview of an extent: the pre-pose framing for a layout
+   * (frameLayout) or for a primitive pack's rooms (setRoomManifest). */
+  private frameBounds(bounds: THREE.Box3): void {
     const center = layoutFocus(bounds);
     const size = bounds.getSize(new THREE.Vector3());
     // Pull back far enough that the widest horizontal extent fits the vertical
@@ -946,7 +969,10 @@ export class SimScene {
   /** Pick how the orbit camera behaves; see CameraMode. "top" flies out to the
    * apartment framing, after which it is an ordinary orbit you can drag. */
   setCameraMode(mode: CameraMode): void {
-    if (mode === this.cameraMode) return;
+    if (mode === this.cameraMode) {
+      if (mode === "top") this.flyToOverview();
+      return;
+    }
     this.cameraMode = mode;
     this.cameraTween = undefined;
     this.cameraClock.getDelta(); // drop the gap since the last frame, or the first step is a jump
@@ -1069,6 +1095,10 @@ export class SimScene {
     this.props.setManifest(props);
   }
 
+  setFireState(state: FireState | null, t: number): void {
+    this.fire.update(state, t);
+  }
+
   /** Parse the prop models ahead of any drop. Call once the robot and
    * apartment have finished, so the props queue behind them. */
   prefetchPropModels(): void {
@@ -1102,6 +1132,21 @@ export class SimScene {
    * stay separate from manipulation props and their Clear/challenge flows. */
   setTrafficManifest(manifest: TrafficManifest): void {
     this.traffic.setManifest(manifest);
+  }
+
+  /** Adopt the world server's room roster (statics.py sidecars): the
+   * primitive-authored geometry of a world that ships no mesh. Sent in the
+   * roster frame like the props; empty for a mesh world like the apartment. */
+  setRoomManifest(rooms: RoomInfo[]): void {
+    this.rooms.setManifest(rooms);
+    const bounds = this.rooms.bounds;
+    if (!bounds) return;
+    // These rooms ARE the layout: "top" frames on them for the rest of the
+    // session and, before the first pose, the orbit camera gets the same
+    // overview the apartment's placeholder boxes give.
+    this.layoutBounds = bounds;
+    if (this.cameraMode === "top") this.flyToOverview();
+    else if (!this.spawned) this.frameBounds(bounds);
   }
 
   /** Mirror authoritative signal aspects and car poses from MuJoCo. */
@@ -1218,7 +1263,8 @@ export class SimScene {
     this.robotRoot.visible = true;
     this.robotRoot.position.set(x, y, 0);
     this.robotRoot.rotation.set(0, 0, yaw);
-    this.frameFacing(x, y, yaw);
+    if (this.cameraMode === "top") this.flyToOverview();
+    else this.frameFacing(x, y, yaw);
     this.renderer.domElement.style.visibility = "";
     this.followPrevXY = [x, y];
   }
@@ -1226,7 +1272,8 @@ export class SimScene {
   /** Re-frame on the robot where it stands (see simStage's attach). */
   frameRobot(): void {
     if (!this.spawned) return; // no real pose yet -- spawnAt still owes the first framing
-    this.frameFacing(this.robotRoot.position.x, this.robotRoot.position.y, this.robotRoot.rotation.z);
+    if (this.cameraMode === "top") this.flyToOverview();
+    else this.frameFacing(this.robotRoot.position.x, this.robotRoot.position.y, this.robotRoot.rotation.z);
   }
 
   private frameFacing(x: number, y: number, yaw: number): void {
@@ -1288,8 +1335,10 @@ export class SimScene {
    * stage per visit, and undisposed contexts pile up until the browser kills
    * the oldest (~16), breaking the live view. */
   dispose(): void {
+    this.fire.dispose();
     this.props.clearPlacementPreview();
     this.traffic.unloadEnvironment();
+    this.rooms.unloadEnvironment();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

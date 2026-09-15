@@ -114,6 +114,33 @@ def test_runtime_events_are_trusted_and_parallel_goals_are_unordered(tmp_path):
     assert [goal["done"] for goal in block["active"]["goals"]] == [True, True]
 
 
+def test_story_runtime_retains_object_state_and_actions_with_benchmark_judging(tmp_path):
+    """The rebased story runtime and benchmark state must coexist in one tick."""
+    from mars_sim_driver.challenges import Drop
+
+    class Story(ChallengeRuntime):
+        def update(self, state, events):
+            assert state.elapsed == pytest.approx(0.1)
+            assert state.heights["mug"] == 0.2
+            assert state.objects["mug"][:3] == [1, 2, 0.2]
+            return RuntimeResult(
+                public={"profile": {"name": "MARS"}},
+                drops=[Drop("mug", 1, 2)],
+                transition=("backrooms", "way_out"),
+            )
+
+    engine, sim, _ = _engine(tmp_path)
+    sim.object_poses = lambda: {"mug": [1, 2, 0.2]}
+    engine.active.runtime = Story()
+    block = engine.tick(0.1, (0, 0, 0), {}, engine.world_epoch, objects=sim.object_poses())
+    assert block["active"]["runtime"]["profile"] == {"name": "MARS"}
+    assert block["profile"] == {"name": "MARS"}
+    drops, transition = engine.take_world_actions()
+    assert drops[0].name == "mug"
+    assert transition == ("backrooms", "way_out")
+    assert engine.take_world_actions() == ([], None)
+
+
 def test_environment_reply_is_a_speech_request_the_brain_voices(tmp_path):
     engine, sim, _runtime = _engine(tmp_path)
     engine.post_robot_speech("a")

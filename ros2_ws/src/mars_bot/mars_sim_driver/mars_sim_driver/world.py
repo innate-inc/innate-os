@@ -125,6 +125,7 @@ _PALETTE = [
 
 if TYPE_CHECKING:
     from .props import PropRegistry
+    from .statics import RoomRegistry
 
 
 def repo_root() -> Path:
@@ -229,20 +230,46 @@ def build_world_xml(
     visual_rooms: dict[str, Path] | None = None,
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
+    statics: "RoomRegistry | None" = None,
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
     traffic_bodies: str = "",
     traffic_assets: str = "",
     atmosphere: str | None = None,
 ) -> str:
-    """The apartment environment MJCF (floor plane + decomposed room hulls,
-    optionally the textured visual rooms in their own geom group, plus every
-    droppable prop parked off-map -- see props.py). Environment-owned dynamic
-    bodies such as town traffic are inserted directly under worldbody via
-    traffic_bodies, already expressed in simulator Z-up coordinates.
-    texture_max caps the visual textures' resolution (see capped_texture_path)."""
+    """The environment MJCF (floor plane + decomposed room hulls, optionally
+    the textured visual rooms in their own geom group, plus every droppable
+    prop parked off-map -- see props.py). Environment-owned dynamic bodies such
+    as town traffic are inserted directly under worldbody via traffic_bodies,
+    already expressed in simulator Z-up coordinates.
+    texture_max caps the visual textures' resolution (see capped_texture_path).
+    statics adds primitive-authored rooms alongside the meshes -- see
+    statics.py -- which is what lets a world be built with no scanned geometry
+    at all."""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
     collision_group = COLLISION_GROUP if visual_rooms else 0
+    # Authored rooms are already z-up, so they sit in the worldbody as their own
+    # fixed bodies rather than under "apartment" and its Y-up correction quat.
+    # Every geom of theirs goes in VISUAL_GROUP, the collidable ones included:
+    # a primitive room IS its own visual, and every sensor has to see it.
+    # Group 0 is the robot's own, which update_depth() hides (the real stereo
+    # pipeline cannot resolve the arm at the lens), so a room put there had
+    # walls in the camera image and none in the depth stream that feeds the
+    # costmap's voxel layer -- measured on counter: 1,995 of 3,072 depth
+    # pixels changed when its geoms moved group. COLLISION_GROUP is hidden
+    # from every render and from the lidar whenever visual rooms exist.
+    # VISUAL_GROUP is drawn, depth-rendered and lidar-hit in every world.
+    static_bodies = statics.bodies_xml(VISUAL_GROUP, VISUAL_GROUP) if statics else ""
+
+    # A static room brings its own floor at z=0, which the ground plane would
+    # both z-fight with and duplicate. Drop the plane out of the way; it stays
+    # as the catch-all for anything that leaves the map.
+    #
+    # The floor MUST stay at exactly z=0. add_planar_base gives the robot x, y
+    # and yaw only -- no z -- so a floor even 2 mm proud is a penetration the
+    # base can never rise out of, and the contact pins it: commanded to spin at
+    # 1 rad/s it managed 2 degrees in 1.5 s.
+    ground_z = -0.5 if statics else 0.0
 
     mesh_lines = []
     geom_lines = []
@@ -329,12 +356,12 @@ def build_world_xml(
     <light type="directional" castshadow="false" pos="0 0 3" dir="1 0 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
     <light type="directional" castshadow="false" pos="0 0 3" dir="-0.5 0.866 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
     <light type="directional" castshadow="false" pos="0 0 3" dir="-0.5 -0.866 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
-    <geom name="ground" type="plane" size="20 20 0.1" friction="0.9 0.01 0.001" margin="0.007"
+    <geom name="ground" type="plane" size="20 20 0.1" pos="0 0 {ground_z}" friction="0.9 0.01 0.001" margin="0.007"
           solref="0.01 1" rgba="0.35 0.35 0.35 1" group="{collision_group}"/>
     <body name="apartment" quat="0.7071068 0.7071068 0 0">
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
-    </body>{prop_bodies}{robot_body}
+    </body>{static_bodies}{prop_bodies}{robot_body}
 {traffic_bodies}
   </worldbody>
 </mujoco>

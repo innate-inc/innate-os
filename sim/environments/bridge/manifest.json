@@ -1,0 +1,21 @@
+{
+  "display_name": "Bridge",
+  "bundle": "bundles/bridge",
+  "navigation": {
+    "map_yaml": "map/bridge.yaml"
+  },
+  "viewer": {
+    "type": "primitives"
+  },
+  "spawn": {
+    "x": 0.0,
+    "y": -2.9,
+    "yaw_degrees": 90.0
+  },
+  "attribution": {
+    "name": "Bridge",
+    "author": "innate benchmark (authored in Roblox Studio, exported as MuJoCo primitives)",
+    "license": "Apache-2.0",
+    "source": "sim/bundles/bridge"
+  }
+}
