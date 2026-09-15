@@ -2,8 +2,10 @@
 // webapp; the studio adds only its ground-line calibration and vertical mode.
 import {
   Calibration,
+  HandMapper as BaseHandMapper,
   clamp,
 } from "../../../webapp/js/handControl/handSample.js";
+import { median } from "../../../webapp/js/handControl/math.js";
 
 export {
   measureHand,
@@ -11,7 +13,6 @@ export {
   Calibration,
   continuousHand,
 } from "../../../webapp/js/handControl/handSample.js";
-const median = (v) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
 
 // The palm and the two control fingertips must fit above the lower image edge.
 // Freeze these limits after calibration; raising, turning, or resuming must not
@@ -62,13 +63,7 @@ export class GroundCalibration extends Calibration {
   }
 }
 
-export class HandMapper {
-  neutral = null;
-  value = [0, 0, 0];
-  base = [0, 0, 0];
-  grip = 1;
-  last = null;
-  sensitivity = 1;
+export class HandMapper extends BaseHandMapper {
   heightRange = null;
   setGround(bounds) {
     this.heightRange = { ...bounds };
@@ -84,36 +79,9 @@ export class HandMapper {
     );
     return -1 + 2 * clamp(lift * this.sensitivity, 0, 1);
   }
-  anchor(sample, offset, grip = this.grip) {
-    this.neutral = { ...sample };
-    this.base = [...offset];
-    this.value = [...offset];
-    this.grip = grip;
-    this.last = null;
-  }
-  map(sample, now) {
-    if (!this.neutral || !sample.valid) return null;
-    const n = this.neutral;
-    const deadzone = (value, dead) =>
-      Math.sign(value) * Math.max(0, Math.abs(value) - dead);
-    // Mirrored sideways, image height, then approach/retract. All three axes
-    // work together; approaching the webcam now reaches the robot forward.
-    const movement = [
-      deadzone((sample.x - n.x) * 3.8, 0.025),
-      deadzone((n.y - sample.y) * 4, 0.025),
-      deadzone(Math.log(sample.scale / n.scale) / 0.5, 0.05),
-    ];
-    const wanted = movement.map((v, i) =>
-      clamp(this.base[i] + v * this.sensitivity),
-    );
+  wanted(sample) {
+    const wanted = super.wanted(sample);
     if (this.heightRange) wanted[1] = this.vertical(sample);
-    const dt =
-      this.last === null ? 1 / 30 : clamp((now - this.last) / 1000, 0, 0.1);
-    this.last = now;
-    const alpha = 1 - Math.exp(-dt / 0.07);
-    this.value = this.value.map((v, i) => v + (wanted[i] - v) * alpha);
-    if (sample.gripValid)
-      this.grip += (sample.grip - this.grip) * (1 - Math.exp(-dt / 0.055));
-    return { position: [...this.value], grip: this.grip };
+    return wanted;
   }
 }

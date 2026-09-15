@@ -237,6 +237,10 @@ export function createHandControlPanel(parent, ros, opts = {}) {
   function setContent(node, html) {
     if (node.innerHTML !== html) node.innerHTML = html;
   }
+  /** @param {HTMLElement} node @param {string} text */
+  function setText(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
 
   /** @param {import("./session.js").HandControlState} state */
   function render(state) {
@@ -258,22 +262,26 @@ export function createHandControlPanel(parent, ros, opts = {}) {
               : state.handTracked
                 ? ["hand tracked", "on"]
                 : ["no hand", ""];
-    status.textContent = text;
-    status.className = `handctl-pill${cls ? ` ${cls}` : ""}`;
+    setText(status, text);
+    const pill = `handctl-pill${cls ? ` ${cls}` : ""}`;
+    if (status.className !== pill) status.className = pill;
 
-    el("feedback").textContent = state.feedback;
+    setText(el("feedback"), state.feedback);
     el("error").hidden = !state.error;
-    el("error").textContent = state.error;
-    el("rate").textContent = state.rate ? String(state.rate) : "—";
-    el("infer").textContent = state.inferenceMs ? String(Math.round(state.inferenceMs)) : "—";
+    setText(el("error"), state.error);
+    setText(el("rate"), state.rate ? String(state.rate) : "—");
+    setText(el("infer"), state.inferenceMs ? String(Math.round(state.inferenceMs)) : "—");
     const grip = Math.round(state.grip * 100);
-    el("grip").style.width = `${grip}%`;
+    const gripWidth = `${grip}%`;
+    if (el("grip").style.width !== gripWidth) el("grip").style.width = gripWidth;
     el("gripBar").setAttribute("aria-valuenow", String(grip));
 
     const holding = state.phase === "holding";
     el("hold").classList.toggle("show", holding);
-    el("holdLabel").textContent = state.progress > 0 ? "Hold still to resume" : "Tracking on hold · arm holds";
-    el("ring").setAttribute("stroke-dashoffset", String(126 * (1 - state.progress)));
+    setText(el("holdLabel"), state.progress > 0 ? "Hold still to resume" : "Tracking on hold · arm holds");
+    const ring = el("ring");
+    const dashOffset = String(126 * (1 - state.progress));
+    if (ring.getAttribute("stroke-dashoffset") !== dashOffset) ring.setAttribute("stroke-dashoffset", dashOffset);
 
     const camera = /** @type {HTMLButtonElement} */ (el("camera"));
     setContent(camera, `${ICON_CAMERA}<span>${state.cameraOn ? "Camera off" : "Enable camera"}</span>`);
@@ -307,13 +315,13 @@ export function createHandControlPanel(parent, ros, opts = {}) {
 
   /** @param {KeyboardEvent} event */
   const onKey = (event) => {
-    const target = /** @type {HTMLElement} */ (event.target);
-    if (/INPUT|TEXTAREA|SELECT/.test(target.tagName) || target.isContentEditable) return;
     const engaged = last?.phase === "following" || last?.phase === "holding";
     if (event.key === "Escape" && engaged) {
       control.stop();
       return;
     }
+    const target = /** @type {HTMLElement} */ (event.target);
+    if (/INPUT|TEXTAREA|SELECT/.test(target.tagName) || target.isContentEditable) return;
     if (!opts.shortcuts || event.repeat || !last?.cameraOn) return;
     if (event.code === "Space" && target.tagName !== "BUTTON") {
       event.preventDefault();

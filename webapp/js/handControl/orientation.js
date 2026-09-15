@@ -10,6 +10,8 @@
 // All angles are radians. The camera-axis permutation maps screen twist to
 // wrist roll, hand tilt to pitch, and turning sideways to the base swivel.
 
+import { clamp } from "./math.js";
+
 /** @typedef {number[]} Frame row-major 3x3 rotation */
 /** @typedef {{ x: number, y: number, z: number }} Point */
 
@@ -24,8 +26,6 @@ const cross = (/** @type {number[]} */ a, /** @type {number[]} */ b) => [
   a[0] * b[1] - a[1] * b[0],
 ];
 const project = (/** @type {number[]} */ a, /** @type {number[]} */ axis) => sub(a, scale(axis, dot(a, axis)));
-const clamp = (/** @type {number} */ v, /** @type {number} */ lo, /** @type {number} */ hi) =>
-  Math.max(lo, Math.min(hi, v));
 const wrap = (/** @type {number} */ angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 /**
@@ -97,6 +97,8 @@ export class WristMapper {
   /** @type {[number, number, number]} */ unwrapped = [0, 0, 0];
   /** @type {number | null} */ last = null;
   /** @type {[number, number][]} */ limits = WRIST_LIMITS;
+  /** Axes that consume the blocked part of a turn at their limit. @type {number[]} */
+  consume = [0, 1, 2];
 
   /** @param {Frame | null} frame @param {[number, number, number]} [wrist] the claw's current angles */
   anchor(frame, wrist = [0, 0, 0]) {
@@ -124,7 +126,8 @@ export class WristMapper {
         const wanted = clamp(this.base[i] + delta, lo, hi);
         // Consume the blocked part of the turn at a limit, so reversing the
         // hand moves the claw straight away instead of unwinding slack first.
-        if (this.base[i] + delta > hi || this.base[i] + delta < lo) this.base[i] = wanted - delta;
+        const blocked = this.base[i] + delta > hi || this.base[i] + delta < lo;
+        if (blocked && this.consume.includes(i)) this.base[i] = wanted - delta;
         return this.value[i] + (wanted - this.value[i]) * alpha;
       })
     );

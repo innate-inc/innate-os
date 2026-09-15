@@ -17,12 +17,9 @@ const STREAM_TYPE = "std_msgs/msg/Float64MultiArray";
 const ARM_STATE_TOPIC = "/mars/arm/state";
 const ARM_STATE_THROTTLE_MS = 50;
 
-// The box the hand maps onto, in the arm's own frame with the base swivel taken
-// out: reach, sideways, height around a comfortable mid-work pose. Sized by
-// sweeping the solver -- around 80% of it holds any tilt from 17 degrees up to
-// 69 degrees down exactly, and its floor is low enough to take something off
-// the ground. A larger box would mostly add corners where the claw has to give
-// up the tilt it was asked for.
+// The box the hand maps onto, in the arm's frame with the base swivel taken out
+// (reach, sideways, height). Sized by sweeping the solver: ~80% of it holds any
+// tilt from 17 degrees up to 69 degrees down exactly, and its floor reaches the ground.
 const CENTER = [SHOULDER[0] + 0.26, SHOULDER[1], 0.105];
 const SPAN = [0.04, 0.1, 0.095];
 // Wider than the box, so the solver's radial search has somewhere to go.
@@ -30,16 +27,13 @@ const SPAN = [0.04, 0.1, 0.095];
 const RADIUS_BOUNDS = [0.16, 0.33];
 
 const MAX_EE_SPEED = 0.18; // m/s, matching the studio's measured-safe rate
-// How far the commanded point may run ahead of where the arm actually is. A
-// stalled or slow arm therefore cannot bank up travel that it then lunges
-// through, and starting from a pose outside the box simply walks in at the
+// How far the commanded point may run ahead of the arm: a stalled arm cannot
+// bank up travel to lunge through, and a start outside the box walks in at the
 // arm's own pace.
 const MAX_LEAD_M = 0.08;
-// Reanchoring reads the arm's *achieved* pose so control resumes from reality
-// rather than from a turn that never finished. Within this much of what the arm
-// was last told, though, the difference is servo droop under load, not a change
-// of mind -- re-reading that as the new request would walk the claw a little
-// further down and out on every hold, recentre and blink.
+// Reanchoring reads the arm's *achieved* pose; within this much of what it was
+// last told the difference is servo droop, not a change of mind -- re-reading
+// droop as the request would walk the claw down and out on every hold.
 const RESUME_TOLERANCE_M = 0.03;
 const RESUME_TOLERANCE_RAD = 0.35;
 
@@ -126,6 +120,7 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
   let pitchTarget = 0;
   let gripTarget = 1;
   let limited = false;
+  let walkInPending = false;
   let lastPublishAt = 0;
   let lastTickAt = 0;
   /** @type {(() => void) | null} */ let release = null;
@@ -169,11 +164,13 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
       Math.abs(asked.roll - achieved.roll) < RESUME_TOLERANCE_RAD;
     const pose = settled && asked ? asked : achieved;
     const clearance = rotationClearance(pose.z);
+    const height = (pose.z - CENTER[2]) / SPAN[2];
+    const reach = (SHOULDER[0] + pose.radius - CENTER[0]) / SPAN[0];
     /** @type {[number, number, number]} */
     const offset = [
       0, // sideways is relative to the arm's own plane, so it starts centred
-      clamp((pose.z - CENTER[2]) / SPAN[2]),
-      clamp((SHOULDER[0] + pose.radius - CENTER[0]) / SPAN[0]),
+      clamp(height),
+      clamp(reach),
     ];
     /** @type {[number, number, number]} */
     const angles = [
@@ -184,12 +181,13 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     // A gripped claw stalls short of its target and that error is the grip
     // force, so the standing grip -- not the measured jaw -- is the anchor.
     const grip = settled ? gripTarget : clamp(/** @type {number[]} */ (measured)[5] / GRIPPER_OPEN, 0, 1);
-    return { offset, angles, pose, grip };
+    const clamped = offset[1] !== height || offset[2] !== reach || angles[2] !== pose.yaw;
+    return { offset, angles, pose, grip, clamped };
   }
 
   /** @param {import("./handSample.js").HandSample} hand */
   function anchorAt(hand) {
-    const { offset, angles, pose, grip } = anchorFromArm();
+    const { offset, angles, pose, grip, clamped } = anchorFromArm();
     mapper.anchor(hand, offset, grip);
     wrist.anchor(hand.orientation ?? null, angles);
     pitchTarget = angles[1];
@@ -197,16 +195,29 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     pathTarget = [pose.x, pose.y, pose.z];
     command = [.../** @type {number[]} */ (measured).slice(0, 5), grip * GRIPPER_OPEN];
     commandedPose = null;
+    walkInPending = clamped;
     previousHand = hand;
     lastTickAt = performance.now();
     reacquire.reset();
   }
 
-  /** Stop feeding the stream. The arm server idles the stream out and the arm
-   * holds where it is -- there is nothing to flush and nothing queued.
+  /** One last frame pulling the in-flight target back to the arm, or the server's
+   * slew runs on toward it until its idle-out. Joints stay the command, not measured
+   * droop (see RESUME_TOLERANCE); j6 keeps the grip. */
+  function park() {
+    if (!measured || !release || ros.state !== "connected") return;
+    const joints = measured.slice(0, 5).map((m, i) => m + clamp(command[i] - m, -0.1, 0.1));
+    ros.publish(STREAM_TOPIC, { layout: { dim: [], data_offset: 0 }, data: [...joints, command[5]] });
+  }
+
+  /** Stop feeding the stream: the arm holds where it is -- nothing is queued.
    * @param {string} reason */
   function hold(reason) {
-    if (phase !== "holding") heldSince = performance.now();
+    if (!following()) return;
+    if (phase !== "holding") {
+      heldSince = performance.now();
+      park();
+    }
     phase = "holding";
     feedback = reason;
     progress = 0;
@@ -254,18 +265,21 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     const dt = clamp((now - lastTickAt) / 1000, 0.001, 0.2);
     lastTickAt = now;
 
-    /** @type {[number, number, number]} */
-    const desired = swivel(
-      [
-        CENTER[0] + SPAN[0] * value.position[2],
-        CENTER[1] + SPAN[1] * value.position[0],
-        CENTER[2] + SPAN[2] * value.position[1],
-      ],
-      angles[2],
-    );
-
     const pose = forwardArm(/** @type {number[]} */ (measured));
     let target = pathTarget ?? [pose.x, pose.y, pose.z];
+    // Anchored outside the box, a still hand must not walk the arm to its edge.
+    if (walkInPending) walkInPending = Math.max(...value.position.map((v, i) => Math.abs(v - mapper.base[i]))) < 0.08;
+    /** @type {[number, number, number]} */
+    const desired = walkInPending
+      ? target
+      : swivel(
+          [
+            CENTER[0] + SPAN[0] * value.position[2],
+            CENTER[1] + SPAN[1] * value.position[0],
+            CENTER[2] + SPAN[2] * value.position[1],
+          ],
+          angles[2],
+        );
     const gap = distance(desired, target);
     const step = Math.min(1, (MAX_EE_SPEED * dt) / Math.max(gap, 1e-9));
     target = /** @type {[number, number, number]} */ (target.map((v, i) => v + (desired[i] - v) * step));
@@ -278,7 +292,12 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
 
     pitchTarget = angles[1];
     const roll = angles[0] * rotationClearance(target[2]);
-    const solved = solveArm(target, pitchTarget, roll, command, { radius: RADIUS_BOUNDS });
+    // A still hand outside the box must not even creep to the solver's radial floor.
+    /** @type {[number, number]} */
+    const radius = walkInPending
+      ? [Math.min(RADIUS_BOUNDS[0], pose.radius), Math.max(RADIUS_BOUNDS[1], pose.radius)]
+      : RADIUS_BOUNDS;
+    const solved = solveArm(target, pitchTarget, roll, command, { radius });
     limited = solved.limited;
     gripTarget = value.grip;
     command = [...solved.joints, clamp(value.grip, 0, 1) * GRIPPER_OPEN];
@@ -291,15 +310,17 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
       return;
     }
     previousHand = hand;
-    feedback = limited
-      ? "At the edge of the arm's reach — move back toward where you started"
-      : !hand.orientation
-        ? "Finding your finger orientation · claw rotation holds"
-        : !hand.gripValid
-          ? "Thumb or index out of view · the gripper holds"
-          : Math.max(...value.position.map(Math.abs)) > 0.97
-            ? "At the edge of your working area — move back toward centre"
-            : "Move, turn and tilt. Pinch to grip.";
+    feedback = walkInPending
+      ? "The arm is outside the camera's working area — move your hand and it will walk in"
+      : limited
+        ? "At the edge of the arm's reach — move back toward where you started"
+        : !hand.orientation
+          ? "Finding your finger orientation · claw rotation holds"
+          : !hand.gripValid
+            ? "Thumb or index out of view · the gripper holds"
+            : Math.max(...value.position.map(Math.abs)) > 0.97
+              ? "At the edge of your working area — move back toward centre"
+              : "Move, turn and tilt. Pinch to grip.";
   }
 
   // ---- tracker ------------------------------------------------------------
@@ -314,7 +335,8 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     }
     if (data.type !== "result" || data.generation !== cameraGeneration || !stream) return;
     const now = performance.now();
-    lastResultAt = now;
+    const capturedAge = now - data.timestamp;
+    if (capturedAge <= STALE_FRAME_MS) lastResultAt = now;
     frameTimes = frameTimes.filter((t) => now - t < 1000);
     frameTimes.push(now);
     rate = frameTimes.length;
@@ -325,7 +347,7 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     sample = measureHand(data.result, video.videoWidth, video.videoHeight);
     onSample(sample);
     if (following() && !measured) hold("Waiting for the arm's joint state…");
-    else if (following()) drive(now, now - data.timestamp);
+    else if (following()) drive(now, capturedAge);
     else if (phase === "ready") feedback = sample.valid ? "Ready — start following when you are." : sample.reason;
     publishState();
   }
@@ -517,6 +539,7 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
   /** @param {string} [reason] */
   function stop(reason = "Stopped · your arm holds here") {
     if (following()) {
+      park();
       phase = stream && trackerReady ? "ready" : "off";
       feedback = reason;
     }
@@ -524,6 +547,7 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     commandedPose = null;
     progress = 0;
     limited = false;
+    walkInPending = false;
     reacquire.reset();
     unadvertise?.();
     unadvertise = null;

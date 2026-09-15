@@ -1,19 +1,11 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Closed-form kinematics for the MARS arm, in the browser.
-//
-// Camera control needs a Cartesian target turned into joints ~20x a second and
-// streamed; the robot's KDL node is a topic round trip that logs every solve,
-// and the SDK's move_to is rest-to-rest. But this arm is not a general 6-DOF
-// chain: joint1 swivels the whole arm about a fixed shoulder, joints 2-4 are a
-// planar 3R linkage in the swiveled plane, and joint5 rolls about the tool
-// axis. So position + tool pitch + roll solve exactly, with no iteration and no
-// solver to tune -- and the FK below is bit-identical to the URDF chain.
-//
-// The geometry is pinned rather than fetched: it is the same mars.urdf the IK
-// node solves against, and tests/handControl.test.js re-derives every constant
-// from that file, so a model change fails there instead of drifting silently.
+// Closed-form MARS arm kinematics for the browser: joint1 swivels about a fixed shoulder,
+// joints 2-4 are a planar 3R linkage in that plane and joint5 rolls about the tool axis, so
+// position + pitch + roll solve exactly. Geometry is pinned from mars.urdf; tests/handControl.test.js re-derives it.
+
+import { clamp } from "./math.js";
 
 /** @typedef {[number, number, number, number, number]} ArmJoints j1..j5 (rad) */
 
@@ -61,9 +53,6 @@ export function joint2Floor(j1) {
   else t = (j1 - 1.0) / 0.25;
   return JOINT2_GUARD_MIN + t * (full - JOINT2_GUARD_MIN) + JOINT2_GUARD_MARGIN;
 }
-
-const clamp = (/** @type {number} */ v, /** @type {number} */ lo, /** @type {number} */ hi) =>
-  Math.max(lo, Math.min(hi, v));
 
 /**
  * Tool pose from joint angles -- exact, and the inverse of {@link solveArm}.
@@ -126,14 +115,9 @@ const RADIAL_SEARCH_M = 0.06;
 const RADIAL_STEP_M = 0.0025;
 
 /**
- * Joints putting the tool at `target` with this pitch and roll, or the closest
- * posture the arm can hold.
- *
- * Order matters and is the point of this function: the requested tilt is worth
- * more than the requested reach. A hand tilted down at the floor asks for a
- * pitch that is only reachable a few centimetres nearer or further out, so the
- * search slides radially first and only then gives up tilt -- the other way
- * round the claw levels off just as it arrives at the object.
+ * Joints putting the tool at `target` with this pitch and roll, or the closest posture
+ * the arm can hold. Reach gives way before tilt: a hand tilted at the floor asks for a
+ * pitch reachable a few cm nearer or further out, and levelling off first arrives at the object wrong.
  *
  * @param {[number, number, number]} target tool position in base_link (m)
  * @param {number} pitch requested tool pitch (rad, positive = down)

@@ -17,7 +17,7 @@ import PyKDL as kdl  # noqa: E402
 from mars_arm.kinematics import ArmKinematics  # noqa: E402
 
 
-def main():
+def main() -> None:
     solver = ArmKinematics(ROBOT_URDF)
     print(
         json.dumps({"ready": True, "solver": "mars_arm.kinematics.ArmKinematics", "joints": solver.joint_names}),

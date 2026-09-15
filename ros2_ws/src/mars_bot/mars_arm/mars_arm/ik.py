@@ -38,18 +38,16 @@ class KDLIKNode(Node):
             raise FileNotFoundError(urdf_path)
 
         self.kinematics = ArmKinematics(urdf_path, eps=eps, maxiter=maxiter)
-        self.chain = self.kinematics.chain
-        self.fksolver = self.kinematics.fk_solver
-        self.ik_solver = self.kinematics.ik_solver
+        chain = self.kinematics.chain
 
         # 5) prepare joint array and names
-        nj = self.chain.getNrOfJoints()
+        nj = chain.getNrOfJoints()
         self.current_q = kdl.JntArray(nj)  # Initialized to zeros
 
         # Get joint names directly from the KDL chain segments
         self.joint_names = []
-        for i in range(self.chain.getNrOfSegments()):
-            segment = self.chain.getSegment(i)
+        for i in range(chain.getNrOfSegments()):
+            segment = chain.getSegment(i)
             joint = segment.getJoint()
 
             # Only include non-fixed joints
@@ -66,7 +64,7 @@ class KDLIKNode(Node):
 
         # Calculate and store initial FK pose (corresponding to q=0)
         self.initial_frame = kdl.Frame()
-        fk_result = self.fksolver.JntToCart(self.current_q, self.initial_frame)
+        fk_result = self.kinematics.fk_solver.JntToCart(self.current_q, self.initial_frame)
         if fk_result >= 0:
             pos = self.initial_frame.p
             rot = self.initial_frame.M.GetRPY()
@@ -110,7 +108,7 @@ class KDLIKNode(Node):
             return
 
         # Create joint array from received joint states
-        q = kdl.JntArray(self.chain.getNrOfJoints())
+        q = kdl.JntArray(self.kinematics.chain.getNrOfJoints())
 
         # Map joint states to our joint names
         for i, joint_name in enumerate(self.joint_names):
@@ -120,7 +118,7 @@ class KDLIKNode(Node):
 
         # Compute FK
         fk_frame = kdl.Frame()
-        fk_result = self.fksolver.JntToCart(q, fk_frame)
+        fk_result = self.kinematics.fk_solver.JntToCart(q, fk_frame)
 
         if fk_result >= 0:
             # Create PoseStamped message
@@ -141,12 +139,6 @@ class KDLIKNode(Node):
             pose_msg.pose.orientation.w = quat[3]
 
             self.fk_pub.publish(pose_msg)
-
-    def _try_ik_with_seed(self, seed: kdl.JntArray, target_frame: kdl.Frame):
-        """Try IK from a given seed. Returns (success, q_out, score) or (False, None, inf).
-        Score is the Cartesian error (position + orientation distance from target).
-        """
-        return self.kinematics.try_seed(seed, target_frame)
 
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
@@ -201,7 +193,7 @@ class KDLIKNode(Node):
 
         # publish FK of the IK solution (what the commanded joints map to)
         fk_frame = kdl.Frame()
-        if self.fksolver.JntToCart(best_solution, fk_frame) >= 0:
+        if self.kinematics.fk_solver.JntToCart(best_solution, fk_frame) >= 0:
             ik_fk_msg = PoseStamped()
             ik_fk_msg.header.stamp = js.header.stamp
             ik_fk_msg.header.frame_id = "base_link"

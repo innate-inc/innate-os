@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Hand tracking off the UI thread. A *classic* worker on purpose: MediaPipe's
-// WASM loader reaches for importScripts when it finds itself in a worker, and a
-// module worker has neither that nor a document to append a <script> to, so it
-// throws on load. importScripts also wants a script that assigns to a global
-// `exports`, which is what the vendored CommonJS bundle does once we give it one.
-//
-// Excluded from tsconfig: this file runs in the worker global scope
-// (importScripts, self.onmessage), which lib.dom does not declare.
+// Hand tracking off the UI thread. A *classic* worker on purpose: MediaPipe's WASM
+// loader reaches for importScripts in a worker, which a module worker lacks, and
+// wants a global `exports` to assign to, which the vendored CommonJS bundle gets here.
 
 const VENDOR = "/public/vendor/mediapipe-0.10.32/";
 

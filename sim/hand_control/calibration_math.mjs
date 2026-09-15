@@ -1,5 +1,6 @@
-export const median = (values) =>
-  values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)];
+import { median } from "../../webapp/js/handControl/math.js";
+
+export { median };
 export const vectorMedian = (rows) =>
   rows[0].map((_, i) => median(rows.map((row) => row[i])));
 

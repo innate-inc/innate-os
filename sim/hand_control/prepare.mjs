@@ -16,7 +16,10 @@ const expected =
 let model;
 for (const path of [
   new URL("hand_landmarker.task", cache),
-  new URL("../../benchmarks/hand_tracking/models/mediapipe.task", root),
+  new URL(
+    "../../webapp/public/vendor/mediapipe-0.10.32/hand_landmarker.task",
+    root,
+  ),
 ]) {
   try {
     model = await readFile(path);

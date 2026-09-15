@@ -3,6 +3,7 @@
 """Innate's URDF/KDL solver, usable with or without a ROS node."""
 
 import math
+import os
 
 import PyKDL as kdl
 from urdf_parser_py.urdf import URDF
@@ -11,7 +12,7 @@ from mars_arm.urdf import treeFromUrdfModel
 
 
 class ArmKinematics:
-    def __init__(self, urdf_path, eps=0.0001, maxiter=2000):
+    def __init__(self, urdf_path: str | os.PathLike[str], eps: float = 0.0001, maxiter: int = 2000) -> None:
         model = URDF.from_xml_file(str(urdf_path))
         ok, tree = treeFromUrdfModel(model, quiet=True)
         if not ok or tree is None:
@@ -19,14 +20,16 @@ class ArmKinematics:
         self.chain = tree.getChain("base_link", "ee_link")
         self.fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
         self.ik_solver = kdl.ChainIkSolverPos_LMA(self.chain, eps=eps, maxiter=maxiter)
-        self.joint_names = [
+        self.joint_names: list[str] = [
             self.chain.getSegment(i).getJoint().getName()
             for i in range(self.chain.getNrOfSegments())
             if self.chain.getSegment(i).getJoint().getType() != kdl.Joint.Fixed
         ]
-        self.limits = [(model.joint_map[n].limit.lower, model.joint_map[n].limit.upper) for n in self.joint_names]
+        self.limits: list[tuple[float, float]] = [
+            (model.joint_map[n].limit.lower, model.joint_map[n].limit.upper) for n in self.joint_names
+        ]
 
-    def try_seed(self, seed, target):
+    def try_seed(self, seed: kdl.JntArray, target: kdl.Frame) -> tuple[bool, kdl.JntArray | None, float]:
         """Same acceptance and scoring as the Innate IK topic node."""
         out = kdl.JntArray(self.chain.getNrOfJoints())
         result = self.ik_solver.CartToJnt(seed, target, out)
@@ -38,13 +41,17 @@ class ArmKinematics:
         angle_error = (target.M.Inverse() * actual.M).GetRotAngle()[0]
         return True, out, position_error + 0.1 * abs(angle_error)
 
-    def solve(self, target, current, *, enforce_limits=False):
+    def solve(
+        self, target: kdl.Frame, current: kdl.JntArray, *, enforce_limits: bool = False
+    ) -> tuple[kdl.JntArray | None, float, str | None]:
         """Current/zero multi-start, matching the ROS node's selection policy.
 
         The simulation adapter can reject joint-limit violations. The ROS
         node retains its existing downstream actuator limit policy.
         """
-        best, best_score, best_seed = None, float("inf"), None
+        best: kdl.JntArray | None = None
+        best_score = float("inf")
+        best_seed: str | None = None
         for name, seed in (("current", current), ("zeros", kdl.JntArray(self.chain.getNrOfJoints()))):
             success, out, score = self.try_seed(seed, target)
             if not success:

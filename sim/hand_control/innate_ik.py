@@ -9,14 +9,18 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 
+Answer = dict[str, Any]
+
 
 class InnateIK:
-    def __init__(self):
+    def __init__(self) -> None:
         if importlib.util.find_spec("PyKDL") and importlib.util.find_spec("urdf_parser_py"):
             command = [sys.executable, "-u", str(ROOT / "ik_worker.py")]
         else:
@@ -59,7 +63,7 @@ class InnateIK:
             raise
         atexit.register(self.close)
 
-    def read(self, timeout):
+    def read(self, timeout: float) -> Answer:
         deadline = time.monotonic() + timeout
         while b"\n" not in self.buffer:
             remaining = max(0, deadline - time.monotonic())
@@ -72,10 +76,18 @@ class InnateIK:
         line, self.buffer = self.buffer.split(b"\n", 1)
         return json.loads(line)
 
-    def submit(self, position, rpy, seed, offset):
+    def submit(
+        self, position: Sequence[float], rpy: Sequence[float], seed: Sequence[float], offset: Sequence[float]
+    ) -> Future[Answer]:
         return self.executor.submit(self.solve, position, rpy, seed, offset)
 
-    def solve(self, position, rpy, seed, offset=(0, 0, 0)):
+    def solve(
+        self,
+        position: Sequence[float],
+        rpy: Sequence[float],
+        seed: Sequence[float],
+        offset: Sequence[float] = (0, 0, 0),
+    ) -> Answer:
         with self.lock:
             if self.failed:
                 raise RuntimeError("Innate IK worker is unavailable; restart the studio")
@@ -95,7 +107,7 @@ class InnateIK:
                 self.process.terminate()
                 raise
 
-    def close(self):
+    def close(self) -> None:
         if self.process.poll() is None:
             self.process.stdin.close()
             try:
@@ -108,10 +120,10 @@ class InnateIK:
         self.executor.shutdown(wait=False, cancel_futures=True)
 
 
-_worker = None
+_worker: InnateIK | None = None
 
 
-def get_ik():
+def get_ik() -> InnateIK:
     global _worker
     if _worker is None:
         _worker = InnateIK()

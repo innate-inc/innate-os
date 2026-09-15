@@ -8,6 +8,9 @@
 // start and Recenter works anywhere.
 
 import { fingerFrame } from "./orientation.js";
+import { clamp, median } from "./math.js";
+
+export { clamp } from "./math.js";
 
 /** @typedef {{ x: number, y: number, z: number }} Point */
 /** @typedef {import("./orientation.js").Frame} Frame */
@@ -17,8 +20,6 @@ import { fingerFrame } from "./orientation.js";
  */
 
 const distance = (/** @type {Point} */ a, /** @type {Point} */ b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-export const clamp = (/** @type {number} */ v, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
-const median = (/** @type {number[]} */ v) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
 const PALM = [0, 5, 9, 13, 17];
 
 // Normalized thumb/index gap: below this the jaws are shut, this much above it
@@ -138,11 +139,10 @@ export class HandMapper {
     this.last = null;
   }
 
-  /** @param {HandSample} sample @param {number} now
-   * @returns {{ position: [number, number, number], grip: number } | null} */
-  map(sample, now) {
-    const n = this.neutral;
-    if (!n || !sample.valid) return null;
+  /** Where the hand asks the claw to be, per axis, before smoothing.
+   * @param {HandSample} sample @returns {[number, number, number]} */
+  wanted(sample) {
+    const n = /** @type {HandSample} */ (this.neutral);
     const deadzone = (/** @type {number} */ value, /** @type {number} */ dead) =>
       Math.sign(value) * Math.max(0, Math.abs(value) - dead);
     // Sideways (mirrored), image height, then approach/retract: moving toward
@@ -152,7 +152,14 @@ export class HandMapper {
       deadzone((/** @type {number} */ (n.y) - /** @type {number} */ (sample.y)) * 4, 0.025),
       deadzone(Math.log(/** @type {number} */ (sample.scale) / /** @type {number} */ (n.scale)) / 0.5, 0.05),
     ];
-    const wanted = movement.map((v, i) => clamp(this.base[i] + v * this.sensitivity));
+    return /** @type {[number, number, number]} */ (movement.map((v, i) => clamp(this.base[i] + v * this.sensitivity)));
+  }
+
+  /** @param {HandSample} sample @param {number} now
+   * @returns {{ position: [number, number, number], grip: number } | null} */
+  map(sample, now) {
+    if (!this.neutral || !sample.valid) return null;
+    const wanted = this.wanted(sample);
     const dt = this.last === null ? 1 / 30 : clamp((now - this.last) / 1000, 0, 0.1);
     this.last = now;
     const alpha = 1 - Math.exp(-dt / POSITION_SMOOTHING_S);
