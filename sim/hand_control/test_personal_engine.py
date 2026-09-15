@@ -99,8 +99,10 @@ class PersonalEngineTests(unittest.TestCase):
     def test_yaw_reach_projection_and_floor_grasp_work_on_both_sides(self):
         world = ArmWorld(self.workspace)
         for yaw in [-0.4, 0.4]:
-            for target, pitch in [(np.array([0.309, -0.086, 0.157]), 0.434),
-                                  (np.array([0.32, world.center[1], 0.012]), math.radians(80))]:
+            for target, pitch in [
+                (np.array([0.309, -0.086, 0.157]), 0.434),
+                (np.array([0.32, world.center[1], 0.012]), math.radians(80)),
+            ]:
                 offset = ((target - world.center) / world.span)[[1, 2, 0]]
                 for _ in range(300):
                     world.move(*offset, 0, wrist=[0, pitch, yaw])
@@ -109,22 +111,22 @@ class PersonalEngineTests(unittest.TestCase):
                 expected = world.swivel(target, yaw)
                 self.assertLess(np.linalg.norm(np.array(state["ee"]) - expected), 0.04)
                 self.assertAlmostEqual(state["wrist_measured"][1], pitch, delta=0.025)
-                actual_heading = math.atan2(state["ee"][1]-world.shoulder[1], state["ee"][0]-world.shoulder[0])
-                expected_heading = math.atan2(target[1]-world.shoulder[1], target[0]-world.shoulder[0])+yaw
+                actual_heading = math.atan2(state["ee"][1] - world.shoulder[1], state["ee"][0] - world.shoulder[0])
+                expected_heading = math.atan2(target[1] - world.shoulder[1], target[0] - world.shoulder[0]) + yaw
                 self.assertAlmostEqual(actual_heading, expected_heading, delta=0.015)
                 self.assertGreater(min((c.dist for c in world.ground_contacts()), default=0), -0.0005)
 
     def test_reanchor_during_a_yaw_turn_preserves_the_achieved_pose(self):
         world = ArmWorld(self.workspace)
         for _ in range(12):
-            world.move(0, 0, 0, .55, wrist=[0, 0, .4])
+            world.move(0, 0, 0, 0.55, wrist=[0, 0, 0.4])
             world.tick(1 / 60)
         world.hold("tracking_lost")
         held = world.snapshot()
         for _ in range(180):
             world.move(*held["offset"], held["grip"], wrist=held["wrist"])
             world.tick(1 / 60)
-        np.testing.assert_allclose(world.snapshot()["ee"], held["ee"], atol=.004)
+        np.testing.assert_allclose(world.snapshot()["ee"], held["ee"], atol=0.004)
 
 
 if __name__ == "__main__":

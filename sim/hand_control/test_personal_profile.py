@@ -62,9 +62,15 @@ class PersonalProfileTests(unittest.TestCase):
 
     def test_optional_yaw_correction_is_bounded_and_validated(self):
         profile = self.profile()
-        profile["yaw"] = {"version": 1, "width": .15, "centers": [[0, 0, 1, 0, 0]], "coefficients": [.3]}
+        profile["yaw"] = {"version": 1, "width": 0.15, "centers": [[0, 0, 1, 0, 0]], "coefficients": [0.3]}
         self.assertEqual(self.read(profile), profile)
-        for change in ({"width": 0}, {"centers": [[0, 1]]}, {"coefficients": []}, {"coefficients": [float("nan")]}, {"coefficients": [5]}):
+        for change in (
+            {"width": 0},
+            {"centers": [[0, 1]]},
+            {"coefficients": []},
+            {"coefficients": [float("nan")]},
+            {"coefficients": [5]},
+        ):
             invalid = copy.deepcopy(profile)
             invalid["yaw"].update(change)
             with self.assertRaises(ValueError):
