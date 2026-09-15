@@ -36,6 +36,7 @@ from brain_client.skills import overlay
 from brain_client.skills.catalog import SkillRepository
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
 from brain_client.skills.invoker import SkillInvoker
+from brain_client.skills.llm_config import LlmConfig, set_configured
 from brain_client.skills.robot_state import RobotStateProvider
 from brain_client.skills.types import (
     RobotStateType,
@@ -82,6 +83,17 @@ class SkillsActionServer(Node):
         self.head_position_topic = str(self.get_parameter("head_position_topic").value)
         self.declare_parameter("head_current_position_topic", "/mars/head/current_position")
         self.head_current_position_topic = str(self.get_parameter("head_current_position_topic").value)
+        self.declare_parameter("llm_model", "")
+        self.declare_parameter("llm_base_url", "")
+        self.declare_parameter("llm_extra_body", "")
+        if model := str(self.get_parameter("llm_model").value).strip():
+            set_configured(
+                LlmConfig(
+                    model,
+                    base_url=str(self.get_parameter("llm_base_url").value),
+                    extra_body=str(self.get_parameter("llm_extra_body").value),
+                )
+            )
 
         self.manipulation = Manipulation(self, self.get_logger(), lazy=True)
         self.mobility = Mobility(self, self.get_logger(), self.cmd_vel_topic)

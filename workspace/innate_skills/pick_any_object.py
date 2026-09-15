@@ -24,10 +24,10 @@ from innate import (
     SkillReturn,
     Waypoint,
     WristImage,
+    llm,
     resource,
     vision,
 )
-from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 from innate.geometry import IMG_H, IMG_W, arm_bearing, floor_to_pixel, pixel_to_floor
 
@@ -233,8 +233,8 @@ class PickAnyObject(Skill):
     _p = PARAMS
 
     @resource
-    def _gemini(self):
-        return gemlib.make_client()
+    def _model(self):
+        return llm.make_client()
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
@@ -302,7 +302,7 @@ class PickAnyObject(Skill):
         self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
-            self._gemini,
+            self._model,
             f"Find '{prompt}' lying on the floor in this image. Match precisely — "
             "not paper/packaging when asked for clothing, and NOT anything held "
             "by the robot arm. Return ONLY a JSON list of ALL matches (every "
@@ -361,8 +361,8 @@ class PickAnyObject(Skill):
         self.sleep(self._p["wrist_settle_s"])
         img = self.wrist_image
         text = (
-            gemlib.ask_image(
-                self._gemini,
+            llm.ask_image(
+                self._model,
                 img,
                 f"Wrist camera on a robot gripper, looking down at the floor. "
                 f"Find '{prompt}' on the floor. Ignore the gripper fingers "
@@ -822,8 +822,8 @@ class PickAnyObject(Skill):
                 "fingers (mirrored) — the object may be visible held in the fingers there."
             )
         floor_text = (
-            gemlib.ask_image(
-                self._gemini,
+            llm.ask_image(
+                self._model,
                 images,
                 f"Robot just tried to pick up '{prompt}' and backed up a step. "
                 f"{' '.join(labels)} "
@@ -872,7 +872,7 @@ class PickAnyObject(Skill):
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
-        if self._gemini is None:
+        if self._model is None:
             self.fail("No Gemini access: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
 
         # Per-run reset: don't carry the last run's object or grip rating.

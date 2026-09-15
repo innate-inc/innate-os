@@ -11,8 +11,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
-from innate import gemini as gemlib
-from innate import vision
+from innate import llm, vision
 from innate.exceptions import SkillFailed
 from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
@@ -104,15 +103,15 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, gemini: "Provider | None", question: str, settle_s: float):
-    """Settle the base, then put the current head frame to Gemini.
+def ask_head(host: ApproachHost, model: "Provider | None", question: str, settle_s: float):
+    """Settle the base, then put the current head frame to the model.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
     host.sleep(settle_s)
     img = host.main_image
     if not img:
         return None, None
-    return gemlib.ask_image(gemini, img, question, logger=host.logger), img
+    return llm.ask_image(model, img, question, logger=host.logger), img
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":
