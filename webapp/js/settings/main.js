@@ -523,6 +523,21 @@ function buildSettingsPage() {
     }
 
     for (const pageSection of settingsPage.sections) {
+      if (pageSection.keys) {
+        const keys = buildKeysSection(pageSection, accordion);
+        groupInner.appendChild(keys.section);
+        for (const keyRow of keys.rows) {
+          addSearchTarget({
+            label: keyRow.label,
+            description: keyRow.description,
+            row: keyRow.row,
+            group: ui,
+            breadcrumb: `${settingsPage.title} · ${pageSection.title}`,
+            extraSearchSources: [pageSearchSource],
+          });
+        }
+        continue;
+      }
       const sectionStart = entries.length;
       groupInner.appendChild(buildPageSection(pageSection));
       const sectionEntries = entries.slice(sectionStart);
@@ -610,6 +625,193 @@ function buildPageSection(pageSection) {
   }
   section.appendChild(card);
   return section;
+}
+
+// ── API keys ──────────────────────────────────────────────────────────
+// Keys never pass through settings.yaml (a ROS parameter is readable by every node and by
+// this page); the proxy writes them to .env and reports only set/not-set. The reachability
+// rule below mirrors innate_llm/configure.py — change one and change the other.
+
+const KEY_ROWS = [
+  { env: "GEMINI_API_KEY", label: "Google key", doc: "Gemini models with your own Google AI key. Not needed with an Innate service key." },
+  { env: "OPENAI_API_KEY", label: "OpenAI key", doc: "GPT models with your own OpenAI key. Not needed with an Innate service key." },
+  { env: "ANTHROPIC_API_KEY", label: "Anthropic key", doc: "Claude models. Needed even with an Innate service key — the proxy does not serve Anthropic yet." },
+  { env: "LLM_API_KEY", label: "Local server key", doc: "Only if the OpenAI-compatible server under Custom model wants one; most on a home network do not." },
+];
+const VENDOR_KEY = { google: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", "openai-chat": "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY" };
+const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI", anthropic: "Anthropic" };
+
+/** The vendor of a model spec, read the way innate_llm/models.py:split_spec reads it. */
+function modelVendor(/** @type {string} */ spec, /** @type {string} */ baseUrl) {
+  const [prefix, ...rest] = spec.split(":");
+  if (rest.length && prefix in VENDOR_KEY) return prefix;
+  if (baseUrl) return "openai-chat";
+  if (spec.startsWith("claude")) return "anthropic";
+  if (/^(gpt|o1|o3|o4)/.test(spec)) return "openai";
+  return "google";
+}
+
+/**
+ * Whether the robot can reach `spec` with what it has: a server URL, else the service
+ * key for the vendors the proxy serves, else the vendor's own key.
+ * @returns {{ok: boolean, text: string}}
+ */
+function modelReach(/** @type {string} */ spec, /** @type {string} */ baseUrl, /** @type {any} */ status) {
+  const vendor = modelVendor(spec, baseUrl);
+  if (vendor === "openai-chat" && baseUrl) return { ok: true, text: `Reached through your server at ${baseUrl}.` };
+  const own = Boolean(status.keys?.[VENDOR_KEY[vendor]]?.set);
+  if (vendor === "anthropic") {
+    if (own) return { ok: true, text: "Reached with your Anthropic key." };
+    return { ok: false, text: "Claude needs an Anthropic key — the Innate proxy does not serve it yet. Add one under Keys." };
+  }
+  if (status.service_key) return { ok: true, text: "Reached through the Innate proxy." };
+  if (own) return { ok: true, text: `Reached with your ${VENDOR_LABEL[vendor]} key.` };
+  return { ok: false, text: `No way to reach this model: add an Innate service key or a ${VENDOR_LABEL[vendor]} key under Keys.` };
+}
+
+/**
+ * The Keys section: set/not-set per key with a paste field that POSTs straight to
+ * /keys.json (no Save-all round trip — a key is not a settings.yaml override), plus the
+ * reachability line under the Model picker, re-evaluated as the picker changes.
+ * @param {import("./catalog.js").PageSection} pageSection
+ * @param {HTMLElement} host  Where knob input/change events bubble to.
+ * @returns {{section: HTMLElement, rows: {row: HTMLElement, label: string, description: string}[]}}
+ */
+function buildKeysSection(pageSection, host) {
+  const section = textEl("section", "set-page-section");
+  section.appendChild(textEl("h2", "set-section-title", pageSection.title));
+  if (pageSection.note) section.appendChild(textEl("p", "set-section-note", pageSection.note));
+  const readonlyNote = textEl("p", "set-section-note");
+  readonlyNote.style.display = "none";
+  section.appendChild(readonlyNote);
+  const card = textEl("div", "set-card");
+  section.appendChild(card);
+
+  /** @type {any} */
+  let status = { keys: {}, service_key: false, readonly: true, loaded: false };
+  /** @type {(() => void)[]} */
+  const renderers = [];
+  /** @type {{row: HTMLElement, label: string, description: string}[]} */
+  const rows = [];
+
+  const addRow = (/** @type {string} */ label, /** @type {string} */ doc, /** @type {HTMLElement[]} */ controls) => {
+    const row = textEl("div", "set-row");
+    const controlContainer = textEl("div", "set-ctl");
+    const controlGroup = textEl("div", "set-ctl-main is-wide");
+    controlGroup.append(...controls);
+    controlContainer.appendChild(controlGroup);
+    row.append(buildRowText(label, doc), controlContainer);
+    card.appendChild(row);
+    rows.push({ row, label, description: doc });
+    return row;
+  };
+
+  const serviceState = textEl("span", "set-status muted", "…");
+  addRow(
+    "Innate service key",
+    "Provisioned with the robot: reaches Gemini and OpenAI models through the Innate proxy and pays for the voice. Not editable here.",
+    [serviceState],
+  );
+  renderers.push(() => {
+    serviceState.textContent = status.failed ? "Could not read key status from the robot." : status.service_key ? "Set" : "Not set";
+    serviceState.className = "set-status " + (status.service_key ? "ok" : "muted");
+  });
+
+  const load = async () => {
+    try {
+      const res = await fetch("/keys.json", { cache: "no-store" });
+      status = { ...(await res.json()), loaded: true };
+    } catch {
+      status = { keys: {}, service_key: false, readonly: true, loaded: true, failed: true };
+    }
+    readonlyNote.textContent = status.readonly && !status.failed ? "Keys cannot be changed from this demo." : "";
+    readonlyNote.style.display = readonlyNote.textContent ? "" : "none";
+    for (const render of renderers) render();
+    renderReach();
+  };
+
+  for (const spec of KEY_ROWS) {
+    const state = textEl("span", "set-status muted", "…");
+    const line = textEl("div", "set-key-ctl");
+    const input = inputEl("password", "set-text");
+    input.placeholder = "Paste a key";
+    input.autocomplete = "off";
+    const note = textEl("span", "set-status muted", "");
+    const submit = async (/** @type {any} */ payload) => {
+      saveBtnKey.disabled = clearBtn.disabled = true;
+      note.className = "set-status muted";
+      note.textContent = "Saving…";
+      try {
+        const res = await fetch("/keys.json", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json();
+        note.className = "set-status " + (body.ok ? "ok" : "err");
+        note.textContent = body.message || (body.ok ? "Saved" : "Could not save");
+        if (body.ok) {
+          input.value = "";
+          await load();
+        }
+      } catch (err) {
+        note.className = "set-status err";
+        note.textContent = `Could not reach the robot: ${err}`;
+      } finally {
+        saveBtnKey.disabled = clearBtn.disabled = false;
+        for (const render of renderers) render();
+      }
+    };
+    const saveBtnKey = buttonEl("set-key-btn", "Save", (event) => {
+      event.stopPropagation();
+      if (input.value.trim()) submit({ sets: { [spec.env]: input.value } });
+      else input.focus();
+    });
+    const clearBtn = buttonEl("set-key-btn", "Clear", (event) => {
+      event.stopPropagation();
+      submit({ clears: [spec.env] });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") saveBtnKey.click();
+    });
+    line.append(input, saveBtnKey, clearBtn);
+    addRow(spec.label, spec.doc, [state, line, note]);
+    renderers.push(() => {
+      const key = status.keys?.[spec.env] || { set: false, hint: "" };
+      state.textContent = key.set ? `Set ${key.hint}` : "Not set";
+      state.className = "set-status " + (key.set ? "ok" : "muted");
+      line.style.display = status.readonly ? "none" : "";
+      input.disabled = status.readonly;
+      saveBtnKey.disabled = status.readonly;
+      clearBtn.disabled = status.readonly || !key.set;
+    });
+  }
+
+  // The reachability line lives under the Model picker, which is built before this section.
+  const modelEntry = entries.find((e) => e.knob.path[e.knob.path.length - 1] === "llm_model");
+  const urlEntry = entries.find((e) => e.knob.path[e.knob.path.length - 1] === "llm_base_url");
+  const modelStatus = textEl("span", "set-status muted set-model-status", "");
+  modelEntry?.row.querySelector(".set-ctl-main")?.appendChild(modelStatus);
+  const renderReach = () => {
+    if (!modelEntry || !status.loaded || status.failed) return;
+    const reach = modelReach(String(modelEntry.value || ""), String(urlEntry?.value || "").trim(), status);
+    modelStatus.textContent = reach.text;
+    modelStatus.className = "set-status set-model-status " + (reach.ok ? "muted" : "warn");
+  };
+  for (const entry of [modelEntry, urlEntry]) {
+    if (!entry) continue;
+    const render = entry.render;
+    entry.render = () => {
+      render();
+      renderReach();
+    };
+  }
+  host.addEventListener("input", renderReach);
+  host.addEventListener("change", renderReach);
+
+  load();
+  return { section, rows };
 }
 
 /**

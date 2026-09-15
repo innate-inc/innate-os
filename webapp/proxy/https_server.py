@@ -49,6 +49,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from keys_routes import keys_apply, keys_get
 from media_routes import (
     episode_response,
     joints_response,
@@ -504,6 +505,7 @@ async def _on_cleanup(app: web.Application) -> None:
 
 def build_app() -> web.Application:
     app = web.Application()
+    app["readonly"] = WEBAPP_READONLY
     app.router.add_get("/ws", ws_proxy)
     app.router.add_get("/worldstate", ws_proxy)
     app.router.add_get("/config.json", config_handler)
@@ -516,8 +518,10 @@ def build_app() -> web.Application:
     app.router.add_get("/run/info", run_info_response)
     app.router.add_get("/run/log", run_log_response)
     app.router.add_get("/settings.json", settings_get)
+    app.router.add_get("/keys.json", keys_get)
     if not WEBAPP_READONLY:
         app.router.add_post("/settings.json", settings_apply)
+        app.router.add_post("/keys.json", keys_apply)
         app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)

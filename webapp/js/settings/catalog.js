@@ -65,6 +65,7 @@
  * @property {string} title  Section h2.
  * @property {string} [note]  Text above the section card.
  * @property {Knob[]} knobs
+ * @property {boolean} [keys]  Render the API-keys control (backed by /keys.json, no knobs) in place of a knob card.
  */
 
 /**
@@ -158,6 +159,12 @@ export const SETTINGS_PAGES = [
           { path: ["brain_client_node", P, "llm_base_url"], label: "Server URL", default: "", type: "string", doc: "For an openai-chat model: the server's .../v1 root on your network. A key, if it needs one, is LLM_API_KEY in .env. Ignored for the vendors' own APIs.", subsection: "Custom model" },
           { path: ["brain_client_node", P, "llm_extra_body"], label: "Extra request fields", default: "", type: "string", doc: "A JSON object merged into every request for a server's own knobs, e.g. {\"chat_template_kwargs\": {\"enable_thinking\": false}}. Leave empty unless the server asks for one.", subsection: "Custom model" },
         ],
+      },
+      {
+        title: "Keys",
+        note: "Each vendor's API key, written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is picked up on the next restart. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
+        keys: true,
+        knobs: [],
       },
       {
         title: "Hearing",
