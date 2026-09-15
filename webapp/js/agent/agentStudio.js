@@ -704,9 +704,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (profile().persona || !storyRunning()) return;
       console.warn("[story] the world never took the persona:", persona);
     });
-    // An offered character is someone the robot becomes; typed words are a prompt it is handed.
+    // Typed words are a character too: "your prompt is" reads to the model as an injection, and it refuses.
     const offered = (runtime()?.personas ?? []).includes(persona);
-    void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, your prompt is: ${persona}`);
+    void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, you are this character: ${persona}`);
   }
 
   /** Why the chip row shows what it shows; readable in DevTools as data-chips on the panel. */
@@ -1371,6 +1371,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (changed) applyDockOpen(false);
     dock.hidden = on && !dockOpen;
     opts.dockDirectives?.(on ? null : panelEl);
+    // A phone's stage is fixed to the whole display, under the browser's toolbar; the sheet is
+    // not. Beside the sheet, "just above it" is measured from the same edge.
+    (on ? root : (root.querySelector(".video-stage") ?? root)).append(leaveBtn);
     // Compact leaves Start/Stop to the sheet's own header, which has already claimed it.
     if (!on) opts.dockStartStop?.(headAction);
     render(true);
