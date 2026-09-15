@@ -641,11 +641,15 @@ const KEY_ROWS = [
 const VENDOR_KEY = { google: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", "openai-chat": "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY" };
 const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI", anthropic: "Anthropic" };
 
-/** The vendor of a model spec, read the way innate_llm/models.py:split_spec reads it. */
+/**
+ * The vendor of a model spec, read the way innate_llm/models.py:split_spec reads it — or
+ * null for a vendor prefix it rejects (with a server URL any name is the server's own).
+ */
 function modelVendor(/** @type {string} */ spec, /** @type {string} */ baseUrl) {
   const [prefix, ...rest] = spec.split(":");
   if (rest.length && prefix in VENDOR_KEY) return prefix;
   if (baseUrl) return "openai-chat";
+  if (rest.length) return null;
   if (spec.startsWith("claude")) return "anthropic";
   if (/^(gpt|o1|o3|o4)/.test(spec)) return "openai";
   return "google";
@@ -658,6 +662,9 @@ function modelVendor(/** @type {string} */ spec, /** @type {string} */ baseUrl) 
  */
 function modelReach(/** @type {string} */ spec, /** @type {string} */ baseUrl, /** @type {any} */ status) {
   const vendor = modelVendor(spec, baseUrl);
+  if (vendor === null) {
+    return { ok: false, text: "Unknown vendor: use google:, anthropic:, openai: or openai-chat: before the model name." };
+  }
   if (vendor === "openai-chat" && baseUrl) return { ok: true, text: `Reached through your server at ${baseUrl}.` };
   const own = Boolean(status.keys?.[VENDOR_KEY[vendor]]?.set);
   if (vendor === "anthropic") {
