@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from mars_bringup.config_loader import get_env, load_env_file, settings_params
+from mars_bringup.config_loader import get_env, load_env_file, settings_node_params, settings_params
 
 from brain_client.common.logging import get_logging_env_vars
 
@@ -98,11 +98,16 @@ def generate_launch_description():
                 executable="skills_server.py",
                 name="skills_action_server",
                 output="screen",
+                # Skills ask the same model the brain runs on unless one names its own:
+                # the launch defaults, then settings.yaml's brain section, as for the brain.
                 parameters=[
                     {
                         "image_topic": LaunchConfiguration("image_topic"),
                         "map_topic": LaunchConfiguration("map_topic"),
-                    }
+                        "llm_model": LaunchConfiguration("llm_model"),
+                        "llm_base_url": LaunchConfiguration("llm_base_url"),
+                    },
+                    settings_node_params("brain_client_node", "llm_model", "llm_base_url", "llm_extra_body"),
                 ],
             ),
             # Backend for the webapp's /armsdk page, same as on the robot. The
