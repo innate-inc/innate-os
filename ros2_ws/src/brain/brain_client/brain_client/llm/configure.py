@@ -26,11 +26,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from brain_client.common.enums import StrEnum
-from brain_client.llm import anthropic, gemini, openai_chat, openai_responses
 from brain_client.llm.http import Http
 from brain_client.llm.models import lookup, resolve
 from brain_client.llm.provider import Adapter, Provider
 from brain_client.llm.types import Json, Model, Vendor
+from brain_client.llm.wires import anthropic, gemini, openai_chat, openai_responses
 
 if TYPE_CHECKING:
     from rclpy.impl.rcutils_logger import RcutilsLogger

@@ -34,6 +34,15 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from brain_client.brain.history import (
+    History,
+    evict_to,
+    image_turns,
+    mask_latest_only,
+    pin_prefix,
+    strip_thoughts,
+    window_images,
+)
 from brain_client.llm import (
     Image,
     Json,
@@ -48,15 +57,6 @@ from brain_client.llm import (
     Tool,
     ToolCall,
     ToolResult,
-)
-from brain_client.llm.policy import (
-    History,
-    evict_to,
-    image_turns,
-    mask_latest_only,
-    pin_prefix,
-    strip_thoughts,
-    window_images,
 )
 
 if TYPE_CHECKING:

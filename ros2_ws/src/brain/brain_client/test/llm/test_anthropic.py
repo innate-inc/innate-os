@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from brain_client.llm.anthropic import ADAPTER
 from brain_client.llm.models import resolve
 from brain_client.llm.types import (
     Audio,
@@ -31,6 +30,7 @@ from brain_client.llm.types import (
     Usage,
     Wire,
 )
+from brain_client.llm.wires.anthropic import ADAPTER
 
 GOLDENS = Path(__file__).parent / "goldens"
 MODEL = resolve("claude-sonnet-5")

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from brain_client.llm.gemini import ADAPTER, CACHED_CONTENTS_PATH, GeminiProvider
 from brain_client.llm.models import resolve
 from brain_client.llm.types import (
     Audio,
@@ -31,6 +30,7 @@ from brain_client.llm.types import (
     Usage,
     Wire,
 )
+from brain_client.llm.wires.gemini import ADAPTER, CACHED_CONTENTS_PATH, GeminiProvider
 
 GOLDENS = Path(__file__).parent / "goldens"
 MODEL = resolve("gemini-3.6-flash")

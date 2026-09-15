@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from brain_client.llm.models import resolve
-from brain_client.llm.openai_responses import ADAPTER
 from brain_client.llm.types import (
     Finish,
     Image,
@@ -30,6 +29,7 @@ from brain_client.llm.types import (
     Usage,
     Wire,
 )
+from brain_client.llm.wires.openai_responses import ADAPTER
 
 GOLDENS = Path(__file__).parent / "goldens"
 MODEL = resolve("gpt-5.4-mini")

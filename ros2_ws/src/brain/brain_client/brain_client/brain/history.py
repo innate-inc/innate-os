@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""What a conversation carries, decided above the wire: pure functions on message tuples.
+"""What the brain's conversation carries, decided above the wire: pure functions on message tuples.
 
+The robot's own rules — which camera frames ride, the wrist camera's
+newest-only rule, when to evict — live here, not in the provider library.
 Every function returns new values; the caller replaces its history with the
 result. Adapters translate the hints these leave (``pin``) or ignore them —
 they never decide what to send.

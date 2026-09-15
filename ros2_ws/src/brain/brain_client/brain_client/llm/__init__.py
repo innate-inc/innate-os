@@ -3,7 +3,7 @@
 """One small provider library for the brain: four pure adapters, one Http mover, frozen values.
 
 :func:`configure` turns a ``vendor:name`` setting and the keys at hand into an
-:class:`Llm`; callers compose policy (:mod:`~brain_client.llm.policy`) into a
+:class:`Llm`; callers compose policy (:mod:`~brain_client.brain.history`) into a
 frozen :class:`Request`, a :class:`Provider` runs the one I/O loop, and
 adapters only translate. Tests plug a :class:`~brain_client.llm.replay.Replay`
 in at the same seam.
