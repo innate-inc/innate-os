@@ -125,9 +125,16 @@ def configure(
         return llm(proxy_http(proxy, _PROXY_SERVICE[vendor]), Backend.PROXY)
     if not key:
         if logger is not None:
-            logger.warn(f"[LLM] no way to reach {resolved}: no Innate service key and no {_KEY_ENV[vendor]}")
+            logger.warn(f"[LLM] no way to reach {resolved}: {_unreachable_because(vendor, proxy)}")
         return Llm(resolved, None, Backend.UNCONFIGURED)
     return llm(Http(_BASE_URL[vendor], headers=vendor_headers(vendor, key)), Backend.DIRECT)
+
+
+def _unreachable_because(vendor: Vendor, proxy: ProxyClient | None) -> str:
+    """Name the missing piece: a proxy that is up but has no service for this vendor is not a missing key."""
+    if proxy is not None and proxy.is_available() and vendor not in _PROXY_SERVICE:
+        return f"the Innate proxy does not serve {vendor} yet — set {_KEY_ENV[vendor]}"
+    return f"no Innate service key and no {_KEY_ENV[vendor]}"
 
 
 def vendor_key(vendor: Vendor, *, base_url: str = "") -> str:

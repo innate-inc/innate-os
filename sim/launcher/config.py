@@ -488,13 +488,15 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 def llm_vendor(spec: str, base_url: str = "") -> str:
     """The vendor prefix of an LLM_MODEL setting, inferred for a bare name the way
-    innate_llm/models.py:split_spec does."""
+    innate_llm/models.py:split_spec does; "" for a vendor prefix it rejects."""
     spec = spec.strip()
     prefix, colon, _ = spec.partition(":")
     if colon and prefix in VENDOR_API_KEYS:
         return prefix
     if base_url:
         return "openai-chat"
+    if colon:
+        return ""  # split_spec raises here: an unknown vendor, not a bare name
     if spec.startswith("claude"):
         return "anthropic"
     if spec.startswith(("gpt", "o1", "o3", "o4")):
@@ -516,6 +518,8 @@ def resolve_brain_backend(env: dict[str, str]) -> str:
     vendor = llm_vendor(env.get("LLM_MODEL") or env.get("GEMINI_MODEL") or DEFAULT_LLM_MODEL, base_url)
     if vendor == "openai-chat" and base_url:
         return SERVER_BACKEND
+    if not vendor:
+        return NO_BACKEND
     key_env = VENDOR_API_KEYS[vendor]
     has_key = is_configured_secret_value(key_env, env.get(key_env, ""))
     if vendor == "anthropic":

@@ -27,6 +27,10 @@ CATALOG: tuple[Model, ...] = (
     Model("gemini-", Vendor.GOOGLE),  # Gemini 3.6 Flash and kin
     Model("claude-", Vendor.ANTHROPIC),  # Fable 5.1 / 5, Opus 5 / 4.8 / 4.7, Sonnet 5
     Model("gpt-", Vendor.OPENAI, effort_with_tools=False),  # GPT-6 Astra, GPT-5.6 Sol / Terra / Luna
+    # OpenAI's o-series: retired names, kept so a bare "o3-mini" in an old settings.yaml still routes to OpenAI.
+    Model("o1", Vendor.OPENAI),
+    Model("o3", Vendor.OPENAI),
+    Model("o4", Vendor.OPENAI),
     # Exceptions, longest prefix first in effect.
     Model("claude-opus-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
     Model("claude-sonnet-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
