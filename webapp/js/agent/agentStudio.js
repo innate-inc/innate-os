@@ -581,8 +581,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (graduationPoll) clearInterval(graduationPoll);
       graduationPoll = null;
       graduationReady = true;
-      void adoptBuiltAgent().then(() => {
-        write(localStorage, GRADUATED_KEY, JSON.stringify({ attempt: o.attempt_id, agent: builtAgent }));
+      void adoptBuiltAgent().then((settled) => {
+        if (settled) write(localStorage, GRADUATED_KEY, JSON.stringify({ attempt: o.attempt_id, agent: builtAgent }));
         void panel.narrate(
           "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
           { local: true },
@@ -593,33 +593,46 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   /** The character becomes an agent of the person's own, and runs in place of the intro.
-   * A switch empties the brain's chat history, so the story's transcript is kept on the page. */
+   * A switch empties the brain's chat history, so the story's transcript is kept on the page.
+   * Resolves false only when the agent exists but did not start, so a reload tries again. */
   async function adoptBuiltAgent() {
     const { displayName, agentPrompt } = profile();
-    const id = slug(displayName);
     const skills = earnedSkills();
-    // Another tab at the same ending got there first; saving again would reload and stop it.
-    if (id && agentState.get().currentDirective === id) {
-      builtAgent = id;
-      return;
-    }
-    const res = agentPrompt && id
-      ? await agentState
-        .saveAgent({ id, display_name: displayName, prompt: agentPrompt, skill_ids: skills, listen: true, gaze: true })
-        .catch((err) => ({ success: false, message: failure("Save", err), path: "" }))
-      : { success: false, message: "the story carried no character", path: "" };
-    // A message on success means the file was written but did not load, so there is nothing to run.
-    if (!res.success || res.message) {
-      console.warn("[story] the built agent was not saved:", res.message);
-      agentState.setActiveSkills(skills, STORY_AGENT);
-      panel.addNotice("You built this agent. Its skills are all yours now.");
-      return;
+    const { agents, broken } = agentState.get();
+    // The same story prompt already has an agent: another tab at this ending, or a start that
+    // failed before a reload. Run that one rather than saving a second.
+    let id = agents.find((a) => a.source === "user" && !!agentPrompt && a.prompt === agentPrompt)?.id ?? "";
+    let name = displayName;
+    if (!id) {
+      const taken = new Set([...agents, ...broken].map((a) => a.id));
+      const base = slug(displayName);
+      for (let n = 2; taken.has(id || base); n++) {
+        id = `${base}_${n}`;
+        name = `${displayName} ${n}`;
+      }
+      id ||= base;
+      const res = agentPrompt && id
+        ? await agentState
+          .saveAgent({ id, display_name: name, prompt: agentPrompt, skill_ids: skills, listen: true, gaze: true })
+          .catch((err) => ({ success: false, message: failure("Save", err), path: "" }))
+        : { success: false, message: "the story carried no character", path: "" };
+      // A message on success means the file was written but did not load, so there is nothing to run.
+      if (!res.success || res.message) {
+        console.warn("[story] the built agent was not saved:", res.message);
+        agentState.setActiveSkills(skills, STORY_AGENT);
+        panel.addNotice("You built this agent. Its skills are all yours now.");
+        return true;
+      }
     }
     builtAgent = id;
-    panel.addNotice(`You built ${displayName}. It is your agent now: give it skills, change its prompt.`);
+    if (agentState.get().brainActive && agentState.get().currentDirective === id) return true;
+    panel.addNotice(`You built ${name}. It is your agent now: give it skills, change its prompt.`);
     panel.keepTranscript();
     // Saving reloads the roster, which stops the brain: start the new agent, do not only pick it.
     await agentState.setDirective(id);
+    const started = agentState.get().brainActive && agentState.get().currentDirective === id;
+    if (!started) panel.addNotice(`${name} is saved but did not start. Pick it in the agent picker to run it.`);
+    return started;
   }
 
   // After the switch, the panel points at everything the person can now change; each pointer
@@ -733,8 +746,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       return { chips: [] };
     }
     // A skill the robot asks for off-script, for the visitor's own request, overrides the scripted
-    // grant, including persona selection and the final memory step. Never auto-grant it.
-    const requested = (storyAgent()?.skills ?? []).filter((skill) =>
+    // grant, including persona selection and the final memory step. Never auto-grant it. Only
+    // the robot's answer to the latest turn of this act counts: an older mention is no request.
+    const fresh = panel.robotSpokeLast() && spoken() > actSpoke;
+    const requested = !fresh ? [] : (storyAgent()?.skills ?? []).filter((skill) =>
       skill !== WAVE && !UNMENTIONED_SKILLS.has(skill) && !agentState.get().activeSkills.has(skill) &&
       mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
     );

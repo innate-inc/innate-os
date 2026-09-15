@@ -1008,6 +1008,13 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   bottom: 14px;
 }
 
+/* On a phone the bottom edge is the chat sheet's: sit under the camera previews instead
+   (the stack's inset plus an 80px preview). The stage spans the display, so add the notch. */
+.agent-cockpit.agent-compact .tgt-hud {
+  top: calc(var(--sim-safe-top, 0px) + var(--agent-overlay-inset) + 80px + 10px);
+  bottom: auto;
+}
+
 .tgt-hud.ok {
   border-color: rgb(86 194 140 / 60%);
 }
@@ -11908,6 +11915,8 @@ body.sim-edge-to-edge .agent-cockpit.agent-sim .agent-feed-frame > .video-stage 
     padding: 0;
     right: auto;
   }
+  /* The Agent page collapses its strip up to 820px (cameraSwitch.js); its toggle must show that far too. */
+  .agent-compact .cam-strip-toggle:not([hidden]) { display: grid; }
   .agent-compact .cam-strip.collapsed { display: none; }
   .agent-compact .cam-tile.live { height: var(--pip-h); grid-template-rows: minmax(0, 1fr); }
   .agent-compact .cam-tile-label { position: absolute; bottom: 0; left: 0; width: max-content; height: 20px; padding-inline: 7px; border-radius: 0 7px 0 0; }

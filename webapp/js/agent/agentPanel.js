@@ -57,6 +57,7 @@ const THINKING_STALE_MS = 10_000;
  *   setOffers: (offers: import("./offerDeck.js").Offer[], title?: string) => void,
  *   submitText: (text: string, how?: { replyContext?: string }) => Promise<boolean>,
  *   replyContext: () => string,
+ *   robotSpokeLast: () => boolean,
  *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
  *   setDisplayName: (name: string | null) => void,
  *   isBusy: () => boolean
@@ -501,6 +502,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
     submitText,
     replyContext: () => lastRobotAt > lastUserAt ? replyContext : "",
+    robotSpokeLast: () => lastRobotAt > lastUserAt,
     /** @param {string} text */
     narrate: (text, how = {}) => submitText(text, { ...how, narrator: true }),
     /** @param {string | null} name */
