@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from pydantic_ai.messages import BinaryContent, ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 if TYPE_CHECKING:
     from brain_client.perception.identity import RobotIdentity
@@ -18,16 +19,16 @@ _PORTRAIT_CAPTION = (
 )
 
 
-def self_reference_turns() -> list[dict]:
-    """A pinned exchange showing the model its own body. Gemini's
-    systemInstruction is text-only, so the portrait rides at the front of
-    every request's contents instead (GeminiContext's ``reference``)."""
+def self_reference_turns() -> list[ModelMessage]:
+    """A pinned exchange showing the model its own body. System prompts are
+    text-only, so the portrait rides at the front of every request's messages
+    instead (ChatContext's ``reference``)."""
     if not _PORTRAIT.is_file():
         return []
-    image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
+    portrait = BinaryContent(_PORTRAIT.read_bytes(), media_type="image/jpeg")
     return [
-        {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
-        {"role": "model", "parts": [{"text": "Understood — that is what my model of robot looks like."}]},
+        ModelRequest(parts=[UserPromptPart(content=[_PORTRAIT_CAPTION, portrait])]),
+        ModelResponse(parts=[TextPart(content="Understood — that is what my model of robot looks like.")]),
     ]
 
 

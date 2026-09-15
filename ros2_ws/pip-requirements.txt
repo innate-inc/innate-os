@@ -56,7 +56,8 @@ uvicorn[standard]
 # Other AI
 inspireface
 
-# Gemini (Google GenAI)
+# LLM providers behind the brain (pydantic-ai speaks each vendor's wire; google-genai stays for the sim tools)
+pydantic-ai-slim[openai,anthropic,google]>=2.43
 google-genai
 
 # Input handling

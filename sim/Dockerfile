@@ -73,7 +73,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
         websocket-client \
         watchdog \
         onnxruntime \
-        pillow && \
+        pillow \
+        'pydantic-ai-slim[openai,anthropic,google]>=2.43' && \
     uv pip install --system \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \

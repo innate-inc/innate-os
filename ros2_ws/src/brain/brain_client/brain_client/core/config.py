@@ -7,8 +7,10 @@ it can declare/read ROS parameters, but the dataclass itself is plain data —
 which keeps every consumer testable without a ROS runtime.
 
 Credentials deliberately stay out of the ROS parameter surface: the brain
-reaches Gemini through the Innate proxy (INNATE_SERVICE_KEY) or directly via
-the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch).
+reaches its model through the Innate proxy (INNATE_SERVICE_KEY) or directly
+with the vendor's key — ``GEMINI_API_KEY``, ``OPENAI_API_KEY``,
+``ANTHROPIC_API_KEY``, or ``LLM_API_KEY`` for an ``llm_base_url`` server
+(loaded from ``.env`` by launch).
 """
 
 from __future__ import annotations
@@ -40,9 +42,12 @@ class BrainConfig:
     x_cam: float  # camera forward offset from base_link (m)
     height_cam: float  # camera height above the floor (m)
 
-    # --- Local brain (Gemini) ---
-    gemini_model: str
-    gemini_thinking_level: str  # "low" | "high"; "" = model default
+    # --- Local brain (LLM) ---
+    llm_model: str  # "provider:name" — google | openai | anthropic | openai-chat; a bare name infers its vendor
+    llm_base_url: str  # OpenAI-compatible ".../v1" root (LAN vLLM, Ollama, NIM); "" = the vendor's own API
+    llm_thinking: str  # "minimal" | "low" | "medium" | "high" | "xhigh"; "" = model default
+    llm_extra_body: str  # JSON object merged into every request (server-specific knobs)
+    memory_llm_model: str  # recall's model, same syntax; "" = the brain's
     idle_turn_interval: float  # seconds between looks when no skill is running
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model
@@ -100,16 +105,18 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "vertical_fov": 80.0,
     "x_cam": 0.0197,
     "height_cam": 0.19663,
-    # --- Local brain (Gemini) ---
-    "gemini_model": "gemini-3.6-flash",
-    # "minimal" | "low" | "medium" | "high"; "" = model default.
-    # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the
+    # --- Local brain (LLM) ---
+    "llm_model": "google:gemini-3.6-flash",
+    "llm_base_url": "",
+    # Measured on gemini-3.6-flash (2026-08): minimal is ~3x faster than the
     # default level (0.96s vs 3.08s median turn) and passed the same
     # single-turn discipline probes (wait on idle, ignore STT noise,
     # tool choice, go_to_point_in_view grounding). An earlier model's "low"
     # measurably hurt multi-turn instruction-following (skill re-runs,
     # chatter) — if that resurfaces, revert to "" here.
-    "gemini_thinking_level": "minimal",
+    "llm_thinking": "minimal",
+    "llm_extra_body": "",
+    "memory_llm_model": "",
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     # Compaction evicts to half the cap, so depth rides 1000-2000 entries. A silent
