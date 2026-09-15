@@ -104,7 +104,9 @@ const CSS = `
 .armsdk-pill.busy { color: var(--accent); border-color: var(--accent-dim); }
 
 /* --- viewport ----------------------------------------------------------- */
-.armsdk-viz { position: relative; padding: 0; overflow: hidden; min-height: 480px; }
+.armsdk-viz { position: sticky; top: 0; align-self: start; padding: 0; overflow: hidden;
+  height: clamp(480px, calc(100dvh - 140px), 680px); }
+@media (max-width: 980px) { .armsdk-viz { position: relative; height: 480px; } }
 .armsdk-viz-canvas { position: absolute; inset: 0; }
 .armsdk-viz-canvas canvas { width: 100%; height: 100%; }
 .armsdk-viz-hint { position: absolute; top: 12px; right: 14px; font-size: 11px; color: var(--muted);
@@ -190,6 +192,8 @@ const PAGE_HTML = `
     </div>
 
     <div>
+      <div class="armsdk-card armsdk-cam" data-el="cameraCard"></div>
+
       <div class="armsdk-card" style="margin-bottom: 14px">
         <h2>End-effector jog · move_by</h2>
         <div class="armsdk-row">
@@ -235,8 +239,6 @@ const PAGE_HTML = `
           <button data-el="fillBtn" title="Fill the fields from the live pose">← from current</button>
         </div>
       </div>
-
-      <div class="armsdk-card armsdk-cam" data-el="cameraCard"></div>
 
       <div class="armsdk-card">
         <h2>Gripper</h2>
