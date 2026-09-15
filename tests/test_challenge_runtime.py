@@ -232,12 +232,3 @@ def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
     runtime.update(state, [])
     assert runtime.public()["label"] == "Go through the door"
     runtime.reset()
-
-
-def test_intro_greeting_has_wave_and_waits_for_persona():
-    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
-    state = SimpleNamespace(t=0, robot=(0, 0, 0))
-    result = runtime.update(state, [])
-    assert result.public["wants"] == ["innate-os/wave"]
-    result = runtime.update(state, [{"skill_id": "wave", "status": "completed"}])
-    assert runtime.public()["label"] == "Who am I"

@@ -982,6 +982,8 @@ select.skill-input {
   flex-direction: column;
   gap: 7px;
   padding: 10px 14px 9px;
+  /* left: 50% alone would cap an auto width at half the stage. */
+  width: max-content;
   max-width: min(440px, calc(100% - 28px));
   background: rgb(0 0 0 / 66%);
   backdrop-filter: blur(20px);
@@ -1182,6 +1184,27 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 
   .tgt-prompt {
     font-size: 11px;
+  }
+
+  /* Five stages at desktop spacing run past a phone-width HUD: tighten, and wrap as a last resort. */
+  .tgt-stages {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .tgt-stage {
+    gap: 4px;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+  }
+
+  .tgt-stage + .tgt-stage {
+    margin-left: 4px;
+    padding-left: 10px;
+  }
+
+  .tgt-stage + .tgt-stage::after {
+    width: 6px;
   }
 }
 
