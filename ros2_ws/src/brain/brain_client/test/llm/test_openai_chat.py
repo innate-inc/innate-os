@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from brain_client.llm.models import resolve
 from brain_client.llm.openai_chat import ADAPTER
 from brain_client.llm.types import (
     Audio,
@@ -31,8 +32,8 @@ from brain_client.llm.types import (
 )
 
 GOLDENS = Path(__file__).parent / "goldens"
-MODEL = "gpt-5.4-mini"
-LOCAL_MODEL = "qwen3-8b"
+MODEL = resolve("openai-chat:gpt-5.4-mini")
+LOCAL_MODEL = resolve("qwen3-8b", base_url="http://10.0.0.5:8000/v1")
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
 WAV = b"RIFF" + b"\x00" * 40
@@ -77,7 +78,7 @@ def golden(name: str) -> dict:
 
 def chunk(delta: dict, finish_reason: str | None = None) -> str:
     choice = {"index": 0, "delta": delta, "finish_reason": finish_reason}
-    return json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": MODEL, "choices": [choice]})
+    return json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": MODEL.name, "choices": [choice]})
 
 
 USAGE_CHUNK = json.dumps(

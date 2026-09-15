@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from brain_client.llm.gemini import ADAPTER, CACHED_CONTENTS_PATH, GeminiProvider
+from brain_client.llm.models import resolve
 from brain_client.llm.types import (
     Audio,
     Finish,
@@ -32,7 +33,7 @@ from brain_client.llm.types import (
 )
 
 GOLDENS = Path(__file__).parent / "goldens"
-MODEL = "gemini-3.6-flash"
+MODEL = resolve("gemini-3.6-flash")
 SKIP_SIGNATURE = "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="  # b64("skip_thought_signature_validator")
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
@@ -201,7 +202,7 @@ def test_pin_posts_the_cached_contents_body() -> None:
     assert provider.pin(SYSTEM, MESSAGES[:2], ttl_s=600, display_name="mars-memory") == "cachedContents/c1"
     path, body, timeout = http.posts[0]
     assert (path, timeout) == (CACHED_CONTENTS_PATH, 120.0)
-    assert body["model"] == f"models/{MODEL}"
+    assert body["model"] == f"models/{MODEL.name}"
     assert body["systemInstruction"] == {"parts": [{"text": SYSTEM}]}
     assert body["contents"] == ADAPTER.body(CHAT, MODEL)["contents"][:2]
     assert (body["ttl"], body["displayName"]) == ("600s", "mars-memory")

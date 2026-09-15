@@ -19,6 +19,7 @@ from brain_client.llm.types import (
     Json,
     LlmError,
     Message,
+    Model,
     Reply,
     Request,
     TextDelta,
@@ -42,7 +43,7 @@ class Adapter(Protocol):
     @property
     def caps(self) -> Capabilities: ...
 
-    def body(self, request: Request, model: str) -> Json: ...
+    def body(self, request: Request, model: Model) -> Json: ...
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]: ...
 
@@ -73,13 +74,15 @@ def fold(events: Iterator[Event], on_text: Callback = None, on_thought: Callback
 class Provider:
     adapter: Adapter
     http: Http
-    model: str
+    model: Model
     extra_body: Json = field(default_factory=dict)  # merged last: a server's own knobs, never an adapter's job
 
     def stream(self, request: Request, *, timeout: float | None = None) -> Iterator[Event]:
         self.adapter.caps.check(request)
+        self.model.check(request)
         body = {**self.adapter.body(request, self.model), **self.extra_body}
-        yield from self.adapter.events(self.http.sse(self.adapter.path.format(model=self.model), body, timeout=timeout))
+        path = self.adapter.path.format(model=self.model.name)
+        yield from self.adapter.events(self.http.sse(path, body, timeout=timeout))
 
     def run(
         self, request: Request, *, on_text: Callback = None, on_thought: Callback = None, timeout: float | None = None

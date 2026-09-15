@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 
+from brain_client.llm.models import resolve
 from brain_client.llm.provider import Callback, fold
-from brain_client.llm.types import Event, Reply, Request
+from brain_client.llm.types import Event, Model, Reply, Request
 
 Script = Callable[[Request], Iterable[Event]]
 
@@ -15,10 +16,10 @@ Script = Callable[[Request], Iterable[Event]]
 class Replay:
     """Answers every request with ``events`` (or what ``script`` returns for it) and records the requests."""
 
-    def __init__(self, events: Sequence[Event] = (), *, script: Script | None = None, model: str = "replay"):
+    def __init__(self, events: Sequence[Event] = (), *, script: Script | None = None, model: Model | str = "replay"):
         self._events = tuple(events)
         self._script = script
-        self.model = model
+        self.model = model if isinstance(model, Model) else resolve(model)
         self.requests: list[Request] = []
         self.timeouts: list[float | None] = []
 

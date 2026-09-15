@@ -120,15 +120,21 @@ class BrainAgent:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
         self.backend = llm.backend
+        provider = llm.provider
+        if provider is not None and not provider.model.vision:
+            self._logger.error(
+                f"[Brain] {provider.model.name} takes no images and the brain looks every turn — unavailable"
+            )
+            provider = None
         self._context = (
             ChatContext(
-                llm.provider,
+                provider,
                 thinking=Thinking(config.llm_thinking),  # a settings typo fails here, at boot, not on the first turn
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
             )
-            if llm.provider is not None
+            if provider is not None
             else None
         )
 

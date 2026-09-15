@@ -184,7 +184,7 @@ class ChatContext:
             # exchange — raise instead, so the turn's retry path keeps the
             # events queued and the failure is visible.
             why = f"{reply.finish}" + (f" ({reply.detail})" if reply.detail else "")
-            raise RuntimeError(f"{self._provider.model} returned no content: finish={why}")
+            raise RuntimeError(f"{self._provider.model.name} returned no content: finish={why}")
         # Usage rides the reply and is committed by absorb, on the loop
         # thread: writing self.last_usage here would let an abandoned turn's
         # orphaned request overwrite the committed turn's counts.

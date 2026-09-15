@@ -488,7 +488,7 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 def llm_vendor(spec: str, base_url: str = "") -> str:
     """The vendor prefix of an LLM_MODEL setting, inferred for a bare name the way
-    brain_client/llm/configure.py:split_spec does."""
+    brain_client/llm/models.py:split_spec does."""
     spec = spec.strip()
     prefix, colon, _ = spec.partition(":")
     if colon and prefix in VENDOR_API_KEYS:

@@ -29,6 +29,7 @@ from brain_client.llm.types import (
     Json,
     LlmError,
     Message,
+    Model,
     Part,
     Reply,
     Request,
@@ -94,7 +95,7 @@ class GeminiAdapter:
         thinking_rungs=frozenset({Thinking.MINIMAL, Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH}),
     )
 
-    def body(self, request: Request, model: str) -> Json:
+    def body(self, request: Request, model: Model) -> Json:
         body: Json = {}
         if request.pinned:
             if request.tools:
@@ -105,7 +106,7 @@ class GeminiAdapter:
         body["contents"] = [_content(message) for message in request.messages]
         if request.tools:
             body["tools"] = [{"functionDeclarations": [_declaration(tool) for tool in request.tools]}]
-        config = _generation_config(request, self.caps.clamp(request.thinking))
+        config = _generation_config(request, self.caps.clamp(request.thinking, model.thinking))
         if config:
             body["generationConfig"] = config
         return body
@@ -140,7 +141,7 @@ class GeminiProvider(Provider):
     """The one wire with words for an explicit cache: contents pinned server-side, then named per request."""
 
     def pin(self, system: str, messages: Sequence[Message], *, ttl_s: int, display_name: str = "") -> str:
-        body: Json = {"model": f"models/{self.model}"}
+        body: Json = {"model": f"models/{self.model.name}"}
         if system:
             body["systemInstruction"] = _instruction(system)
         body["contents"] = [_content(message) for message in messages]

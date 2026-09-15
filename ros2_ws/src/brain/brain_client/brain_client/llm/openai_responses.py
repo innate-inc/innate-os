@@ -22,6 +22,7 @@ from brain_client.llm.types import (
     Json,
     LlmError,
     Message,
+    Model,
     Part,
     Reply,
     Request,
@@ -56,10 +57,10 @@ class OpenAIResponsesAdapter:
         thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
     )
 
-    def body(self, request: Request, model: str) -> Json:
+    def body(self, request: Request, model: Model) -> Json:
         # store=false is what makes encrypted reasoning replayable: a stored response keeps it server-side instead.
         body: Json = {
-            "model": model,
+            "model": model.name,
             "stream": True,
             "store": False,
             "include": ["reasoning.encrypted_content"],
@@ -78,7 +79,7 @@ class OpenAIResponsesAdapter:
                 }
                 for tool in request.tools
             ]
-        reasoning = self._reasoning(request)
+        reasoning = self._reasoning(request, model)
         if reasoning:
             body["reasoning"] = reasoning
         if request.json_schema is not None:
@@ -112,9 +113,9 @@ class OpenAIResponsesAdapter:
                 raise LlmError.protocol(_detail(payload))
         raise LlmError.protocol("stream ended before response.completed")
 
-    def _reasoning(self, request: Request) -> Json:
+    def _reasoning(self, request: Request, model: Model) -> Json:
         reasoning: Json = {}
-        effort = self.caps.clamp(request.thinking)
+        effort = self.caps.clamp(request.thinking, model.thinking)
         if effort != Thinking.DEFAULT:
             reasoning["effort"] = effort.value
         if request.thought_summaries:

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from brain_client.llm.models import resolve
 from brain_client.llm.openai_responses import ADAPTER
 from brain_client.llm.types import (
     Finish,
@@ -31,7 +32,7 @@ from brain_client.llm.types import (
 )
 
 GOLDENS = Path(__file__).parent / "goldens"
-MODEL = "gpt-5.4-mini"
+MODEL = resolve("gpt-5.4-mini")
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
 SYSTEM = "SYS"

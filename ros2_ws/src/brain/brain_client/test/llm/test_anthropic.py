@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from brain_client.llm.anthropic import ADAPTER
+from brain_client.llm.models import resolve
 from brain_client.llm.types import (
     Audio,
     Finish,
@@ -32,7 +33,7 @@ from brain_client.llm.types import (
 )
 
 GOLDENS = Path(__file__).parent / "goldens"
-MODEL = "claude-sonnet-5"
+MODEL = resolve("claude-sonnet-5")
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
 WAV = b"RIFF" + b"\x00" * 40
@@ -81,7 +82,7 @@ TRANSCRIPT = (
         "message": {
             "id": "msg_1",
             "role": "assistant",
-            "model": MODEL,
+            "model": MODEL.name,
             "content": [],
             "usage": {"input_tokens": 120, "cache_read_input_tokens": 3400, "cache_creation_input_tokens": 80},
         },
@@ -148,6 +149,21 @@ def test_thought_summaries_and_effort_are_opt_in() -> None:
 def test_minimal_thinking_clamps_to_the_lowest_rung() -> None:
     request = Request(system="", messages=(MESSAGES[0],), thinking=Thinking.MINIMAL)
     assert ADAPTER.body(request, MODEL)["output_config"] == {"effort": "low"}
+
+
+def test_a_budget_model_gets_budget_tokens_and_no_effort() -> None:
+    # Haiku 4.5 (and Sonnet/Opus 4.5 and older) 400 on adaptive thinking and output_config.effort.
+    body = ADAPTER.body(Request(system="", messages=(MESSAGES[0],), thinking=Thinking.LOW), resolve("claude-haiku-4-5"))
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "output_config" not in body
+
+
+def test_xhigh_clamps_to_high_where_the_model_stops_there() -> None:
+    body = ADAPTER.body(
+        Request(system="", messages=(MESSAGES[0],), thinking=Thinking.XHIGH), resolve("claude-sonnet-4-6")
+    )
+    assert body["output_config"] == {"effort": "high"}
+    assert ADAPTER.body(CHAT, MODEL)["output_config"]["effort"] == "low"
 
 
 def test_only_the_last_four_pins_become_breakpoints() -> None:

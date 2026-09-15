@@ -25,6 +25,7 @@ from brain_client.llm.types import (
     Json,
     LlmError,
     Message,
+    Model,
     Part,
     Reply,
     Request,
@@ -61,11 +62,11 @@ class OpenAIChatAdapter:
         thinking_rungs=frozenset({Thinking.LOW, Thinking.MEDIUM, Thinking.HIGH, Thinking.XHIGH}),
     )
 
-    def body(self, request: Request, model: str) -> Json:
+    def body(self, request: Request, model: Model) -> Json:
         messages = [{"role": "system", "content": request.system}] if request.system else []
         messages += [m for message in request.messages for m in self._messages(message)]
         body: Json = {
-            "model": model,
+            "model": model.name,
             "stream": True,
             "stream_options": {"include_usage": True},
             "messages": messages,
@@ -82,9 +83,8 @@ class OpenAIChatAdapter:
                 }
                 for tool in request.tools
             ]
-        effort = self.caps.clamp(request.thinking)
-        # OpenAI's chat wire 400s on tools + reasoning_effort for gpt-*; a LAN server takes both.
-        if effort != Thinking.DEFAULT and not (request.tools and model.startswith("gpt-")):
+        effort = self.caps.clamp(request.thinking, model.thinking)
+        if effort != Thinking.DEFAULT and (model.effort_with_tools or not request.tools):
             body["reasoning_effort"] = effort.value
         if request.json_schema is not None:
             schema = dict(request.json_schema)

@@ -36,6 +36,15 @@ class Wire(StrEnum):
     OPENAI_CHAT = "openai_chat"
 
 
+class Vendor(StrEnum):
+    """The ``vendor:`` prefix of a model setting — wire-visible in settings.yaml, never renamed."""
+
+    GOOGLE = "google"
+    OPENAI = "openai"
+    OPENAI_CHAT = "openai-chat"
+    ANTHROPIC = "anthropic"
+
+
 class Thinking(StrEnum):
     """One reasoning-effort ladder for every vendor; adapters clamp to the rungs they have."""
 
@@ -234,11 +243,32 @@ class Capabilities:
         if not self.pinned and request.pinned is not None:
             raise LlmError.unsupported("a pinned context", self.wire)
 
-    def clamp(self, thinking: Thinking) -> Thinking:
-        """The vendor's nearest rung at or above the asked one (the top rung past its end)."""
-        if thinking == Thinking.DEFAULT or thinking in self.thinking_rungs:
+    def clamp(self, thinking: Thinking, model_rungs: frozenset[Thinking] = frozenset(LADDER)) -> Thinking:
+        """The nearest rung both the wire and the model have, at or above the asked one (the top rung past its end)."""
+        rungs = self.thinking_rungs & model_rungs or self.thinking_rungs
+        if thinking == Thinking.DEFAULT or thinking in rungs:
             return thinking
-        above = [rung for rung in LADDER[LADDER.index(thinking) :] if rung in self.thinking_rungs]
+        above = [rung for rung in LADDER[LADDER.index(thinking) :] if rung in rungs]
         if above:
             return above[0]
-        return max(self.thinking_rungs, key=LADDER.index)
+        return max(rungs, key=LADDER.index)
+
+
+@dataclass(frozen=True)
+class Model:
+    """What one model accepts, declared up front — a catalog row, or its vendor's defaults for a name without one.
+
+    ``vendor`` picks the wire and the route; the flags are the facts that would
+    otherwise be name-matching inside an adapter.
+    """
+
+    name: str
+    vendor: Vendor
+    vision: bool = True
+    thinking: frozenset[Thinking] = frozenset(LADDER)  # the rungs it accepts; the wire clamps within them
+    budget_thinking: bool = False  # pre-adaptive Claude: thinking is a token budget, output_config.effort is a 400
+    effort_with_tools: bool = True  # False: the chat wire 400s on tools + reasoning_effort (OpenAI's gpt-* there)
+
+    def check(self, request: Request) -> None:
+        if not self.vision and any(isinstance(part, Image) for part in request.parts()):
+            raise LlmError(Kind.UNSUPPORTED, f"image input is not supported by {self.name}")

@@ -4,11 +4,11 @@
 
 A setting names the model as ``vendor:name`` — ``google:gemini-3.6-flash``,
 ``anthropic:claude-sonnet-5``, ``openai:gpt-5.4-mini`` — and each vendor has
-its own wire (native Gemini, Anthropic Messages, OpenAI Responses). A bare
-name infers its vendor from its prefix, so the retired ``gemini-3.6-flash``
-setting still works. ``openai-chat`` with ``base_url`` points the Chat
-Completions wire at any OpenAI-compatible server (a LAN vLLM, Ollama, NIM);
-``base_url`` means nothing to the other vendors' wires and is ignored there.
+its own wire (native Gemini, Anthropic Messages, OpenAI Responses); the
+catalog (:mod:`~brain_client.llm.models`) supplies what the named model
+accepts. ``openai-chat`` with ``base_url`` points the Chat Completions wire at
+any OpenAI-compatible server (a LAN vLLM, Ollama, NIM); ``base_url`` means
+nothing to the other vendors' wires and is ignored there.
 
 The way there: the Innate proxy when the robot has a service key (it holds
 the vendor keys and passes each API through under its own service name),
@@ -28,8 +28,9 @@ from typing import TYPE_CHECKING
 from brain_client.common.enums import StrEnum
 from brain_client.llm import anthropic, gemini, openai_chat, openai_responses
 from brain_client.llm.http import Http
+from brain_client.llm.models import lookup, resolve
 from brain_client.llm.provider import Adapter, Provider
-from brain_client.llm.types import Json
+from brain_client.llm.types import Json, Model, Vendor
 
 if TYPE_CHECKING:
     from rclpy.impl.rcutils_logger import RcutilsLogger
@@ -41,15 +42,6 @@ LLM_API_KEY_ENV = "LLM_API_KEY"
 TURN_TIMEOUT_SECS = 90.0
 
 
-class Vendor(StrEnum):
-    """The ``vendor:`` prefix of a model setting — wire-visible in settings.yaml, never renamed."""
-
-    GOOGLE = "google"
-    OPENAI = "openai"
-    OPENAI_CHAT = "openai-chat"
-    ANTHROPIC = "anthropic"
-
-
 class Backend(StrEnum):
     """Which way the brain reaches its model (surfaced in health and telemetry)."""
 
@@ -58,7 +50,6 @@ class Backend(StrEnum):
     UNCONFIGURED = "unconfigured"
 
 
-_VENDORS = frozenset(vendor.value for vendor in Vendor)
 _KEY_ENV: dict[Vendor, str] = {
     Vendor.GOOGLE: "GEMINI_API_KEY",
     Vendor.OPENAI: "OPENAI_API_KEY",
@@ -98,27 +89,6 @@ class Llm:
         return self.spec.split(":", 1)[1]
 
 
-def split_spec(spec: str, *, base_url: str = "") -> tuple[Vendor, str]:
-    """``"vendor:name"`` -> (vendor, name); a bare name infers its vendor.
-
-    With a ``base_url`` any name that is not ``vendor:``-prefixed is the server's
-    own — an Ollama tag such as ``qwen2.5:7b`` carries a colon of its own.
-    """
-    spec = spec.strip()
-    prefix, colon, name = spec.partition(":")
-    if colon and prefix in _VENDORS:
-        return Vendor(prefix), name
-    if base_url:
-        return Vendor.OPENAI_CHAT, spec
-    if colon:
-        raise ValueError(f"unknown LLM vendor {prefix!r} in {spec!r} (one of {sorted(_VENDORS)})")
-    if spec.startswith("claude"):
-        return Vendor.ANTHROPIC, spec
-    if spec.startswith(("gpt", "o1", "o3", "o4")):
-        return Vendor.OPENAI, spec
-    return Vendor.GOOGLE, spec
-
-
 def configure(
     spec: str,
     proxy: ProxyClient | None,
@@ -127,8 +97,11 @@ def configure(
     extra_body: str = "",
     logger: RcutilsLogger | None = None,
 ) -> Llm:
-    vendor, name = split_spec(spec or DEFAULT_MODEL, base_url=base_url)
-    resolved = f"{vendor}:{name}"
+    model = resolve(spec or DEFAULT_MODEL, base_url=base_url)
+    vendor = model.vendor
+    resolved = f"{vendor}:{model.name}"
+    if logger is not None and not base_url and lookup(model.name) is None:
+        logger.warn(f"[Brain] {model.name} is not in the model catalog — assuming {vendor}'s defaults")
     extra: Json = json.loads(extra_body) if extra_body else {}
     adapter = _ADAPTER[vendor]
     server = base_url.rstrip("/") if vendor == Vendor.OPENAI_CHAT else ""
@@ -136,7 +109,7 @@ def configure(
     proxied = proxy is not None and proxy.is_available() and vendor in _PROXY_SERVICE
 
     def llm(http: Http, backend: Backend) -> Llm:
-        return Llm(resolved, _provider(adapter, http, name, extra), backend)
+        return Llm(resolved, _provider(adapter, http, model, extra), backend)
 
     if server:
         # A LAN server usually takes no key at all; LLM_API_KEY is only for the ones that do.
@@ -180,7 +153,7 @@ def proxy_http(proxy: ProxyClient, service: str) -> Http:
     return Http(base, auth=InnateBearerAuth(auth_provider), timeout=TURN_TIMEOUT_SECS)
 
 
-def _provider(adapter: Adapter, http: Http, model: str, extra_body: Json) -> Provider:
+def _provider(adapter: Adapter, http: Http, model: Model, extra_body: Json) -> Provider:
     if adapter is gemini.ADAPTER:
         return gemini.GeminiProvider(adapter, http, model, extra_body)
     return Provider(adapter, http, model, extra_body)
