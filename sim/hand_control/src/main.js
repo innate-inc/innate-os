@@ -131,6 +131,10 @@ function follow() {
   render();
 }
 
+// Fitted profiles carry a revision; a hand-written one is still a profile.
+const profileIdentity = (p) =>
+  p ? p.revision || p.source_hash || JSON.stringify(p) : null;
+
 function connect() {
   const generation = ++socketGeneration;
   const socket = new WebSocket(
@@ -149,9 +153,7 @@ function connect() {
       }
       connected = true;
       if (
-        (message.personal_profile?.revision ||
-          message.personal_profile?.source_hash) !==
-        (profile?.revision || profile?.source_hash)
+        profileIdentity(message.personal_profile) !== profileIdentity(profile)
       ) {
         profile = message.personal_profile || null;
         personal = profile ? new PersonalMapper(profile) : null;

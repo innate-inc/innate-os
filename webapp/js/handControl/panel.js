@@ -78,17 +78,12 @@ const CSS = `
 .handctl-hint kbd { border: 1px solid var(--hairline-strong); border-radius: 4px; padding: 0 4px;
   background: var(--bg); font-family: inherit; font-size: 10px; }
 
-/* Floating over the teleop video. */
-.handctl-float { position: absolute; right: 14px; bottom: 14px; z-index: 30; width: min(320px, calc(100vw - 28px));
-  background: var(--panel); border: 1px solid var(--hairline-strong); border-radius: 14px; padding: 12px 13px 13px;
-  box-shadow: 0 18px 44px rgb(0 0 0 / 45%); backdrop-filter: blur(10px); }
-@media (max-width: 720px) { .handctl-float { left: 14px; right: 14px; width: auto; } }
 .handctl-close { background: none !important; border: none !important; color: var(--muted) !important;
   padding: 2px 4px !important; font-size: 15px !important; line-height: 1; }
 .handctl-close:hover { color: var(--text) !important; }
 
 /* Over the teleop video the arm overlay grows upward to hold the preview, so
-   the panel sheds what the Arm SDK page has room for: the keyboard legend, the
+   the panel sheds what the Arm SDK page has room for: the inference meter, the
    taller preview, the roomier buttons. */
 .overlay-arm { max-width: calc(100vw - 28px); }
 .overlay-arm > .handctl { width: 288px; padding: 12px 14px 2px; }
@@ -115,10 +110,15 @@ const FINGERS = [
   [0, 17, 18, 19, 20],
 ];
 
+/** @typedef {{ shortcuts?: boolean, onClose?: () => void }} HandControlPanelOptions
+ *   shortcuts binds Space (follow) and R (recentre) page-wide -- only for a host
+ *   whose keyboard is otherwise free; the teleop page already gives Space to the
+ *   skill launcher. Escape always stops. */
+
 /**
  * @param {HTMLElement} parent
  * @param {import("../rosClient.js").RosClient} ros
- * @param {{ floating?: boolean, onClose?: () => void }} [opts]
+ * @param {HandControlPanelOptions} [opts]
  * @returns {{ el: HTMLElement, destroy: () => void }}
  */
 export function createHandControlPanel(parent, ros, opts = {}) {
@@ -130,7 +130,7 @@ export function createHandControlPanel(parent, ros, opts = {}) {
   }
 
   const root = document.createElement("div");
-  root.className = `handctl${opts.floating ? " handctl-float" : ""}`;
+  root.className = "handctl";
   root.innerHTML = `
     <div class="handctl-head">
       <h2>Camera control</h2>
@@ -166,9 +166,9 @@ export function createHandControlPanel(parent, ros, opts = {}) {
       feel<input type="range" data-el="sens" min="0.4" max="2" step="0.1" value="1"><span data-el="sensValue">1.0×</span>
     </label>
     <p class="handctl-hint">
-      <span>Video is processed in this browser and never sent to the robot — only claw targets are.</span>
-      <span class="handctl-roomy"><kbd>Space</kbd> follow · <kbd>R</kbd> recentre · <kbd>Esc</kbd> stop.
+      <span>Video is processed in this browser and never sent to the robot — only claw targets are.
       Your pinch takes over the gripper the moment you start.</span>
+      ${opts.shortcuts ? "<span><kbd>Space</kbd> follow · <kbd>R</kbd> recentre · <kbd>Esc</kbd> stop.</span>" : ""}
     </p>`;
   parent.appendChild(root);
 
@@ -196,8 +196,11 @@ export function createHandControlPanel(parent, ros, opts = {}) {
   /** @param {import("./handSample.js").HandSample | null} sample */
   function draw(sample) {
     if (!context) return;
-    overlay.width = video.videoWidth || 640;
-    overlay.height = video.videoHeight || 480;
+    // Assigning a canvas dimension reallocates its bitmap even when unchanged.
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    if (overlay.width !== width) overlay.width = width;
+    if (overlay.height !== height) overlay.height = height;
     context.clearRect(0, 0, overlay.width, overlay.height);
     if (!sample?.raw) return;
     const points = sample.raw.map((p) => [p.x * overlay.width, p.y * overlay.height]);
@@ -227,6 +230,12 @@ export function createHandControlPanel(parent, ros, opts = {}) {
       context.stroke();
       context.restore();
     }
+  }
+
+  /** render runs on every tracker result; rewriting a button's markup that often
+   * is wasted layout. @param {HTMLElement} node @param {string} html */
+  function setContent(node, html) {
+    if (node.innerHTML !== html) node.innerHTML = html;
   }
 
   /** @param {import("./session.js").HandControlState} state */
@@ -267,13 +276,13 @@ export function createHandControlPanel(parent, ros, opts = {}) {
     el("ring").setAttribute("stroke-dashoffset", String(126 * (1 - state.progress)));
 
     const camera = /** @type {HTMLButtonElement} */ (el("camera"));
-    camera.innerHTML = `${ICON_CAMERA}<span>${state.cameraOn ? "Camera off" : "Enable camera"}</span>`;
+    setContent(camera, `${ICON_CAMERA}<span>${state.cameraOn ? "Camera off" : "Enable camera"}</span>`);
     camera.disabled = state.phase === "loading";
     camera.classList.toggle("primary", !state.cameraOn);
 
     const follow = /** @type {HTMLButtonElement} */ (el("follow"));
     const engaged = live || holding;
-    follow.innerHTML = `${engaged ? ICON_STOP : ICON_PLAY}<span>${engaged ? "Stop" : "Start following"}</span>`;
+    setContent(follow, `${engaged ? ICON_STOP : ICON_PLAY}<span>${engaged ? "Stop" : "Start following"}</span>`);
     follow.disabled = !state.cameraOn || state.phase === "loading" || (!engaged && (!state.connected || !!state.blockedBy));
     follow.classList.toggle("live", engaged);
 
@@ -305,7 +314,7 @@ export function createHandControlPanel(parent, ros, opts = {}) {
       control.stop();
       return;
     }
-    if (event.repeat || !last?.cameraOn) return;
+    if (!opts.shortcuts || event.repeat || !last?.cameraOn) return;
     if (event.code === "Space" && target.tagName !== "BUTTON") {
       event.preventDefault();
       if (engaged) control.stop();

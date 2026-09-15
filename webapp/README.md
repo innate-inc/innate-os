@@ -162,8 +162,9 @@ tracking runs in the operator's browser and only claw targets cross the network.
   toward/away from the webcam to reach out and back), turn it to swivel the arm,
   tilt it to aim the claw — down far enough to take something off the floor —
   and separate thumb and index to open the jaws. Nothing else touches the
-  gripper. *Recentre* re-anchors your hand wherever it is; **Space** follows,
-  **R** recentres, **Esc** stops.
+  gripper. *Recentre* re-anchors your hand wherever it is. **Esc** stops on both
+  pages; on the Arm SDK page **Space** follows and **R** recentres (the teleop
+  page's Space already opens the skill launcher).
 - **Anchored on the arm, not on a calibration.** Following starts from the pose
   the arm is already holding, so there is no ground-line setup and no jump. The
   claw target is rate-limited and never allowed to run more than 8 cm ahead of

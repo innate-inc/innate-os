@@ -3,15 +3,16 @@
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 
-def load_profile(path):
+def load_profile(path: Path | str) -> dict[str, Any] | None:
     path = Path(path)
     if not path.is_file():
         return None
     profile = json.loads(path.read_text())
 
-    def vector(value, length, bound):
+    def vector(value: object, length: int, bound: float) -> None:
         if (
             not isinstance(value, list)
             or len(value) != length
@@ -19,7 +20,7 @@ def load_profile(path):
         ):
             raise ValueError("Invalid personal calibration coefficients")
 
-    def matrix(value, rows, columns, bound):
+    def matrix(value: object, rows: int, columns: int, bound: float) -> None:
         if not isinstance(value, list) or len(value) != rows:
             raise ValueError("Invalid personal calibration matrix")
         for row in value:

@@ -115,10 +115,11 @@ function branchesAt(/** @type {number} */ radius, /** @type {number} */ height,
   return found;
 }
 
+const jointDistance = (/** @type {ArmJoints} */ q, /** @type {number[]} */ seed) =>
+  q.reduce((s, v, i) => s + (v - seed[i]) ** 2, 0);
+
 const nearest = (/** @type {ArmJoints[]} */ options, /** @type {number[]} */ seed) =>
-  options.reduce((best, q) =>
-    q.reduce((s, v, i) => s + (v - seed[i]) ** 2, 0) < best.reduce((s, v, i) => s + (v - seed[i]) ** 2, 0) ? q : best,
-  );
+  options.reduce((best, q) => (jointDistance(q, seed) < jointDistance(best, seed) ? q : best));
 
 const PITCH_SCAN = 361; // 1 degree over the full turn
 const RADIAL_SEARCH_M = 0.06;
@@ -178,6 +179,29 @@ export function solveArm(target, pitch, roll, seed, bounds) {
     const held = [seed[0], seed[1], seed[2], seed[3], roll];
     return { joints: held, pitch: seed[1] + seed[2] + seed[3], limited: true };
   }
-  const best = scan.reduce((a, b) => (Math.abs(b.pitch - pitch) < Math.abs(a.pitch - pitch) ? b : a));
+  const group = postureGroup(scan, seed);
+  const best = group.reduce((a, b) => (Math.abs(b.pitch - pitch) < Math.abs(a.pitch - pitch) ? b : a));
   return { joints: best.q, pitch: best.pitch, limited: true };
+}
+
+const PITCH_STEP = (2 * Math.PI) / (PITCH_SCAN - 1);
+const elbowSide = (/** @type {ArmJoints} */ q) => Math.sign(ANGLE_B - ANGLE_A - q[2]);
+
+/** The run of `scan` -- one elbow branch, contiguous in pitch -- holding the
+ * posture nearest `seed`.
+ * @param {{ q: ArmJoints, pitch: number }[]} scan @param {number[]} seed */
+function postureGroup(scan, seed) {
+  /** @type {{ q: ArmJoints, pitch: number }[][]} */
+  const groups = [];
+  for (const side of [-1, 1]) {
+    const branch = scan.filter((c) => elbowSide(c.q) === side).sort((a, b) => a.pitch - b.pitch);
+    for (const candidate of branch) {
+      const run = groups[groups.length - 1];
+      if (run && elbowSide(run[0].q) === side && candidate.pitch - run[run.length - 1].pitch <= 1.5 * PITCH_STEP)
+        run.push(candidate);
+      else groups.push([candidate]);
+    }
+  }
+  const closest = (/** @type {{ q: ArmJoints }[]} */ run) => Math.min(...run.map((c) => jointDistance(c.q, seed)));
+  return groups.reduce((a, b) => (closest(b) < closest(a) ? b : a));
 }

@@ -14,6 +14,7 @@ import { copyToButton, ICON_COPY } from "../clipboard.js";
 import { ARM_STATUS_TOPIC } from "../constants.js";
 import { ros } from "../rosClient.js";
 import { armControlHolder, onArmControlChange } from "../armControlLock.js";
+import { loadHandControlPanel } from "../handControl/load.js";
 
 const ARM_ACTION = "/armsdk/command";
 const ARM_ACTION_TYPE = "brain_messages/action/ExecuteArmCommand";
@@ -21,15 +22,6 @@ const STREAM_TOPIC = "/armsdk/stream_joints";
 const ARM_STATE_TOPIC = "/mars/arm/state";
 const FK_POSE_TOPIC = "/fk_pose";
 const STATE_THROTTLE_MS = 100;
-
-/** The camera panel's module graph (hand tracker, kinematics, MediaPipe loader) is
- * fetched only when an operator actually opens it.
- * @param {HTMLElement} parent
- * @param {import("../rosClient.js").RosClient} rosClient
- * @param {{ floating?: boolean, onClose?: () => void }} [opts]
- * @returns {Promise<{ el: HTMLElement, destroy: () => void }>} */
-const buildCameraPanel = (parent, rosClient, opts) =>
-  import("../handControl/panel.js").then((m) => m.createHandControlPanel(parent, rosClient, opts));
 
 /** createArmViz with its module fetched on demand — viz.js pulls in the vendored three.js, by far the
  * heaviest module in the app, and only this page ever renders it.
@@ -409,7 +401,9 @@ export function mount(stage) {
     /** @type {number[] | null} */
     let lastSent = null;
     let deadline = performance.now() + 5000;
-    while (!destroyed) {
+    // The deadman would otherwise keep re-sending the last slider target under
+    // a camera stream that has since claimed the arm.
+    while (!destroyed && !armControlHolder()) {
       let joints = livePending;
       livePending = null;
       if (joints) {
@@ -652,7 +646,7 @@ export function mount(stage) {
   ];
   /** @type {{ destroy: () => void } | null} */
   let cameraPanel = null;
-  buildCameraPanel(el("cameraCard"), ros, {}).then(
+  loadHandControlPanel(el("cameraCard"), ros, { shortcuts: true }).then(
     (panel) => (destroyed ? panel.destroy() : (cameraPanel = panel)),
     (err) => {
       el("cameraCard").innerHTML = `<div class="armsdk-hint">Camera arm control unavailable (${err?.message || err})</div>`;

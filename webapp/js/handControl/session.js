@@ -1,21 +1,11 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Camera arm control: your webcam drives the MARS claw.
-//
-// Everything here runs in the operator's browser -- frames never leave it. What
-// reaches the robot is the same joint stream the Arm SDK page's sliders use
+// Camera arm control: your webcam drives the MARS claw. Frames never leave the
+// browser; what reaches the robot is the Arm SDK sliders' own joint stream
 // (/armsdk/stream_joints -> Manipulation.stream_joints), so the arm server's
-// velocity clamp, its 0.4 s stream idle-out and its motion lock are what bound
-// this feature; there is no camera-specific path into the arm and no new robot
-// service to own. Holding is therefore the absence of commands: stop publishing
-// and the stream idles out with the arm where it stands. Nothing is ever queued
-// -- a frame either goes out now or is dropped.
-//
-// The mapping (hand -> position, tilt, pinch) is the studio's, measured against
-// a MuJoCo MARS in sim/hand_control; this module adds the robot side of it:
-// anchoring on the arm's *achieved* pose, closed-form IK (armKinematics.js),
-// and the holds that make losing your hand or the network safe.
+// velocity clamp, 0.4 s idle-out and motion lock bound this feature and holding
+// is simply the absence of commands -- nothing is ever queued.
 
 import { ARM_STATUS_TOPIC } from "../constants.js";
 import { measureHand, continuousHand, Calibration, HandMapper, clamp } from "./handSample.js";
@@ -83,8 +73,7 @@ function swivel(point, yaw) {
  * @typedef {{ phase: "off" | "loading" | "ready" | "following" | "holding",
  *   feedback: string, error: string, progress: number, rate: number, inferenceMs: number,
  *   cameraOn: boolean, handTracked: boolean, connected: boolean, torque: boolean | null,
- *   grip: number, limited: boolean, approaching: boolean, heightMm: number | null,
- *   blockedBy: string | null }} HandControlState
+ *   grip: number, limited: boolean, blockedBy: string | null }} HandControlState
  */
 
 /**
@@ -149,7 +138,6 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
   function publishState() {
     if (destroyed) return;
     const fresh = !!sample?.valid && performance.now() - lastResultAt < 500;
-    const pose = measured ? forwardArm(measured) : null;
     onState({
       phase,
       feedback,
@@ -163,8 +151,6 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
       torque,
       grip: measured ? clamp(measured[5] / GRIPPER_OPEN, 0, 1) : gripTarget,
       limited,
-      approaching: !!pathTarget && !!pose && distance(pathTarget, [pose.x, pose.y, pose.z]) > 0.02,
-      heightMm: pose ? Math.max(0, pose.z) * 1000 : null,
       blockedBy: blockedBy(),
     });
   }
@@ -497,8 +483,8 @@ export function createHandControl({ ros, video, onSample, onState, claim, blocke
     if (ros.state !== "connected") return "Waiting for the robot connection.";
     if (!measured) return "Waiting for the arm's joint state.";
     if (torque === false) return "The arm is limp — turn torque on first.";
-    if (!sample?.valid || performance.now() - lastResultAt > STALE_FRAME_MS)
-      return sample?.reason || "Bring your hand into view.";
+    if (!sample?.valid) return sample?.reason || "Bring your hand into view.";
+    if (performance.now() - lastResultAt > STALE_FRAME_MS) return "Camera is catching up — try again in a moment.";
     const held = blockedBy();
     if (held) return `${held} is driving the arm — stop it first.`;
     return "";

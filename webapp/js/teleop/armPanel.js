@@ -23,17 +23,9 @@ import {
 } from "../constants.js";
 import { rebootArmAndEnableTorque } from "../armReboot.js";
 import { claimArmControl, armControlHolder, onArmControlChange } from "../armControlLock.js";
+import { loadHandControlPanel } from "../handControl/load.js";
 
 const LEADER_NAME = "Leader arm";
-
-/** The camera panel's module graph (hand tracker, kinematics, MediaPipe loader) is
- * fetched only when an operator actually opens it.
- * @param {HTMLElement} parent
- * @param {import("../rosClient.js").RosClient} rosClient
- * @param {{ floating?: boolean, onClose?: () => void }} [opts]
- * @returns {Promise<{ el: HTMLElement, destroy: () => void }>} */
-const buildCameraPanel = (parent, rosClient, opts) =>
-  import("../handControl/panel.js").then((m) => m.createHandControlPanel(parent, rosClient, opts));
 
 const PUBLISH_MIN_GAP_MS = 15;
 const TICK_CENTER = 2048;
@@ -109,7 +101,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     if (cameraPending) return;
     cameraPending = true;
     cameraBtn.classList.add("active");
-    buildCameraPanel(parent, rosClient, { onClose: toggleCamera }).then(
+    loadHandControlPanel(parent, rosClient, { onClose: toggleCamera }).then(
       (panel) => {
         cameraPending = false;
         if (destroyed) panel.destroy();

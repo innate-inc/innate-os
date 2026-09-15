@@ -2,6 +2,8 @@
 
 import math
 import time
+from collections.abc import Sequence
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -18,13 +20,28 @@ MAX_JOINT_SPEED = 1.0
 WRIST_LIMITS = np.array([1.2, 0.65, 0.45])
 
 
-def rotation_clearance(height):
+def _finite(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value):
+        raise ValueError("Expected finite control values")
+    return float(value)
+
+
+def _angles(wrist: object) -> np.ndarray | None:
+    """Roll, pitch, yaw off the wire, or None when rotation is not being driven."""
+    if wrist is None:
+        return None
+    if not isinstance(wrist, (list, tuple)) or len(wrist) != 3:
+        raise ValueError("Expected bounded roll, pitch and yaw values")
+    return np.array([_finite(v) for v in wrist])
+
+
+def rotation_clearance(height: float) -> float:
     clearance = np.clip((height - GROUND_Z) / 0.06, 0, 1)
     return clearance**2 * (3 - 2 * clearance)
 
 
 class ArmWorld:
-    def __init__(self, workspace=None):
+    def __init__(self, workspace: dict[str, Any] | None = None) -> None:
         self.sim = VirtualMars(environment=Environment.load("void", ASSETS_DIR))
         self.model, self.data = self.sim.model, self.sim.data
         self.names = [f"joint{i}" for i in range(1, 6)]
@@ -89,12 +106,12 @@ class ArmWorld:
             self.sim.step(0.01)
         self.hold("ready")
 
-    def constrain(self, values, *, physical=False):
+    def constrain(self, values: np.ndarray, *, physical: bool = False) -> np.ndarray:
         values = np.clip(values, self.limits[:, 0], self.limits[:, 1])
         values[1] = max(values[1], joint2_min_target(values[0], self.limits[1, 0]) + (0.09 if physical else 0))
         return values
 
-    def solve(self, target, seed):
+    def solve(self, target: np.ndarray, seed: np.ndarray) -> np.ndarray:
         d = self.ik_data
         d.qpos[:] = self.data.qpos
         angles = self.constrain(np.array(seed, dtype=float), physical=True)
@@ -111,7 +128,7 @@ class ArmWorld:
             angles = self.constrain(angles + np.clip(delta, -0.08, 0.08), physical=True)
         return angles
 
-    def wrist_candidates(self, target, pitches, roll):
+    def wrist_candidates(self, target: np.ndarray, pitches: Sequence[float] | np.ndarray, roll: float) -> np.ndarray:
         """Exact planar IK from this URDF's link offsets, with real limits."""
         base_rotation = self.data.xmat[self.base_body].reshape(3, 3)
         local = base_rotation.T @ (target - self.data.xpos[self.base_body])
@@ -138,7 +155,7 @@ class ArmWorld:
             answers.extend(q[valid])
         return np.array(answers)
 
-    def solve_wrist(self, target, roll, requested):
+    def solve_wrist(self, target: np.ndarray, roll: float, requested: float) -> np.ndarray:
         if self.absolute_pitch:
             precise = self.wrist_candidates(target, [requested], roll)
             if len(precise):
@@ -175,19 +192,19 @@ class ArmWorld:
         )
         return solution
 
-    def swivel(self, point, yaw):
+    def swivel(self, point: Sequence[float] | np.ndarray, yaw: float) -> np.ndarray:
         point = np.array(point, dtype=float, copy=True)
         x, y = point[:2] - self.shoulder[:2]
         point[:2] = self.shoulder[:2] + [math.cos(yaw) * x - math.sin(yaw) * y, math.sin(yaw) * x + math.cos(yaw) * y]
         return point
 
-    def gravity_offset(self):
+    def gravity_offset(self) -> np.ndarray:
         bias = self.data.qfrc_bias[self.dadr]
         # Invert the simulator's documented structural sag + static PD error.
         # This uses physics state, and does not alter the shared robot model.
         return bias / STRUCT_STIFFNESS + ARM_BACKLASH_RAD * np.tanh(bias / BACKLASH_TANH_NM) + bias / KP_JOINT
 
-    def project_personal_target(self, target, roll, pitch):
+    def project_personal_target(self, target: np.ndarray, roll: float, pitch: float) -> np.ndarray:
         """Prefer the taught tilt when estimated reach requests an impossible pose.
 
         Move radial reach at most 60 mm to the nearest available solution at
@@ -209,7 +226,7 @@ class ArmWorld:
                     return candidate
         return target
 
-    def drive(self, angles, dt, initialize=False):
+    def drive(self, angles: np.ndarray, dt: float, initialize: bool = False) -> None:
         target = self.constrain(angles + self.gravity_offset())
         current = np.array([self.sim.joint_targets()[name] for name in self.names])
         command = (
@@ -218,45 +235,44 @@ class ArmWorld:
         for name, value in zip(self.names, command, strict=True):
             self.sim.set_joint_target(name, float(value))
 
-    def move(self, horizontal, vertical, reach=0, grip=1, now=None, *, wrist=None):
-        if not all(
-            isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v)
-            for v in (horizontal, vertical, reach, grip)
-        ):
-            raise ValueError("Expected finite control values")
-        if max(abs(horizontal), abs(vertical), abs(reach)) > 1.0001 or not 0 <= grip <= 1:
+    def move(
+        self,
+        horizontal: object,
+        vertical: object,
+        reach: object = 0,
+        grip: object = 1,
+        now: float | None = None,
+        *,
+        wrist: object = None,
+    ) -> None:
+        """Retarget from wire values; anything but bounded finite numbers is refused untouched."""
+        h, v, r, g = (_finite(value) for value in (horizontal, vertical, reach, grip))
+        if max(abs(h), abs(v), abs(r)) > 1.0001 or not 0 <= g <= 1:
             raise ValueError("Control values outside workspace")
-        rotation_enabled = wrist is not None
-        wrist = [0, 0, 0] if wrist is None else wrist
-        if (
-            not isinstance(wrist, (list, tuple))
-            or len(wrist) != 3
-            or not all(type(v) in (int, float) and math.isfinite(v) for v in wrist)
-            or np.any(np.array(wrist) < self.wrist_min - 1e-6)
-            or np.any(np.array(wrist) > self.wrist_max + 1e-6)
-        ):
+        angles = _angles(wrist)
+        if angles is not None and (np.any(angles < self.wrist_min - 1e-6) or np.any(angles > self.wrist_max + 1e-6)):
             raise ValueError("Expected bounded roll, pitch and yaw values")
+        rotation_enabled = angles is not None
+        angles = np.zeros(3) if angles is None else angles
         if rotation_enabled:
             if self.absolute_pitch:
-                self.pitch_target = wrist[1]
+                self.pitch_target = float(angles[1])
             else:
                 if not self.rotation_enabled:
                     self.pitch_target = float(sum(self.data.qpos[self.qadr][1:4]))
-                self.pitch_target += wrist[1] - self.wrist[1]
+                self.pitch_target += float(angles[1] - self.wrist[1])
         self.rotation_enabled = rotation_enabled
         self.demonstration = None
-        self.wrist = np.clip(wrist, self.wrist_min, self.wrist_max)
+        self.wrist = np.clip(angles, self.wrist_min, self.wrist_max)
         # Yaw is a real base swivel, not an independent sixth arm joint.
         # It moves the claw along an arc about the shoulder.
-        self.desired = self.swivel(
-            self.center + self.span * np.clip([reach, horizontal, vertical], -1, 1), self.wrist[2]
-        )
-        self.grip_target = grip
+        self.desired = self.swivel(self.center + self.span * np.clip([r, h, v], -1, 1), self.wrist[2])
+        self.grip_target = g
         self.last_input = time.monotonic() if now is None else now
         self.active = True
         self.reason = "following"
 
-    def show_pose(self, pose, now=None):
+    def show_pose(self, pose: dict[str, Any], now: float | None = None) -> None:
         """Move to a server-selected study pose through the real servos."""
         self.demonstration = np.array(pose["angles"], dtype=float)
         self.desired = np.array(pose["ee"], dtype=float)
@@ -265,7 +281,7 @@ class ArmWorld:
         self.active = True
         self.reason = "pose_study"
 
-    def hold(self, reason="paused"):
+    def hold(self, reason: str = "paused") -> None:
         self.demonstration = None
         self.active = False
         self.reason = reason
@@ -286,7 +302,7 @@ class ArmWorld:
         # still handled by the PD servos and damping in VirtualMars.
         self.drive(self.command, 0, initialize=True)
 
-    def tick(self, dt, now=None):
+    def tick(self, dt: float, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         if self.active and now - self.last_input > WATCHDOG_S:
             self.hold("input_timeout")
@@ -335,7 +351,7 @@ class ArmWorld:
             self.sim.set_joint_target("joint6", float(current + np.clip(target - current, -2.5 * dt, 2.5 * dt)))
         self.sim.step(dt)
 
-    def ground_contacts(self):
+    def ground_contacts(self) -> list[Any]:
         return [
             c
             for c in self.data.contact
@@ -343,7 +359,7 @@ class ArmWorld:
             or (c.geom2 == self.ground_geom and c.geom1 in self.finger_geoms)
         ]
 
-    def snapshot(self):
+    def snapshot(self) -> dict[str, Any]:
         angles = {
             name: float(self.data.qpos[self.model.jnt_qposadr[self.model.joint(f"robot_{name}").id]])
             for name in (*self.names, "joint6", "joint_head")

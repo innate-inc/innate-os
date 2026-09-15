@@ -5,16 +5,21 @@ import hashlib
 import json
 import math
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import mujoco
 import numpy as np
 
+if TYPE_CHECKING:
+    from engine import ArmWorld
+
 VERSION = 1
 
 
-def catalogue(world, focus="general"):
+def catalogue(world: "ArmWorld", focus: str = "general") -> list[dict[str, Any]]:
     definitions = [
         ("neutral", "A relaxed starting pose", {}),
         ("pitch_up", "Claw tipped up", {"pitch": -0.5}),
@@ -95,17 +100,17 @@ def catalogue(world, focus="general"):
 
 
 class StudyStore:
-    def __init__(self, directory, poses):
+    def __init__(self, directory: Path | str, poses: Iterable[dict[str, Any]]) -> None:
         self.directory = Path(directory)
         self.poses = {p["id"]: p for p in poses}
         self.signature = hashlib.sha256(json.dumps(poses, sort_keys=True).encode()).hexdigest()
 
-    def session_path(self, session):
+    def session_path(self, session: object) -> Path:
         if not isinstance(session, str) or str(uuid.UUID(session)) != session:
             raise ValueError("Invalid study session")
         return self.directory / session
 
-    def open(self, session=None):
+    def open(self, session: str | None = None) -> dict[str, Any]:
         session = session or str(uuid.uuid4())
         directory = self.session_path(session)
         path = directory / "manifest.json"
@@ -128,12 +133,12 @@ class StudyStore:
         return manifest
 
     @staticmethod
-    def write_manifest(directory, manifest):
+    def write_manifest(directory: Path, manifest: dict[str, Any]) -> None:
         temporary = directory / "manifest.tmp"
         temporary.write_text(json.dumps(manifest, indent=2, allow_nan=False))
         temporary.replace(directory / "manifest.json")
 
-    def save(self, message):
+    def save(self, message: dict[str, Any]) -> dict[str, Any]:
         manifest = self.open(message.get("session"))
         directory = self.session_path(manifest["session"])
         pose_id = message.get("pose_id")
