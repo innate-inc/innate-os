@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+import base64
 import inspect
 import json
 import os
@@ -17,6 +18,7 @@ from types import GeneratorType, UnionType  # stdlib `types`, not this module
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, TypeVar, Union, get_args, get_origin, overload
 
 from rclpy.node import Node
+from rclpy.publisher import Publisher
 from std_msgs.msg import String
 from typing_extensions import Self
 
@@ -37,7 +39,9 @@ _T_resource = TypeVar("_T_resource")
 # tuples still normalize at runtime but are deprecated.
 SkillReturn = Union[None, str, "SkillOutput"]
 
-TTS_TOPIC = "/brain/tts"
+# Everything a skill utters — lines, sound effects, ready clips — rides this one topic so it plays in the
+# order the skill spoke it; two topics have no order between them. /brain/tts stays plain text for others.
+TTS_STYLED_TOPIC = "/brain/tts/styled"  # JSON {"text", "speed", "volume"} | {"sound", "seconds"} | {"pcm", "label"}
 TTS_STATUS_TOPIC = "/tts/is_playing"
 
 
@@ -751,7 +755,7 @@ class Skill(ABC):
         self._cancel_latch()
         # injected by the server before each run (see invoker.py)
         self.skills: SkillInvoker | None = None
-        self._say_publisher = None
+        self._say_publisher: Publisher | None = None
         self._overlay: Overlay | None = None
         self._overlay_publisher = None
         self._tts_status_sub = None
@@ -984,26 +988,54 @@ class Skill(ABC):
             self._storage = SkillStorage(_storage_dir() / f"{self.name}.json")
         return self._storage
 
-    def say(self, text: str, wait: bool = False) -> None:
+    def say(self, text: str, wait: bool = False, *, speed: float | None = None, volume: float | None = None) -> None:
         """Speak through the robot's voice; ``wait=True`` blocks until
-        playback ends (best effort). No-op if speech isn't available."""
+        playback ends (best effort). ``speed`` (0.6-1.5) and ``volume``
+        (0.5-2.0) style the read. No-op if speech isn't available."""
         if not text or self.node is None:
             return
-        if self._say_publisher is None:
-            self._say_publisher = self.node.create_publisher(String, TTS_TOPIC, 10)
+        self._utter(self.node, json.dumps({"text": text, "speed": speed, "volume": volume}), text, wait)
+
+    def play(self, sound: str, wait: bool = False, *, seconds: float | None = None) -> None:
+        """Play a sound effect described in words ("a small dog barking twice",
+        "a short victory fanfare") through the robot's speaker; ``wait=True``
+        blocks until it has played. ``seconds`` (0.5-30) sets the clip's length;
+        unset, the generator picks one, usually a few seconds. Generated on first
+        use and kept, so the same words give the same sound. No-op if speech isn't
+        available."""
+        if not sound or self.node is None:
+            return
+        payload = {"sound": sound} if seconds is None else {"sound": sound, "seconds": seconds}
+        self._utter(self.node, json.dumps(payload), sound, wait, clip_s=seconds or 0.0)
+
+    def play_clip(self, pcm: bytes, label: str = "", wait: bool = False) -> None:
+        """Play a ready clip (16-bit mono PCM at 16 kHz) through the robot's speaker,
+        queued with its speech; a ``label`` shows it in the transcript. No-op if
+        speech isn't available."""
+        if not pcm or self.node is None:
+            return
+        payload = json.dumps({"pcm": base64.b64encode(pcm).decode("ascii"), "label": label})
+        self._utter(self.node, payload, label or "clip", wait)
+
+    def _utter(self, node: Node, payload: str, text: str, wait: bool, clip_s: float = 0.0) -> None:
+        publisher = self._tts_publisher(node)
+        if wait and self._tts_status_sub is None:
+            self._tts_status_sub = node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
+        publisher.publish(String(data=payload))
+        if wait:
+            self._wait_for_speech_end(text, clip_s)
+
+    def _tts_publisher(self, node: Node) -> Publisher:
+        publisher = vars(self).get("_say_publisher")  # some skills skip super().__init__()
+        if publisher is None:
+            publisher = self._say_publisher = node.create_publisher(String, TTS_STYLED_TOPIC, 10)
             # fresh publisher every run — wait briefly for the TTS engine to
             # match, or the run's first utterance is dropped. A cancel skips
             # the wait: dropped speech beats a delayed Stop.
             deadline = time.time() + 1.0
-            while self._say_publisher.get_subscription_count() == 0 and time.time() < deadline:
-                if self.cancelled:
-                    break
+            while publisher.get_subscription_count() == 0 and time.time() < deadline and not self.cancelled:
                 time.sleep(0.02)
-        if wait and self._tts_status_sub is None:
-            self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
-        self._say_publisher.publish(String(data=text))
-        if wait:
-            self._wait_for_speech_end(text)
+        return publisher
 
     @property
     def overlay(self) -> Overlay:
@@ -1024,7 +1056,7 @@ class Skill(ABC):
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data
 
-    def _wait_for_speech_end(self, text: str) -> None:
+    def _wait_for_speech_end(self, text: str, clip_s: float = 0.0) -> None:
         # A cancel abandons the wait (best effort, like the rest of say():
         # no raise — teardown paths speak after the latch is set). Without
         # the check a Stop would ride out the full budget below.
@@ -1034,8 +1066,8 @@ class Skill(ABC):
             if self.cancelled or time.monotonic() > deadline:
                 return
             time.sleep(0.05)
-        # finish budget scales with utterance length
-        deadline = time.monotonic() + max(30.0, 0.1 * len(text))
+        # finish budget scales with utterance length, plus a sized clip's own length
+        deadline = time.monotonic() + max(30.0, 0.1 * len(text)) + clip_s
         while self._tts_playing == "true" and time.monotonic() < deadline:
             if self.cancelled:
                 return
