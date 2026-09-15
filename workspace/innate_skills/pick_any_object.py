@@ -16,6 +16,7 @@ from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, bas
 from innate import (
     Head,
     JointStates,
+    Llm,
     MainImage,
     Manipulation,
     Mobility,
@@ -24,8 +25,6 @@ from innate import (
     SkillReturn,
     Waypoint,
     WristImage,
-    llm,
-    resource,
     vision,
 )
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
@@ -232,9 +231,8 @@ class PickAnyObject(Skill):
 
     _p = PARAMS
 
-    @resource
-    def _model(self):
-        return llm.make_client()
+    # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
+    llm: Llm = Llm("google:gemini-3.5-flash")
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
@@ -302,7 +300,6 @@ class PickAnyObject(Skill):
         self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
-            self._model,
             f"Find '{prompt}' lying on the floor in this image. Match precisely — "
             "not paper/packaging when asked for clothing, and NOT anything held "
             "by the robot arm. Return ONLY a JSON list of ALL matches (every "
@@ -361,8 +358,7 @@ class PickAnyObject(Skill):
         self.sleep(self._p["wrist_settle_s"])
         img = self.wrist_image
         text = (
-            llm.ask_image(
-                self._model,
+            self.llm.ask(
                 img,
                 f"Wrist camera on a robot gripper, looking down at the floor. "
                 f"Find '{prompt}' on the floor. Ignore the gripper fingers "
@@ -822,8 +818,7 @@ class PickAnyObject(Skill):
                 "fingers (mirrored) — the object may be visible held in the fingers there."
             )
         floor_text = (
-            llm.ask_image(
-                self._model,
+            self.llm.ask(
                 images,
                 f"Robot just tried to pick up '{prompt}' and backed up a step. "
                 f"{' '.join(labels)} "
@@ -872,8 +867,8 @@ class PickAnyObject(Skill):
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
-        if self._model is None:
-            self.fail("No Gemini access: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
+        if not self.llm.available:
+            self.fail(f"No way to reach {self.llm.model}: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
 
         # Per-run reset: don't carry the last run's object or grip rating.
         self._grip_strength = None

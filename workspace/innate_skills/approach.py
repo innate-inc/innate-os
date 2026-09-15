@@ -11,14 +11,12 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
-from innate import llm, vision
+from innate import vision
 from innate.exceptions import SkillFailed
 from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 if TYPE_CHECKING:
-    from innate_llm import Provider
-
-    from innate import MainImage, Mobility, Odometry, Overlay
+    from innate import Llm, MainImage, Mobility, Odometry, Overlay
 
 Pixel = tuple[float, float]
 FloorXY = tuple[float, float]
@@ -35,6 +33,7 @@ class ApproachHost(Protocol):
     """What a skill offers to host a FloorApproach: the feeds it declares and
     the cancel-aware waits only a Skill can provide."""
 
+    llm: "Llm"
     mobility: "Mobility"
     main_image: "MainImage | None"
     odom: "Odometry | None"
@@ -103,15 +102,15 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, model: "Provider | None", question: str, settle_s: float):
-    """Settle the base, then put the current head frame to the model.
+def ask_head(host: ApproachHost, question: str, settle_s: float):
+    """Settle the base, then put the current head frame to the host's model.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
     host.sleep(settle_s)
     img = host.main_image
     if not img:
         return None, None
-    return llm.ask_image(model, img, question, logger=host.logger), img
+    return host.llm.ask(img, question, logger=host.logger), img
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":
