@@ -83,12 +83,12 @@ class Wire:
     gemini: GeminiRest | None = None
 
 
-# How servers word a request that outgrew their window or image cap — vLLM/NIM,
-# OpenAI ("maximum context length"), Google's compat layer ("input token count
-# ... exceeds the maximum number of input tokens") and any 413.
+# How servers word a request that outgrew their window, image cap or body limit —
+# vLLM/NIM, OpenAI ("maximum context length"), Google ("input token count ... exceeds
+# the maximum number of input tokens", "payload size exceeds the limit") and any 413.
 _TOO_LARGE = re.compile(
     r"context (?:length|window)|maximum number of (?:input )?tokens|token count|too many (?:tokens|images)"
-    r"|at most \d+ image|payload too large|request entity too large",
+    r"|at most \d+ image|payload (?:size exceeds|too large)|request entity too large",
     re.IGNORECASE,
 )
 
@@ -171,15 +171,11 @@ def direct_chat(endpoint: Endpoint) -> ChatTransport:
     def stream(body: dict) -> Chunks:
         with client.stream("POST", url, json=body) as resp:
             if resp.status_code != 200:
-                resp.read()
-                raise ChatRejected("chat direct", resp.status_code, resp.text)
+                raise _rejected("chat direct", resp)
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        resp = client.post(url, json=body, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout)
-        if resp.status_code != 200:
-            raise ChatRejected("chat direct", resp.status_code, resp.text)
-        return resp.json() if resp.content else {}
+        return _reply("chat direct", client.post(url, json=body, timeout=_deadline(timeout)))
 
     return ChatTransport(stream=stream, complete=complete)
 
@@ -190,16 +186,12 @@ def proxy_chat(proxy: ProxyClient) -> ChatTransport:
     def stream(body: dict) -> Chunks:
         with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=STREAM_TIMEOUT_SECS) as resp:
             if resp.status_code != 200:
-                raise ChatRejected("chat via proxy", resp.status_code, repr(resp.read()[:200]))
+                raise _rejected("chat via proxy", resp)
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        deadline = COMPLETE_TIMEOUT_SECS if timeout is None else timeout
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=deadline) as resp:
-            payload = resp.read()
-            if resp.status_code != 200:
-                raise ChatRejected("chat via proxy", resp.status_code, repr(payload[:200]))
-            return json.loads(payload) if payload else {}
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=_deadline(timeout)) as resp:
+            return _reply("chat via proxy", resp)
 
     return ChatTransport(stream=stream, complete=complete)
 
@@ -210,10 +202,7 @@ def direct_rest(api_key: str) -> GeminiRest:
     client = httpx.Client(headers={"x-goog-api-key": api_key}, timeout=COMPLETE_TIMEOUT_SECS)
 
     def request(method: str, path: str, body: dict | None = None) -> dict:
-        resp = client.request(method, GOOGLE_API_ROOT + path, json=body)
-        if resp.status_code != 200:
-            raise ChatRejected("gemini direct", resp.status_code, resp.text)
-        return resp.json() if resp.content else {}
+        return _reply("gemini direct", client.request(method, GOOGLE_API_ROOT + path, json=body))
 
     return GeminiRest(post=lambda path, body: request("POST", path, body), delete=lambda path: request("DELETE", path))
 
@@ -223,10 +212,7 @@ def proxy_rest(proxy: ProxyClient) -> GeminiRest:
 
     def request(method: str, path: str, body: dict | None = None) -> dict:
         with proxy.request_stream(PROXY_SERVICE, path, method=method, json=body, timeout=COMPLETE_TIMEOUT_SECS) as resp:
-            payload = resp.read()
-            if resp.status_code != 200:
-                raise ChatRejected("gemini via proxy", resp.status_code, repr(payload[:200]))
-            return json.loads(payload) if payload else {}
+            return _reply("gemini via proxy", resp)
 
     return GeminiRest(post=lambda path, body: request("POST", path, body), delete=lambda path: request("DELETE", path))
 
@@ -246,6 +232,23 @@ def parse_extra_body(raw: str, logger: RcutilsLogger) -> dict:
     return parsed
 
 
+def _deadline(timeout: float | None) -> float:
+    return COMPLETE_TIMEOUT_SECS if timeout is None else timeout
+
+
+def _reply(where: str, resp: httpx.Response) -> dict:
+    """A blocking call's body as JSON, or :class:`ChatRejected` on a non-200."""
+    if resp.status_code != 200:
+        raise _rejected(where, resp)
+    payload = resp.read()
+    return json.loads(payload) if payload else {}
+
+
+def _rejected(where: str, resp: httpx.Response) -> ChatRejected:
+    # The whole body, not a prefix: too_large is judged on the server's wording.
+    return ChatRejected(where, resp.status_code, resp.read().decode(errors="replace"))
+
+
 def _sse_chunks(lines: Iterable[str]) -> Chunks:
     for line in lines:
         if not line.startswith("data: "):
@@ -253,4 +256,5 @@ def _sse_chunks(lines: Iterable[str]) -> Chunks:
         payload = line[len("data: ") :].strip()
         if payload == "[DONE]":
             return
-        yield json.loads(payload)
+        if payload:  # a bare keepalive line carries nothing to parse
+            yield json.loads(payload)

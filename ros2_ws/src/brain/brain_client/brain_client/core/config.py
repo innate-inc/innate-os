@@ -98,25 +98,35 @@ class BrainConfig:
             values["llm_model"] = DEFAULT_MODEL
         if values["llm_thinking"] in _ABSENT_VALUES["llm_thinking"]:
             values["llm_thinking"] = "" if values["llm_base_url"].strip() else GEMINI_THINKING
-        _resolve_memory_wire(values)
+        warning = _resolve_memory_wire(values)
+        if warning:
+            node.get_logger().warn(warning)
         return cls(**values)
 
 
-def _resolve_memory_wire(values: dict) -> None:
+def _resolve_memory_wire(values: dict) -> str | None:
     """Fill the memory search's blank knobs: on the brain's wire they are the
-    brain's; on a route of their own they are that route's defaults, since the
-    brain's model, thinking level and extras belong to another server."""
+    brain's; on the gemini route they are Gemini's; on a server of the operator's
+    own the thinking level and extras are that server's defaults, and the model —
+    which no default can name — is the brain's, returned as a warning to log."""
     route = values["memory_llm_base_url"].strip()
     if not route:
         for knob in ("model", "thinking", "extra_body"):
             if values[f"memory_llm_{knob}"] in _ABSENT_VALUES[f"memory_llm_{knob}"]:
                 values[f"memory_llm_{knob}"] = values[f"llm_{knob}"]
-        return
+        return None
     gemini = route == GEMINI_ROUTE
-    if values["memory_llm_model"] in _ABSENT_VALUES["memory_llm_model"]:
-        values["memory_llm_model"] = DEFAULT_MODEL if gemini else values["llm_model"]
     if values["memory_llm_thinking"] in _ABSENT_VALUES["memory_llm_thinking"]:
         values["memory_llm_thinking"] = GEMINI_THINKING if gemini else ""
+    if values["memory_llm_model"] not in _ABSENT_VALUES["memory_llm_model"]:
+        return None
+    values["memory_llm_model"] = DEFAULT_MODEL if gemini else values["llm_model"]
+    if gemini:
+        return None
+    return (
+        f"[Brain] memory_llm_model is blank for memory_llm_base_url={route!r} — asking that server for "
+        f"the brain's model {values['llm_model']!r}; set memory_llm_model if it names its model differently"
+    )
 
 
 UNSET = "<unset>"

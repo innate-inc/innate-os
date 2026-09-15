@@ -103,7 +103,7 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, proxy: "ChatTransport | None", question: str, settle_s: float):
+def ask_head(host: ApproachHost, client: "ChatTransport | None", question: str, settle_s: float):
     """Settle the base, then put the current head frame to Gemini.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
@@ -111,7 +111,7 @@ def ask_head(host: ApproachHost, proxy: "ChatTransport | None", question: str, s
     img = host.main_image
     if not img:
         return None, None
-    return gemlib.ask_image(proxy, img, question, logger=host.logger), img
+    return gemlib.ask_image(client, img, question, logger=host.logger), img
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":

@@ -239,7 +239,8 @@
 #                                   # own endpoint and knobs; "gemini" = Gemini through the proxy or
 #                                   # GEMINI_API_KEY (with its context cache) while the brain runs
 #                                   # elsewhere; a /v1 root = a server of its own, key in MEMORY_LLM_API_KEY
-#     memory_llm_model: ""          # "" = the brain's model on its endpoint, gemini-3.6-flash on "gemini"
+#     memory_llm_model: ""          # "" = the brain's model on its endpoint, gemini-3.6-flash on "gemini";
+#                                   # a /v1 root of its own has no default — set it, or the brain's is tried
 #     memory_llm_thinking: ""       # "" = the brain's on its endpoint, else that route's default; any level
 #                                   # sends reasoning_effort: low (a pick among frames gains nothing from more)
 #     memory_llm_extra_body: ""     # "" = the brain's extras on its endpoint, none elsewhere

@@ -155,7 +155,7 @@ export const CLEAR_MEMORIES_SERVICE = "/brain/clear_memories";
 export const FORGET_MEMORY_SERVICE = "/brain/forget_memory";
 // One latched message per finished memory search (std_msgs/String JSON:
 // {query, found, id?, x?, y?, theta?, seen_stamp?, explanation?, error?,
-// latency_sec?, stamp}). Latched so a page opened just after the
+// latency_sec?, cached?, stamp}). Latched so a page opened just after the
 // search still sees it; clients gate the animation on the payload's stamp.
 export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 
