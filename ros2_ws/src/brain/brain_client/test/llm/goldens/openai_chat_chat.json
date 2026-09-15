@@ -33,7 +33,7 @@
           "type": "function",
           "function": {
             "name": "wave",
-            "arguments": "{\"times\":2}"
+            "arguments": "{\"times\": 2}"
           }
         }
       ]

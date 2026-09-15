@@ -4,8 +4,9 @@
 
 Everything here is a frozen value. A conversation is a tuple of
 :class:`Message` the caller replaces, never edits; a vendor's private state
-(thought signatures, encrypted reasoning) rides a message as ``native`` and
-is replayed only to the wire that produced it.
+(thought signatures, signed thinking blocks, encrypted reasoning) rides the
+part it belongs to as ``native`` and is replayed only to the wire that
+produced it — so dropping a part drops its state on every wire alike.
 """
 
 from __future__ import annotations
@@ -56,9 +57,14 @@ class Finish(StrEnum):
     REFUSAL = "refusal"
 
 
+Native = tuple[Wire, Json]
+"""A vendor's own encoding of one part — replayed verbatim on its wire, ignored on every other."""
+
+
 @dataclass(frozen=True)
 class Text:
     text: str
+    native: Native | None = None
 
 
 @dataclass(frozen=True)
@@ -73,9 +79,10 @@ class Audio:
 
 @dataclass(frozen=True)
 class Thought:
-    """Display-only prose: never re-sent to a vendor (signatures ride ``Message.native``)."""
+    """Display-only prose; ``native`` is the signed block or reasoning item the wire wants back, if any."""
 
     text: str
+    native: Native | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,7 @@ class ToolCall:
     id: str
     name: str
     args: Json
+    native: Native | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +108,6 @@ class Message:
     role: Role
     parts: tuple[Part, ...]
     pin: bool = False  # "cache up to here": a hint adapters translate or ignore
-    native: tuple[Wire, Json] | None = None  # the vendor's own encoding of this turn, replayed on its wire only
 
     def texts(self) -> list[str]:
         return [part.text for part in self.parts if isinstance(part, Text)]

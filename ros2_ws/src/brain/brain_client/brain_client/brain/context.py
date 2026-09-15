@@ -11,6 +11,13 @@ oldest turns evicted — so requests stay small while consecutive requests keep
 the shared prefix every vendor's prompt cache needs (see :meth:`_prune`).
 Every edit replaces the history tuple; nothing is mutated in place.
 
+Claude signs each thinking block against everything before it — system
+prompt, tool set, earlier turns — and rejects the block once that prefix
+changes (Gemini's signatures and OpenAI's encrypted reasoning are not bound
+this way). So any edit — a masked frame, an evicted turn, a system prompt or
+tool list that differs from the last request's — strips the stored thoughts
+first; dropping them is always accepted, replaying them stale is a 400.
+
 Threading contract: :meth:`generate` is the only blocking network call and
 only *reads* the history, so the agent awaits it on a worker thread
 (``asyncio.to_thread``). All history replacement (:meth:`absorb`,
@@ -42,10 +49,21 @@ from brain_client.llm import (
     ToolCall,
     ToolResult,
 )
-from brain_client.llm.policy import History, evict_to, image_turns, mask_latest_only, pin_prefix, window_images
+from brain_client.llm.policy import (
+    History,
+    evict_to,
+    image_turns,
+    mask_latest_only,
+    pin_prefix,
+    strip_thoughts,
+    window_images,
+)
 
 if TYPE_CHECKING:
     from brain_client.llm.types import Part
+
+Prefix = tuple[str, tuple[Tool, ...]]
+"""What a request puts before the history: the system prompt and the tool set."""
 
 
 @dataclass
@@ -80,6 +98,10 @@ class ChatContext:
         # The one history turn still carrying latest-only frames (wrist camera),
         # as (message, part indexes) — absorbing a newer set masks these.
         self._latest_only: tuple[Message, tuple[int, ...]] | None = None
+        # The prefix the committed history's thoughts were signed against, and
+        # the one the request in flight was built with (see the module docstring).
+        self._prefix: Prefix | None = None
+        self._sent: Prefix | None = None
         # Observability tap: called with the request as the monitor renders it
         # (see :func:`trace_body`) just before it goes on the wire, from
         # generate's thread.
@@ -91,6 +113,7 @@ class ChatContext:
     def clear(self) -> None:
         self._history = ()
         self._latest_only = None
+        self._prefix = self._sent = None
         self.last_usage = {}
 
     @property
@@ -133,9 +156,16 @@ class ChatContext:
         runs on the loop thread strictly between generate calls, by which point
         an abandoned turn's orphaned request has already been sent.
         """
+        prefix: Prefix = (system, tuple(tools))
+        # The one write on this thread, made before the blocking call: turns run
+        # one at a time, so an abandoned turn's orphan can never record after a newer one.
+        self._sent = prefix
         history = self._history
-        if latest_only_images and self._latest_only is not None:
-            history = mask_latest_only(history, *self._latest_only)
+        stale_wrist = self._latest_only if latest_only_images else None
+        if stale_wrist is not None:
+            history = mask_latest_only(history, *stale_wrist)
+        if stale_wrist is not None or prefix != self._prefix:
+            history = strip_thoughts(history)
         request = pin_prefix(
             Request(
                 system=system,
@@ -163,8 +193,8 @@ class ChatContext:
     def absorb(self, message: Message, reply: Reply, *, latest_only_images: Sequence[int] | None = None) -> Decision:
         """Commit the exchange to history and distill the model's Decision.
 
-        The model turn is stored whole — its ``native`` carries the signatures
-        vendors demand back on the next request (Gemini 3, Claude, OpenAI).
+        The model turn is stored whole — its parts carry the signatures vendors
+        demand back on the next request (Gemini 3, Claude, OpenAI).
 
         ``latest_only_images`` names positions in this message's image list
         (order given to :meth:`user_message`) that must only ever appear in the
@@ -175,9 +205,13 @@ class ChatContext:
         decision = decision_from(reply.message)
         self.last_usage = {"prompt": reply.usage.prompt, "cached": reply.usage.cached, "output": reply.usage.output}
         history: History = (*self._history, message)
+        stale_wrist = self._latest_only if latest_only_images else None
+        if stale_wrist is not None:
+            history = mask_latest_only(history, *stale_wrist)
+        if stale_wrist is not None or self._sent != self._prefix:
+            history = strip_thoughts(history)  # what the request replayed is what the history keeps
+        self._prefix = self._sent
         if latest_only_images:
-            if self._latest_only is not None:
-                history = mask_latest_only(history, *self._latest_only)
             images = message.image_indexes()
             self._latest_only = (message, tuple(images[i] for i in latest_only_images if i < len(images)))
         self._history = self._prune((*history, reply.message))
@@ -214,11 +248,12 @@ class ChatContext:
         # the arm feed is stale.
         if self._latest_only is not None and not any(m is self._latest_only[0] for m in history):
             self._latest_only = None
-        return history
+        return strip_thoughts(history)
 
 
 def _has_content(message: Message) -> bool:
-    return any(isinstance(p, (ToolCall, Thought)) or (isinstance(p, Text) and p.text) for p in message.parts)
+    """Speech or a call — a thought alone is not a reply, and replaying one dangling is a 400 on OpenAI."""
+    return any(isinstance(p, ToolCall) or (isinstance(p, Text) and p.text) for p in message.parts)
 
 
 def decision_from(message: Message) -> Decision:

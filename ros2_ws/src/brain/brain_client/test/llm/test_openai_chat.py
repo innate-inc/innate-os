@@ -43,12 +43,13 @@ TOOLS = (
     ),
     Tool("wait", "Do nothing.", {"type": "object", "properties": {}}),
 )
-WIRE_CALL = {"id": "call_1", "type": "function", "function": {"name": "wave", "arguments": '{"times":2}'}}
-NATIVE = {"role": "assistant", "content": "On it.", "tool_calls": [WIRE_CALL]}
-TURN = (Thought("planning"), Text("On it."), ToolCall("call_1", "wave", {"times": 2}))
+WIRE_CALL = {"id": "call_1", "type": "function", "function": {"name": "wave", "arguments": '{"times": 2}'}}
+ENCODED = {"role": "assistant", "content": "On it.", "tool_calls": [WIRE_CALL]}
+FOREIGN = (Wire.OPENAI_RESPONSES, {"id": "rs_1"})
+TURN = (Thought("planning", FOREIGN), Text("On it.", FOREIGN), ToolCall("call_1", "wave", {"times": 2}, FOREIGN))
 MESSAGES = (
     Message(Role.USER, (Text("Look at this."), Image(JPEG)), pin=True),
-    Message(Role.ASSISTANT, TURN, native=(Wire.OPENAI_CHAT, NATIVE)),
+    Message(Role.ASSISTANT, TURN),
     Message(Role.TOOL, (ToolResult("call_1", "wave", "started"),), pin=True),
     Message(Role.USER, (Text("Now what?"), Image(JPEG)), pin=True),
 )
@@ -122,18 +123,9 @@ def test_audio_body_matches_golden():
     assert ADAPTER.body(AUDIO, MODEL) == golden("openai_chat_audio")
 
 
-def test_native_turn_is_replayed_verbatim():
-    assert ADAPTER.body(CHAT, MODEL)["messages"][2] == NATIVE
-
-
-def test_foreign_native_is_encoded_from_parts():
-    foreign = Message(Role.ASSISTANT, TURN, native=(Wire.OPENAI_RESPONSES, {"items": []}))
-    messages = ADAPTER.body(Request(system="", messages=(MESSAGES[0], foreign)), MODEL)["messages"]
-    assert messages[1] == {
-        "role": "assistant",
-        "content": "On it.",
-        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "wave", "arguments": '{"times": 2}'}}],
-    }
+def test_assistant_turn_is_encoded_from_parts_whatever_their_native():
+    # This wire carries no per-part state: any native, its own or foreign, is ignored.
+    assert ADAPTER.body(CHAT, MODEL)["messages"][2] == ENCODED
 
 
 def test_reasoning_effort_is_dropped_for_gpt_with_tools_and_kept_without():
@@ -149,7 +141,6 @@ def test_stream_yields_deltas_then_one_reply():
     assert isinstance(reply, Reply) and len(events) == 3
     assert reply.message.role == Role.ASSISTANT
     assert reply.message.parts == (Text("On it."), ToolCall("call_1", "wave", {"times": 2}))
-    assert reply.message.native == (Wire.OPENAI_CHAT, NATIVE)
     assert reply.usage == Usage(prompt=100, cached=40, output=20, thinking=8)
     assert reply.finish == Finish.TOOL_CALLS
 
@@ -162,7 +153,7 @@ def test_length_finish():
 def test_content_filter_is_a_refusal_finish():
     reply = list(ADAPTER.events(iter([chunk({}, finish_reason="content_filter")])))[-1]
     assert isinstance(reply, Reply) and reply.finish == Finish.REFUSAL
-    assert reply.message.native == (Wire.OPENAI_CHAT, {"role": "assistant", "content": None})
+    assert reply.message.parts == ()
 
 
 def test_tool_call_without_tool_calls_finish_reason_still_finishes_tool_calls():

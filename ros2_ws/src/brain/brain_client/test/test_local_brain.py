@@ -349,6 +349,24 @@ def test_absorb_keeps_thought_parts_for_replay():
     assert decision.thoughts == "planning..." and decision.speech == "Hello!"
 
 
+def test_thoughts_are_stripped_once_the_prefix_they_were_signed_against_changes():
+    # Claude signs thinking against the system prompt, tool set and earlier
+    # turns and 400s on a replay after any of them changed — a skill starting
+    # swaps both. Same prefix: replayed; new prefix: stripped, in the request
+    # and durably, so the history matches what the wire accepted.
+    thoughtful = Replay(script=lambda _: [reply(Thought("hmm"), Text("ok"))])
+    context = make_context(thoughtful)
+    context.absorb(user_turn("one", False), context.generate(user_turn("one", False), [], "S"))
+    context.absorb(user_turn("two", False), context.generate(user_turn("two", False), [], "S"))
+    assert [type(p) for p in thoughtful.last.messages[1].parts] == [Thought, Text]
+    assert [type(p) for p in context.history[1].parts] == [Thought, Text]
+
+    context.absorb(user_turn("three", False), context.generate(user_turn("three", False), [], "S + skill"))
+    assert [type(p) for p in thoughtful.last.messages[1].parts] == [Text]
+    assert [type(p) for p in context.history[1].parts] == [Text]
+    assert [type(p) for p in context.history[-1].parts] == [Thought, Text]  # the new turn's own signature stands
+
+
 def test_clear_empties_history():
     context = make_context()
     context.absorb(user_turn("hi", False), reply(Text("hello")))

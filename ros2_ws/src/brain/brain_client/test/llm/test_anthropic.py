@@ -43,18 +43,19 @@ TOOLS = (
     ),
     Tool("wait", "Do nothing.", {"type": "object", "properties": {}}),
 )
-NATIVE = {
-    "role": "assistant",
-    "content": [
-        {"type": "thinking", "thinking": "planning", "signature": "sig123"},
-        {"type": "text", "text": "On it."},
-        {"type": "tool_use", "id": "call_1", "name": "wave", "input": {"times": 2}},
-    ],
-}
-TURN = (Thought("planning"), Text("On it."), ToolCall("call_1", "wave", {"times": 2}))
+THINKING_BLOCK = {"type": "thinking", "thinking": "planning", "signature": "sig123"}
+TEXT_BLOCK = {"type": "text", "text": "On it."}
+CALL_BLOCK = {"type": "tool_use", "id": "call_1", "name": "wave", "input": {"times": 2}}
+NATIVE = {"role": "assistant", "content": [THINKING_BLOCK, TEXT_BLOCK, CALL_BLOCK]}
+TURN = (
+    Thought("planning", native=(Wire.ANTHROPIC, THINKING_BLOCK)),
+    Text("On it.", native=(Wire.ANTHROPIC, TEXT_BLOCK)),
+    ToolCall("call_1", "wave", {"times": 2}, native=(Wire.ANTHROPIC, CALL_BLOCK)),
+)
+FOREIGN = (Wire.OPENAI_RESPONSES, {"id": "rs_1"})
 MESSAGES = (
     Message(Role.USER, (Text("Look at this."), Image(JPEG)), pin=True),
-    Message(Role.ASSISTANT, TURN, native=(Wire.ANTHROPIC, NATIVE)),
+    Message(Role.ASSISTANT, TURN),
     Message(Role.TOOL, (ToolResult("call_1", "wave", "started"),), pin=True),
     Message(Role.USER, (Text("Now what?"), Image(JPEG)), pin=True),
 )
@@ -124,7 +125,8 @@ def test_native_turn_is_replayed_verbatim() -> None:
 
 
 def test_foreign_native_is_encoded_from_parts() -> None:
-    foreign = Message(Role.ASSISTANT, TURN, native=(Wire.OPENAI_RESPONSES, {"output": [{"id": "rs_1"}]}))
+    parts = (Thought("planning", FOREIGN), Text("On it.", FOREIGN), ToolCall("call_1", "wave", {"times": 2}, FOREIGN))
+    foreign = Message(Role.ASSISTANT, parts)
     body = ADAPTER.body(Request(system="", messages=(MESSAGES[0], foreign)), MODEL)
     assert body["messages"][1] == {
         "role": "assistant",
@@ -167,17 +169,18 @@ def test_stream_yields_deltas_then_one_reply() -> None:
     assert events[:3] == [ThoughtDelta("Wave twice."), TextDelta("On "), TextDelta("it.")]
     reply = events[3]
     assert isinstance(reply, Reply)
-    assert reply.message.parts == (Thought("Wave twice."), Text("On it."), ToolCall("toolu_9", "wave", {"times": 2}))
-    assert reply.message.native == (
-        Wire.ANTHROPIC,
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "Wave twice.", "signature": "sigABC"},
-                {"type": "text", "text": "On it."},
-                {"type": "tool_use", "id": "toolu_9", "name": "wave", "input": {"times": 2}},
-            ],
-        },
+    assert reply.message.parts == (
+        Thought(
+            "Wave twice.",
+            native=(Wire.ANTHROPIC, {"type": "thinking", "thinking": "Wave twice.", "signature": "sigABC"}),
+        ),
+        Text("On it.", native=(Wire.ANTHROPIC, {"type": "text", "text": "On it."})),
+        ToolCall(
+            "toolu_9",
+            "wave",
+            {"times": 2},
+            native=(Wire.ANTHROPIC, {"type": "tool_use", "id": "toolu_9", "name": "wave", "input": {"times": 2}}),
+        ),
     )
     assert reply.usage == Usage(prompt=3600, cached=3400, output=57)  # prompt counts the cache, like every wire
     assert reply.finish == Finish.TOOL_CALLS
@@ -188,8 +191,9 @@ def test_unsigned_thinking_is_dropped_from_the_replayed_turn() -> None:
     cut = [event for event in TRANSCRIPT if event.get("delta", {}).get("type") != "signature_delta"]
     reply = stream(*cut)[-1]
     assert isinstance(reply, Reply)
-    assert [block["type"] for block in reply.message.native[1]["content"]] == ["text", "tool_use"]
-    assert reply.message.parts[0] == Text("On it.")
+    assert [type(part) for part in reply.message.parts] == [Text, ToolCall]
+    replayed = ADAPTER.body(Request(system="", messages=(MESSAGES[0], reply.message)), MODEL)["messages"][1]
+    assert [block["type"] for block in replayed["content"]] == ["text", "tool_use"]
 
 
 def test_max_tokens_finishes_as_length() -> None:

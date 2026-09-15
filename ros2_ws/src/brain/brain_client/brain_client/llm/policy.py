@@ -45,7 +45,11 @@ def mask_latest_only(messages: History, turn: Message, indexes: Sequence[int]) -
 
 
 def strip_thoughts(messages: History) -> History:
-    """Drop display-only thought prose; ``native`` (signatures) is untouched."""
+    """Drop every Thought — and with it the signed block or reasoning item it carried as ``native``.
+
+    Always accepted by every wire (Gemini keeps its signatures on the parts that
+    follow), which is what makes it the edit that keeps a rebuilt prefix valid.
+    """
     return tuple(
         replace(m, parts=tuple(p for p in m.parts if not isinstance(p, Thought)))
         if any(isinstance(p, Thought) for p in m.parts)

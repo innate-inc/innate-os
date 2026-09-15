@@ -4,8 +4,9 @@
 
 vLLM, Ollama and NIM all answer here, so this adapter sticks to the fields
 every one of them accepts and never to OpenAI's newest spellings. There is no
-signed reasoning to carry: an assistant turn replays as the plain message dict
-the wire itself defines.
+signed reasoning to carry, so no part gets a ``native`` here: an assistant
+turn is always re-encoded from its parts as the plain message dict the wire
+itself defines.
 """
 
 from __future__ import annotations
@@ -135,8 +136,6 @@ class OpenAIChatAdapter:
                 for part in message.parts
                 if isinstance(part, ToolResult)
             ]
-        if message.native is not None and message.native[0] == self.wire:
-            return [message.native[1]]
         return [_assistant_message(message)]
 
 
@@ -158,7 +157,7 @@ def _user_content(message: Message) -> list[Json]:
 
 
 def _assistant_message(message: Message) -> Json:
-    """A turn we did not produce: its text and its calls, never its thought prose."""
+    """The turn's text and calls, never its thought prose."""
     assistant: Json = {"role": "assistant", "content": message.text() or None}
     calls = message.calls()
     if calls:
@@ -189,11 +188,7 @@ def _reply(text: list[str], calls: dict[int, Json], usage: Usage, reason: str) -
     ordered = [calls[index] for index in sorted(calls)]
     parts: list[Part] = [Text("".join(text))] if text else []
     parts += [ToolCall(call["id"], call["name"], _args(call["arguments"])) for call in ordered]
-    assistant: Json = {"role": "assistant", "content": "".join(text) or None}
-    if ordered:
-        assistant["tool_calls"] = [_wire_call(c["id"], c["name"], c["arguments"]) for c in ordered]
-    message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_CHAT, assistant))
-    return Reply(message, usage, _finish(bool(ordered), reason), reason)
+    return Reply(Message(Role.ASSISTANT, tuple(parts)), usage, _finish(bool(ordered), reason), reason)
 
 
 def _finish(has_calls: bool, reason: str) -> Finish:

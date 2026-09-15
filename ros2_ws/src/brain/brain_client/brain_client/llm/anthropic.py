@@ -4,9 +4,9 @@
 
 Thinking is adaptive on every current Claude model: ``budget_tokens`` and
 ``{"type": "disabled"}`` are 400s there, and the effort rung rides
-``output_config`` instead. Signed thinking blocks come back on
-``Message.native`` and are replayed verbatim — a turn re-encoded from parts
-carries text and tool calls only, never a signature-less thinking block.
+``output_config`` instead. Signed thinking blocks come back as the ``native``
+of their Thought part and are replayed verbatim — a thought from another wire
+is dropped, never sent as a signature-less thinking block.
 ``request.temperature`` is dropped: current models reject sampling parameters.
 """
 
@@ -139,10 +139,8 @@ class AnthropicAdapter:
             return {"role": "user", "content": results}
         if message.role != Role.ASSISTANT:
             return {"role": "user", "content": [_user_block(p) for p in message.parts if isinstance(p, (Text, Image))]}
-        if message.native is not None and message.native[0] == self.wire:
-            return dict(message.native[1])  # a copy: pinning must not mutate the caller's native
-        spoken = [_assistant_block(p) for p in message.parts if isinstance(p, (Text, ToolCall))]
-        return {"role": "assistant", "content": spoken}
+        blocks = [_assistant_block(p) for p in message.parts]
+        return {"role": "assistant", "content": [block for block in blocks if block is not None]}
 
 
 ADAPTER = AnthropicAdapter()
@@ -175,10 +173,14 @@ def _user_block(part: Text | Image) -> Json:
     return {"type": "image", "source": source}
 
 
-def _assistant_block(part: Text | ToolCall) -> Json:
+def _assistant_block(part: Part) -> Json | None:
+    if isinstance(part, (Text, Thought, ToolCall)) and part.native is not None and part.native[0] == Wire.ANTHROPIC:
+        return dict(part.native[1])  # a copy: pinning must not mutate the caller's native
     if isinstance(part, Text):
         return {"type": "text", "text": part.text}
-    return {"type": "tool_use", "id": part.id, "name": part.name, "input": part.args}
+    if isinstance(part, ToolCall):
+        return {"type": "tool_use", "id": part.id, "name": part.name, "input": part.args}
+    return None
 
 
 def _tool_result(part: ToolResult) -> Json:
@@ -217,8 +219,7 @@ class _Stream:
             raise LlmError.protocol("stream ended before message_start")
         content = [block for _, block in sorted(self.blocks.items()) if _replayable(block)]
         parts = _parts(content)
-        native = (Wire.ANTHROPIC, {"role": "assistant", "content": content})
-        message = Message(Role.ASSISTANT, parts, native=native)
+        message = Message(Role.ASSISTANT, parts)
         finish = _finish(self.stop_reason, any(isinstance(p, ToolCall) for p in parts))
         return Reply(message, self.usage, finish, self.stop_reason)
 
@@ -315,15 +316,19 @@ def _replayable(block: Json) -> bool:
 
 
 def _parts(content: list[Json]) -> tuple[Part, ...]:
+    """Typed parts, each carrying its block as ``native``; a redacted_thinking block is an empty Thought."""
     parts: list[Part] = []
     for block in content:
         kind = block["type"]
-        if kind == "thinking" and block["thinking"]:
-            parts.append(Thought(block["thinking"]))
+        native = (Wire.ANTHROPIC, block)
+        if kind == "thinking":
+            parts.append(Thought(block["thinking"], native=native))
+        elif kind == "redacted_thinking":
+            parts.append(Thought("", native=native))
         elif kind == "text":
-            parts.append(Text(block["text"]))
+            parts.append(Text(block["text"], native=native))
         elif kind == "tool_use":
-            parts.append(ToolCall(block["id"], block["name"], block["input"]))
+            parts.append(ToolCall(block["id"], block["name"], block["input"], native=native))
     return tuple(parts)
 
 

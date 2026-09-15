@@ -5,9 +5,11 @@
 The native wire — unlike the OpenAI-compatible layer — streams thought
 summaries (parts flagged ``thought: true``) and takes a server-side cache
 handle, which is what the robot's chat and its spatial memory were built on.
-A turn the model produced here is replayed verbatim from ``Message.native``,
-signatures and all; a turn assembled from parts carries the documented skip
-sentinel instead, because Gemini validates the signature on a replayed call.
+A part the model produced here is replayed verbatim from its ``native``,
+signature and all; a call assembled from another wire's parts carries the
+documented skip sentinel instead, because Gemini validates the signature on a
+replayed call. Thought prose never rides back — its signature sits on the
+part that follows it.
 """
 
 from __future__ import annotations
@@ -126,10 +128,7 @@ class GeminiAdapter:
                     continue
                 yield ThoughtDelta(text) if part.get("thought") else TextDelta(text)
         parts = _reply_parts(raw)
-        # Thought prose is display-only and re-sending it is billed as input: the replay
-        # keeps every other part exactly as it arrived, signatures included.
-        kept = [part for part in raw if not part.get("thought")] or [{"text": ""}]
-        message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.GEMINI, {"role": "model", "parts": kept}))
+        message = Message(Role.ASSISTANT, tuple(parts))
         yield Reply(message, _usage(usage), _finish(parts, finish_reason, block_reason), block_reason or finish_reason)
 
 
@@ -172,12 +171,13 @@ def _content(message: Message) -> Json:
 
 
 def _model_turn(message: Message) -> Json:
-    if message.native is not None and message.native[0] == Wire.GEMINI:
-        return message.native[1]
     parts: list[Json] = []
     signed = False
     for part in message.parts:
-        if isinstance(part, Text):
+        if isinstance(part, (Text, ToolCall)) and part.native is not None and part.native[0] == Wire.GEMINI:
+            parts.append(part.native[1])
+            signed = signed or "thoughtSignature" in part.native[1]
+        elif isinstance(part, Text):
             parts.append({"text": part.text})
         elif isinstance(part, ToolCall):
             # Only the turn's first call is validated, so only it needs the sentinel.
@@ -274,11 +274,20 @@ def _chunk(payload: str) -> Json:
 
 
 def _reply_parts(raw: list[Json]) -> list[Part]:
+    """Streamed parts folded into typed ones, each keeping its own wire part as ``native``.
+
+    A text part arrives as several chunks; they fold into one Text whose native
+    carries the joined text and the one thoughtSignature among them.
+    """
     parts: list[Part] = []
     for part in raw:
         call = part.get("functionCall")
         if call is not None:
-            parts.append(ToolCall(call.get("id") or "", call.get("name") or "", call.get("args") or {}))
+            parts.append(
+                ToolCall(
+                    call.get("id") or "", call.get("name") or "", call.get("args") or {}, native=(Wire.GEMINI, part)
+                )
+            )
             continue
         text = part.get("text")
         if not text:
@@ -287,10 +296,13 @@ def _reply_parts(raw: list[Json]) -> list[Part]:
             parts.append(Thought(text))
             continue
         last = parts[-1] if parts else None
-        if isinstance(last, Text):
-            parts[-1] = Text(last.text + text)
+        if isinstance(last, Text) and last.native is not None:
+            joined = {**last.native[1], "text": last.text + text}
+            if "thoughtSignature" not in joined and "thoughtSignature" in part:
+                joined["thoughtSignature"] = part["thoughtSignature"]
+            parts[-1] = Text(last.text + text, native=(Wire.GEMINI, joined))
             continue
-        parts.append(Text(text))
+        parts.append(Text(text, native=(Wire.GEMINI, part)))
     return parts
 
 

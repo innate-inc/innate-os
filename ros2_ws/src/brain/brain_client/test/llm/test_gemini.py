@@ -44,17 +44,18 @@ TOOLS = (
     ),
     Tool("wait", "Do nothing.", {"type": "object", "properties": {}}),
 )
-NATIVE = {
-    "role": "model",
-    "parts": [
-        {"text": "On it.", "thoughtSignature": "c2lnMTIz"},
-        {"functionCall": {"name": "wave", "args": {"times": 2}, "id": "call_1"}, "thoughtSignature": "c2lnNDU2"},
-    ],
-}
-TURN = (Thought("planning"), Text("On it."), ToolCall("call_1", "wave", {"times": 2}))
+TEXT_PART = {"text": "On it.", "thoughtSignature": "c2lnMTIz"}
+CALL_PART = {"functionCall": {"name": "wave", "args": {"times": 2}, "id": "call_1"}, "thoughtSignature": "c2lnNDU2"}
+NATIVE = {"role": "model", "parts": [TEXT_PART, CALL_PART]}
+TURN = (
+    Thought("planning"),
+    Text("On it.", native=(Wire.GEMINI, TEXT_PART)),
+    ToolCall("call_1", "wave", {"times": 2}, native=(Wire.GEMINI, CALL_PART)),
+)
+FOREIGN = (Wire.OPENAI_RESPONSES, {"id": "rs_1"})
 MESSAGES = (
     Message(Role.USER, (Text("Look at this."), Image(JPEG)), pin=True),
-    Message(Role.ASSISTANT, TURN, native=(Wire.GEMINI, NATIVE)),
+    Message(Role.ASSISTANT, TURN),
     Message(Role.TOOL, (ToolResult("call_1", "wave", "started"),), pin=True),
     Message(Role.USER, (Text("Now what?"), Image(JPEG)), pin=True),
 )
@@ -142,7 +143,8 @@ def test_native_turn_is_replayed_verbatim() -> None:
 
 
 def test_foreign_native_is_encoded_from_parts() -> None:
-    foreign = Message(Role.ASSISTANT, TURN, native=(Wire.OPENAI_RESPONSES, {"output": [{"id": "rs_1"}]}))
+    parts = (Thought("planning", FOREIGN), Text("On it.", FOREIGN), ToolCall("call_1", "wave", {"times": 2}, FOREIGN))
+    foreign = Message(Role.ASSISTANT, parts)
     body = ADAPTER.body(Request(system="", messages=(MESSAGES[0], foreign)), MODEL)
     assert body["contents"][1] == {
         "role": "model",
@@ -218,20 +220,22 @@ def test_stream_yields_deltas_then_one_reply() -> None:
     assert events[:3] == [ThoughtDelta("Wave twice."), TextDelta("On "), TextDelta("it.")]
     reply = events[3]
     assert isinstance(reply, Reply)
-    assert reply.message.parts == (Thought("Wave twice."), Text("On it."), ToolCall("call_9", "wave", {"times": 2}))
-    assert reply.message.native == (
-        Wire.GEMINI,
-        {
-            "role": "model",
-            "parts": [
-                {"text": "On ", "thoughtSignature": "c2lnQQ=="},
-                {"text": "it."},
+    # Text chunks fold into one part that keeps the signature; the call keeps its own.
+    assert reply.message.parts == (
+        Thought("Wave twice."),
+        Text("On it.", native=(Wire.GEMINI, {"text": "On it.", "thoughtSignature": "c2lnQQ=="})),
+        ToolCall(
+            "call_9",
+            "wave",
+            {"times": 2},
+            native=(
+                Wire.GEMINI,
                 {
                     "functionCall": {"name": "wave", "args": {"times": 2}, "id": "call_9"},
                     "thoughtSignature": "c2lnQg==",
                 },
-            ],
-        },
+            ),
+        ),
     )
     assert reply.usage == Usage(prompt=120, cached=3400, output=57, thinking=44)
     assert reply.finish == Finish.TOOL_CALLS
@@ -259,7 +263,8 @@ def test_empty_stream_still_replies() -> None:
     reply = events[0]
     assert isinstance(reply, Reply)
     assert reply.message.parts == ()
-    assert reply.message.native == (Wire.GEMINI, {"role": "model", "parts": [{"text": ""}]})
+    replayed = ADAPTER.body(Request(system="", messages=(MESSAGES[0], reply.message)), MODEL)["contents"][1]
+    assert replayed == {"role": "model", "parts": [{"text": ""}]}
     assert (reply.usage, reply.finish) == (Usage(), Finish.STOP)
 
 

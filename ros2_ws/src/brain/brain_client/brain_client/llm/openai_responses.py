@@ -3,8 +3,8 @@
 """The OpenAI Responses wire: a flat list of items in, typed ``response.*`` events out.
 
 Reasoning here is an item of its own, not prose — it arrives encrypted on
-``response.output_item.done`` and is replayed verbatim out of ``Message.native``,
-so the model keeps its chain of thought across a tool call.
+``response.output_item.done`` and is replayed verbatim as its Thought's
+``native``, so the model keeps its chain of thought across a tool call.
 """
 
 from __future__ import annotations
@@ -90,7 +90,6 @@ class OpenAIResponsesAdapter:
         return body  # request.temperature is dropped here: the reasoning models on this wire reject it
 
     def events(self, lines: Iterator[str]) -> Iterator[Event]:
-        items: list[Json] = []
         parts: list[Part] = []
         refused = False
         for line in lines:
@@ -102,13 +101,12 @@ class OpenAIResponsesAdapter:
                 yield ThoughtDelta(payload.get("delta", ""))
             elif kind == "response.output_item.done":
                 item = payload.get("item") or {}
-                items.append(item)
                 refused = refused or _has_refusal(item)
                 part = _part(item)
                 if part is not None:
                     parts.append(part)
             elif kind in _TERMINAL:
-                yield _reply(payload.get("response") or {}, items, parts, refused)
+                yield _reply(payload.get("response") or {}, parts, refused)
                 return
             elif kind in _FAILED:
                 raise LlmError.protocol(_detail(payload))
@@ -132,9 +130,8 @@ class OpenAIResponsesAdapter:
                 for part in message.parts
                 if isinstance(part, ToolResult)
             ]
-        if message.native is not None and message.native[0] == self.wire:
-            return list(message.native[1]["items"])
-        return _assistant_items(message)
+        items = [_assistant_item(part) for part in message.parts]
+        return [item for item in items if item is not None]
 
 
 ADAPTER = OpenAIResponsesAdapter()
@@ -150,17 +147,19 @@ def _user_content(message: Message) -> list[Json]:
     return content
 
 
-def _assistant_items(message: Message) -> list[Json]:
-    """A turn with no signature of ours: its text and its calls, never its thought prose."""
-    items: list[Json] = []
-    text = message.text()
-    if text:
-        items.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
-    items += [
-        {"type": "function_call", "call_id": call.id, "name": call.name, "arguments": json.dumps(call.args)}
-        for call in message.calls()
-    ]
-    return items
+def _assistant_item(part: Part) -> Json | None:
+    """The part's own item when this wire produced it; else its text or call, never foreign thought prose."""
+    if (
+        isinstance(part, (Text, Thought, ToolCall))
+        and part.native is not None
+        and part.native[0] == Wire.OPENAI_RESPONSES
+    ):
+        return part.native[1]
+    if isinstance(part, Text):
+        return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": part.text}]}
+    if isinstance(part, ToolCall):
+        return {"type": "function_call", "call_id": part.id, "name": part.name, "arguments": json.dumps(part.args)}
+    return None
 
 
 def _data_url(jpeg: bytes) -> str:
@@ -168,15 +167,16 @@ def _data_url(jpeg: bytes) -> str:
 
 
 def _part(item: Json) -> Part | None:
+    """The item as a typed part carrying it as ``native``; a reasoning item with no summary is an empty Thought."""
     kind = item.get("type", "")
+    native = (Wire.OPENAI_RESPONSES, item)
     if kind == "message":
         text = "".join(b.get("text", "") for b in item.get("content") or [] if b.get("type") == "output_text")
-        return Text(text) if text else None
+        return Text(text, native=native) if text else None
     if kind == "function_call":
-        return ToolCall(item.get("call_id", ""), item.get("name", ""), _args(item.get("arguments", "")))
+        return ToolCall(item.get("call_id", ""), item.get("name", ""), _args(item.get("arguments", "")), native=native)
     if kind == "reasoning":
-        summary = "".join(b.get("text", "") for b in item.get("summary") or [])
-        return Thought(summary) if summary else None
+        return Thought("".join(b.get("text", "") for b in item.get("summary") or []), native=native)
     return None
 
 
@@ -184,9 +184,9 @@ def _has_refusal(item: Json) -> bool:
     return any(block.get("type") == "refusal" for block in item.get("content") or [])
 
 
-def _reply(response: Json, items: list[Json], parts: list[Part], refused: bool) -> Reply:
+def _reply(response: Json, parts: list[Part], refused: bool) -> Reply:
     reason = (response.get("incomplete_details") or {}).get("reason") or ""
-    message = Message(Role.ASSISTANT, tuple(parts), native=(Wire.OPENAI_RESPONSES, {"items": items}))
+    message = Message(Role.ASSISTANT, tuple(parts))
     finish = _finish(parts, reason, refused)
     return Reply(message, _usage(response.get("usage") or {}), finish, "refusal" if refused else reason)
 

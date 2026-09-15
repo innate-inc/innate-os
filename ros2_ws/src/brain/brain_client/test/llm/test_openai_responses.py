@@ -54,11 +54,15 @@ MESSAGE_ITEM = {
     "content": [{"type": "output_text", "text": "On it."}],
 }
 CALL_ITEM = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "wave", "arguments": '{"times":2}'}
-NATIVE = {"items": [REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]}
-TURN = (Thought("planning"), Text("On it."), ToolCall("call_1", "wave", {"times": 2}))
+TURN = (
+    Thought("planning", native=(Wire.OPENAI_RESPONSES, REASONING_ITEM)),
+    Text("On it.", native=(Wire.OPENAI_RESPONSES, MESSAGE_ITEM)),
+    ToolCall("call_1", "wave", {"times": 2}, native=(Wire.OPENAI_RESPONSES, CALL_ITEM)),
+)
+FOREIGN = (Wire.ANTHROPIC, {"type": "text", "text": "On it."})
 MESSAGES = (
     Message(Role.USER, (Text("Look at this."), Image(JPEG)), pin=True),
-    Message(Role.ASSISTANT, TURN, native=(Wire.OPENAI_RESPONSES, NATIVE)),
+    Message(Role.ASSISTANT, TURN),
     Message(Role.TOOL, (ToolResult("call_1", "wave", "started"),), pin=True),
     Message(Role.USER, (Text("Now what?"), Image(JPEG)), pin=True),
 )
@@ -128,7 +132,8 @@ def test_native_turn_is_replayed_verbatim():
 
 
 def test_foreign_native_is_encoded_from_parts():
-    foreign = Message(Role.ASSISTANT, TURN, native=(Wire.ANTHROPIC, {"role": "assistant", "content": []}))
+    parts = (Thought("planning", FOREIGN), Text("On it.", FOREIGN), ToolCall("call_1", "wave", {"times": 2}, FOREIGN))
+    foreign = Message(Role.ASSISTANT, parts)
     items = ADAPTER.body(Request(system=SYSTEM, messages=(MESSAGES[0], foreign)), MODEL)["input"]
     assert items[1:] == [
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "On it."}]},
@@ -154,9 +159,8 @@ def test_stream_yields_deltas_then_one_reply():
     assert events[:3] == [ThoughtDelta("planning"), TextDelta("On "), TextDelta("it.")]
     reply = events[3]
     assert isinstance(reply, Reply) and len(events) == 4
-    assert reply.message.parts == TURN
+    assert reply.message.parts == TURN  # every item rides its part as native
     assert reply.message.role == Role.ASSISTANT
-    assert reply.message.native == (Wire.OPENAI_RESPONSES, {"items": [REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]})
     assert reply.usage == Usage(prompt=100, cached=40, output=20, thinking=8)
     assert reply.finish == Finish.TOOL_CALLS
 
