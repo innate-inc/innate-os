@@ -1050,7 +1050,10 @@ function buildKnobControl(/** @type {HTMLElement} */ controlContainer, /** @type
     const fillSelect = () => {
       select.replaceChildren();
       for (const option of options) {
-        select.add(new Option(option.label, option.value));
+        // The stock value is named in the list itself: "Restore default" only appears
+        // once a row is already overridden, which is too late to answer "what shipped?".
+        const isDefault = String(option.value) === String(knob.default);
+        select.add(new Option(isDefault ? `${option.label} (default)` : option.label, option.value));
       }
       // A permanent "Custom…" choice that reveals a free-text field for any off-list value
       // (e.g. a voice id pasted from Cartesia's library, or one set over SSH).
