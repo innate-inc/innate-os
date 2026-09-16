@@ -70,24 +70,30 @@ export function modelLabel(/** @type {string} */ spec) {
  * Whether the robot can reach `spec` with the keys it has.
  * @param {string} spec @param {string} baseUrl
  * @param {{keys?: Record<string, {set: boolean}>, service_key?: boolean}} status
- * @returns {{ok: boolean, text: string}}
+ * @returns {{ok: boolean, text: string, short: string}}  `short` names the gap alone, for a
+ * vendor heading; `text` is the whole sentence, for the one place a model is named.
  */
 export function modelReach(spec, baseUrl, status) {
   const vendor = modelVendor(spec, baseUrl);
   if (vendor === null) {
-    return { ok: false, text: "Unknown vendor: use google:, anthropic:, openai: or openai-chat: before the model name." };
+    const text = "Unknown vendor: use google:, anthropic:, openai: or openai-chat: before the model name.";
+    return { ok: false, text, short: "Unknown vendor" };
   }
-  if (vendor === "openai-chat" && baseUrl) return { ok: true, text: `Reached through your server at ${baseUrl}.` };
+  if (vendor === "openai-chat" && baseUrl) {
+    return { ok: true, text: `Reached through your server at ${baseUrl}.`, short: "" };
+  }
   const key = /** @type {keyof typeof VENDOR_KEY} */ (vendor);
   const own = Boolean(status.keys?.[VENDOR_KEY[key]]?.set);
   if (vendor === "anthropic") {
-    if (own) return { ok: true, text: "Reached with your Anthropic key." };
+    if (own) return { ok: true, text: "Reached with your Anthropic key.", short: "" };
     // The Innate proxy does not serve Anthropic, so the service key cannot stand in here.
-    return { ok: false, text: "Needs an Anthropic key — the Innate proxy does not serve Claude. Add one in Settings → Agent → Keys." };
+    const text = "Needs an Anthropic key — the Innate proxy does not serve Claude. Add one in Settings → Agent → Keys.";
+    return { ok: false, text, short: "needs an Anthropic key" };
   }
-  if (status.service_key) return { ok: true, text: "Reached through the Innate proxy." };
-  if (own) return { ok: true, text: `Reached with your ${KEY_LABEL[key]} key.` };
-  return { ok: false, text: `Needs an Innate service key or a ${KEY_LABEL[key]} key. Add one in Settings → Agent → Keys.` };
+  if (status.service_key) return { ok: true, text: "Reached through the Innate proxy.", short: "" };
+  if (own) return { ok: true, text: `Reached with your ${KEY_LABEL[key]} key.`, short: "" };
+  const text = `Needs an Innate service key or a ${KEY_LABEL[key]} key. Add one in Settings → Agent → Keys.`;
+  return { ok: false, text, short: `needs a ${KEY_LABEL[key]} key` };
 }
 
 /** The keys the robot has, for modelReach. Never carries a key's value. */

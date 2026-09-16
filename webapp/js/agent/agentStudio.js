@@ -1365,16 +1365,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     modelMenu.replaceChildren();
     let vendor = "";
     for (const option of MODEL_OPTIONS) {
+      const reach = modelReach(option.value, "", keyStatus);
       if (option.vendor !== vendor) {
         vendor = option.vendor;
+        // A missing key belongs to the vendor, not to each of its models.
+        const label = VENDOR_LABEL[/** @type {keyof typeof VENDOR_LABEL} */ (vendor)] || vendor;
+        const why = keyStatus.loaded && !reach.ok ? reach.short : "";
         const head = document.createElement("div");
         head.className = "agent-studio-model-group";
-        head.textContent = VENDOR_LABEL[/** @type {keyof typeof VENDOR_LABEL} */ (vendor)] || vendor;
+        head.innerHTML = `<span>${escapeText(label)}</span>${why ? `<i>${escapeText(why)}</i>` : ""}`;
         modelMenu.append(head);
       }
-      const reach = modelReach(option.value, "", keyStatus);
-      const why = keyStatus.loaded && !reach.ok ? reach.text : "";
-      modelMenu.append(modelRow(option.value, option.label, why, option.value === current, reach.ok || !keyStatus.loaded));
+      modelMenu.append(modelRow(option.value, option.label, option.value === current, reach.ok || !keyStatus.loaded));
     }
     const more = document.createElement("a");
     more.className = "agent-studio-model-more";
@@ -1384,10 +1386,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   /**
-   * @param {string} value @param {string} label @param {string} why
+   * @param {string} value @param {string} label
    * @param {boolean} selected @param {boolean} reachable
    */
-  function modelRow(value, label, why, selected, reachable) {
+  function modelRow(value, label, selected, reachable) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "agent-studio-model-row" + (reachable ? "" : " is-unreachable");
@@ -1395,7 +1397,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     row.setAttribute("aria-selected", String(selected));
     row.innerHTML =
       `<span class="agent-studio-model-row-mark">${vendorMark(String(modelVendorOf(value)))}</span>` +
-      `<span class="agent-studio-model-row-text"><b>${escapeText(label)}</b>${why ? `<i>${escapeText(why)}</i>` : ""}</span>` +
+      `<span class="agent-studio-model-row-text"><b>${escapeText(label)}</b></span>` +
       (selected ? '<span class="agent-studio-model-row-tick">✓</span>' : "");
     // A model with no key is still choosable: the brain refuses the switch and says why,
     // which is more use than a row that cannot be clicked at all.

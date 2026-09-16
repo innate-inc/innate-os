@@ -249,7 +249,15 @@ function createAgentState() {
         await refresh();
         return { success: true, message: "" };
       }
-      return { success: false, message: String(result?.reason || "the robot refused that model") };
+      const reason = String(result?.reason || "the robot refused that model");
+      // rclpy's wording for a parameter the running node never declared: the brain is a copy
+      // install, so a build older than this page has no llm_model to set.
+      return {
+        success: false,
+        message: reason.includes("undeclared parameter")
+          ? "This robot's brain is older than this page — rebuild it (innate build) and try again."
+          : reason,
+      };
     } catch (err) {
       return { success: false, message: `Could not reach the robot: ${err}` };
     }

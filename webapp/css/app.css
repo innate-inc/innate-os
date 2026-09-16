@@ -11575,8 +11575,10 @@ select.skill-input {
   max-height: 46vh; overflow-y: auto;
 }
 .agent-studio-model-group {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
 }
+.agent-studio-model-group i { font-style: normal; letter-spacing: 0; text-transform: none; color: #e0a06a; }
 .agent-studio-model-row {
   display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
   margin: 0; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: inherit;
