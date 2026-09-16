@@ -48,8 +48,13 @@ def env_path() -> Path:
 
 
 def read_status() -> dict:
-    """``{keys: {NAME: {set, hint}}, service_key}`` — never a value."""
-    values = {**_values(SYSTEM_ENV_PATH), **_values(env_path())}
+    """``{keys: {NAME: {set, hint}}, service_key}`` — never a value.
+
+    Layered as the nodes see it: the process environment, then ``/etc/innate.env``, then the
+    keys file on top. The public demo passes its keys as container environment and has no
+    ``.env`` at all; a key only the environment holds cannot be cleared from this page."""
+    inherited = {name: os.environ.get(name, "") for name in (*KEYS, SERVICE_KEY)}
+    values = {**inherited, **_values(SYSTEM_ENV_PATH), **_values(env_path())}
     keys = {}
     for name in KEYS:
         value = values.get(name, "")

@@ -19,6 +19,8 @@ LLM_MODEL=google:gemini-3.6-flash
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    for name in (*keys_store.KEYS, keys_store.SERVICE_KEY, keys_store.KEYS_ENV_FILE):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
     monkeypatch.setattr(keys_store, "SYSTEM_ENV_PATH", tmp_path / "etc-innate.env")
     path = tmp_path / ".env"
@@ -147,3 +149,13 @@ def test_a_write_that_is_not_a_bind_mount_failure_leaves_the_file_alone(env, mon
     ok, message = keys_store.apply({"GEMINI_API_KEY": "AIza-would-be-lost"}, [])
     assert ok is False and "No space left" in message
     assert env.read_text() == TEMPLATE  # every existing key still there
+
+
+def test_keys_passed_as_environment_count_as_the_public_demo_passes_them(env, monkeypatch):
+    env.unlink()  # the demo image has no .env at all
+    monkeypatch.setenv("INNATE_SERVICE_KEY", "isk-demo-key-0001")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-demo-9999")
+    status = keys_store.read_status()
+    assert status["service_key"] is True
+    assert status["keys"]["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…9999"}
+    assert not status["keys"]["GEMINI_API_KEY"]["set"]
