@@ -246,8 +246,11 @@ function createAgentState() {
       // The service resolves even when the node rejects the value: the result carries why.
       const result = res?.results?.[0];
       if (result?.successful) {
+        // The live switch is the running brain only: settings.yaml is what it boots from,
+        // so a pick that is not written there would come back as the old model on restart.
+        const saved = await saveModelSetting(spec);
         await refresh();
-        return { success: true, message: "" };
+        return { success: true, message: saved };
       }
       const reason = String(result?.reason || "the robot refused that model");
       // rclpy's wording for a parameter the running node never declared: the brain is a copy
@@ -260,6 +263,25 @@ function createAgentState() {
       };
     } catch (err) {
       return { success: false, message: `Could not reach the robot: ${err}` };
+    }
+  }
+
+  /** Write llm_model to config/settings.yaml; returns "" or why it did not persist. */
+  async function saveModelSetting(/** @type {string} */ spec) {
+    try {
+      const res = await fetch("/settings.json", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          sets: [{ path: ["brain_client_node", "ros__parameters", "llm_model"], value: spec, type: "string" }],
+          clears: [],
+        }),
+      });
+      const body = await res.json();
+      return body?.ok ? "" : `Switched, but not saved for the next restart: ${body?.message || "the robot refused it"}`;
+    } catch (err) {
+      return `Switched, but not saved for the next restart: ${err}`;
     }
   }
 

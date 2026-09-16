@@ -48,6 +48,8 @@ services:
       # Zenoh SHM needs realtime thread priorities Docker won't grant; without
       # them it stalls service/action traffic under load (see setup_dds.zsh).
       - INNATE_ZENOH_DISABLE_SHM=1
+      # Keys land in the checkout's .env, not the generated copy the nodes read.
+      - INNATE_KEYS_ENV_FILE=/root/innate-os/.env.source
       # Set by the launcher when the host world server runs (native GL
       # rendering outside Docker, see mars_sim_driver/world_server.py);
       # required -- the sim world always runs outside the container.
@@ -108,10 +110,13 @@ services:
       # (runtime.install_layer_subtree).
       - ../sim/viewer/public:/root/innate-os/sim/viewer/public:ro
       - ../sim/viewer/dist-lib:/root/innate-os/sim/viewer/dist-lib:ro
-      # rw: the Settings page's Keys section writes vendor API keys here, and this is the
-      # file the sim's nodes read them from. A rename cannot replace a bind-mounted file,
-      # so keys_store writes through it (see _write there).
-      - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:rw
+      # The nodes' env: the launcher generates this from the checkout's .env on every `up`.
+      - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:ro
+      # rw, and where the Settings page's Keys section writes: the checkout's own .env, which
+      # the generated file above is rebuilt from — a key written to that copy would be gone at
+      # the next `up`. A rename cannot replace a bind-mounted file, so keys_store writes
+      # through it (see _write there); keys apply on the next `./innate-sim up`.
+      - ../.env:/root/innate-os/.env.source:rw
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build

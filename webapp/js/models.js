@@ -38,7 +38,8 @@ const KEY_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI",
  * @param {string} spec @param {string} [baseUrl]
  */
 export function modelVendor(spec, baseUrl = "") {
-  const [prefix, ...rest] = String(spec).split(":");
+  spec = String(spec).trim();  // configure() strips before it splits; so must this
+  const [prefix, ...rest] = spec.split(":");
   if (rest.length && prefix in VENDOR_KEY) return prefix;
   if (baseUrl) return "openai-chat";
   if (rest.length) return null;

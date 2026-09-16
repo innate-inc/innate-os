@@ -85,7 +85,7 @@ def _retry_note(error: Exception) -> str:
     """What the retry can achieve. A 4xx the vendor will refuse identically forever — a key it
     rejects, a model the account cannot use — would otherwise read as a transient blip."""
     if isinstance(error, LlmError) and error.kind == Kind.HTTP and not error.retryable:
-        return " — the robot keeps trying, but nothing changes until the setting is fixed."
+        return " — retrying, but a 4xx usually means a setting or the request has to change."
     return " — retrying."
 
 
@@ -140,6 +140,7 @@ class BrainAgent:
         self._base_url = config.llm_base_url
         self._extra_body = config.llm_extra_body
         self.backend = llm.backend
+        self._llm = llm
         # As resolved, not as typed: a bare "claude-sonnet-5" in settings reads back
         # "anthropic:claude-sonnet-5" here, which is what the trace chip should show.
         self.model = llm.spec
@@ -251,26 +252,40 @@ class BrainAgent:
         A switch starts a fresh conversation: history is a transcript of parts the previous
         model signed, and the honest thing on a new one is to begin again. Refused rather
         than applied when the new model has no way in (no key, no vision), so a mistyped
-        setting cannot take the brain down — the running one keeps thinking.
+        setting cannot take the brain down — the running one keeps thinking. A refused spec
+        is not remembered either: it would come back the next time anything else changed.
         """
-        if agent:
-            self._agent_spec = spec
-        else:
-            self._default_spec = spec or DEFAULT_MODEL
-        return self._reconfigure()
+        wanted_agent = spec if agent else self._agent_spec
+        wanted_default = self._default_spec if agent else (spec or DEFAULT_MODEL)
+        ok, detail = self._reconfigure(wanted_agent or wanted_default)
+        if ok:
+            self._agent_spec, self._default_spec = wanted_agent, wanted_default
+        return ok, detail
 
     def use_llm_setting(self, name: str, value: str) -> tuple[bool, str]:
         """A thinking level, a server URL or an extra-body JSON, applied to the running model.
 
         Unlike the model itself these change nothing about *which* vendor answers, so the
         rebuild is forced: the context carries the thinking level, and the route carries the
-        URL and the extra fields.
+        URL and the extra fields. A value the rebuild refuses — extra-body that is not JSON,
+        a URL with no model behind it — is rolled back rather than left to fail the next
+        change made against it.
         """
-        setattr(self, {"llm_thinking": "_thinking", "llm_base_url": "_base_url"}.get(name, "_extra_body"), value)
-        return self._reconfigure(force=True)
+        field = {"llm_thinking": "_thinking", "llm_base_url": "_base_url"}.get(name, "_extra_body")
+        previous = getattr(self, field)
+        setattr(self, field, value)
+        ok, detail = self._reconfigure(force=True)
+        if not ok:
+            setattr(self, field, previous)
+        return ok, detail
 
-    def _reconfigure(self, *, force: bool = False) -> tuple[bool, str]:
-        wanted = self._agent_spec or self._default_spec
+    @property
+    def llm(self) -> Llm | None:
+        """What the brain is configured against — for the recall search, which follows it."""
+        return self._llm
+
+    def _reconfigure(self, wanted: str | None = None, *, force: bool = False) -> tuple[bool, str]:
+        wanted = wanted or self._agent_spec or self._default_spec
         try:
             llm = configure(wanted, self._proxy, base_url=self._base_url, extra_body=self._extra_body)
         except ValueError as error:  # an unknown vendor prefix, or extra_body that is not JSON
@@ -284,7 +299,7 @@ class BrainAgent:
         was_running = self._runtime.running
         if not self.stop():
             return False, "the brain loop is stuck — stop and start the brain, then try again"
-        self.model, self.backend = llm.spec, llm.backend
+        self.model, self.backend, self._llm = llm.spec, llm.backend, llm
         self._context = ChatContext(
             llm.provider,
             thinking=self._thinking_level(self._thinking),

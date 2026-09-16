@@ -14,6 +14,7 @@ restart. The page learns only whether a key is set and its last characters.
 """
 
 import contextlib
+import errno
 import os
 import re
 import tempfile
@@ -30,7 +31,18 @@ _HINT_CHARS = 4
 _MAX_LEN = 512
 
 
+KEYS_ENV_FILE = "INNATE_KEYS_ENV_FILE"
+
+
 def env_path() -> Path:
+    """The .env keys are written to — the robot's own, or the file a deployment points here.
+
+    The sim runs the nodes against a file its launcher generates from the checkout's .env on
+    every ``up``; writing the generated copy would lose every key at the next start, so the
+    launcher points this at the source instead."""
+    override = os.environ.get(KEYS_ENV_FILE, "").strip()
+    if override:
+        return Path(override)
     root = os.environ.get("INNATE_OS_ROOT", os.path.expanduser("~/innate-os"))
     return Path(root) / ".env"
 
@@ -79,13 +91,18 @@ def _apply_locked(sets: dict, clears: list) -> tuple[bool, str]:
     return True, "saved — takes effect on the next restart"
 
 
-def _write(path: Path, text: str, *, existed: bool) -> None:
-    """Replace the file atomically, else write through it.
+# A rename onto a bind-mounted file fails with these however writable the file is; every
+# other OSError (no space, no permission, I/O) must not reach the write-through below,
+# which truncates the operator's keys before it can fail the same way.
+_MOUNTED_OVER = frozenset({errno.EBUSY, errno.EXDEV, errno.EINVAL})
 
-    The sim bind-mounts the host's ``.env`` onto this path, and no rename can replace a
-    mount point however writable the file is (EBUSY) — so the fallback truncates and writes
-    in place. One small write, and the alternative is a Settings page that cannot save a key
-    in the sim at all."""
+
+def _write(path: Path, text: str, *, existed: bool) -> None:
+    """Replace the file atomically, else — only for a bind mount — write through it.
+
+    The sim bind-mounts the host's ``.env`` onto this path, so the rename cannot work there
+    and the alternative is a Settings page that cannot save a key in the sim at all. The
+    file's previous bytes go back if that write fails partway."""
     # A key file is the operator's alone; a pre-existing .env keeps whatever mode it had.
     mode = path.stat().st_mode & 0o777 if existed else 0o600
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
@@ -94,9 +111,17 @@ def _write(path: Path, text: str, *, existed: bool) -> None:
             f.write(text)
         os.chmod(tmp, mode)
         os.replace(tmp, str(path))
-    except OSError:
-        with open(path, "w") as f:
-            f.write(text)
+    except OSError as error:
+        if error.errno not in _MOUNTED_OVER:
+            raise
+        previous = path.read_bytes() if existed else b""
+        try:
+            with open(path, "w") as f:
+                f.write(text)
+        except OSError:
+            with contextlib.suppress(OSError):
+                path.write_bytes(previous)
+            raise
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

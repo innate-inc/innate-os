@@ -178,11 +178,13 @@ class BrainClientNode(Node):
             if param.name == "llm_model":
                 ok, detail = self.brain.use_model(str(param.value).strip(), agent=False)
                 if ok:
+                    self._follow_brain_model()
                     continue
                 return SetParametersResult(successful=False, reason=detail)
             if param.name in ("llm_thinking", "llm_base_url", "llm_extra_body"):
                 ok, detail = self.brain.use_llm_setting(param.name, str(param.value).strip())
                 if ok:
+                    self._follow_brain_model()
                     continue
                 return SetParametersResult(successful=False, reason=detail)
             if param.name != "cartesia_voice_id":
@@ -194,6 +196,14 @@ class BrainClientNode(Node):
                 return SetParametersResult(successful=False, reason="TTS is unavailable (no proxy)")
             self._tts_handler.set_voice(voice_id)
         return SetParametersResult(successful=True)
+
+    def _follow_brain_model(self) -> None:
+        """Recall rides the brain's model unless memory_llm_model names its own; without this
+        a live switch would leave searches answering from the model the robot booted on."""
+        llm = self.brain.llm
+        if self.memory_search is None or self.config.memory_llm_model or llm is None or llm.provider is None:
+            return
+        self.memory_search.use_provider(llm.provider)
 
     def _build_collaborators(self) -> None:
         cfg, state = self.config, self.state

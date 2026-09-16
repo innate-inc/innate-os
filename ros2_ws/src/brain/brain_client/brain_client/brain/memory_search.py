@@ -140,6 +140,15 @@ class MemorySearch:
         # as a JSON-able dict (query, found, pose, explanation, latency, cached).
         self.on_result: Callable[[Json], None] | None = None
 
+    def use_provider(self, provider: Provider) -> None:
+        """Follow the brain onto a new model. A cache handle names the model that built it,
+        so it cannot be carried over — dropping it costs one rebuild in warm()."""
+        self._provider = provider
+        self._pinned = provider if isinstance(provider, Pinned) else None
+        self._cache_unsupported = self._pinned is None
+        self._cache = None
+        self._failed_revision = None
+
     def cache_state(self) -> CacheState:
         """A stale-but-usable cache reports WARM — the search rides it with a
         delta, so recall is still instant (rebuilds are warm()'s business)."""

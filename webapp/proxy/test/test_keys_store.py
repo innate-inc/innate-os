@@ -135,3 +135,15 @@ def test_a_bind_mounted_env_is_written_through_since_no_rename_can_replace_it(en
 
 def _refuse(*_args, **_kwargs):
     raise OSError(16, "Device or resource busy")
+
+
+def test_a_write_that_is_not_a_bind_mount_failure_leaves_the_file_alone(env, monkeypatch):
+    # The fallback exists for EBUSY on a mount point; a full disk or a denied write must not
+    # reach it, or a failed key save would truncate the service key with it.
+    def deny(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(keys_store.os, "replace", deny)
+    ok, message = keys_store.apply({"GEMINI_API_KEY": "AIza-would-be-lost"}, [])
+    assert ok is False and "No space left" in message
+    assert env.read_text() == TEMPLATE  # every existing key still there

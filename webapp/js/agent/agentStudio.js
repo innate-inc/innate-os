@@ -1407,7 +1407,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     render(true);
     const res = await agentState.setModel(spec);
     modelBusy = false;
-    modelError = res.success ? "" : res.message;
+    // A switch that did not persist is still a switch: say so without calling it a failure.
+    modelError = res.message;
     render(true);
   }
 
