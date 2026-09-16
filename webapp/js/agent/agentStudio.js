@@ -215,7 +215,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   // The list is grouped by vendor; a model the robot has no key for stays visible and says
   // so, since hiding it would make the robot look incapable of a vendor one paste away.
   const modelField = document.createElement("div");
-  modelField.className = "agent-studio-field agent-studio-model";
+  modelField.className = "agent-studio-model";
   modelField.innerHTML =
     '<span class="microlabel">Model</span>' +
     '<button type="button" class="agent-studio-model-btn" aria-haspopup="listbox" aria-expanded="false"></button>' +
@@ -330,11 +330,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const deck = createOfferDeck();
   let deckKey = "";
 
-  panes.identity.append(deck.el, promptRow, nameField, modelField, promptField);
+  panes.identity.append(deck.el, promptRow, nameField, promptField);
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
   panes.identity.append(mobilePrompt);
-  panelEl.append(mobileName, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
+  // The model sits with the agent, not inside Identity: it is the robot's, and it applies
+  // to whichever agent is running rather than being one of this agent's saved fields.
+  panelEl.append(mobileName, modelField, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
   head.append(toggle, headAction);
   dock.append(head, panelEl);
   root.append(dock);

@@ -11558,8 +11558,10 @@ select.skill-input {
 .agent-studio-field .microlabel { color: var(--muted); }
 .agent-studio-field textarea { min-height: 168px; max-height: 40vh; resize: vertical; }
 .agent-studio-field textarea:read-only { resize: none; color: #c8c8d0; background: transparent; }
-/* Model: a button that opens a grouped listbox, in the flow like the skill chooser above. */
-.agent-studio-model { position: relative; }
+/* Model: a button that opens a grouped listbox, in the flow like the skill chooser below.
+   It sits above the tabs, with the agent rather than inside the agent's own fields. */
+.agent-studio-model { position: relative; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 2px; }
+.agent-studio-model > .microlabel { color: var(--muted); }
 .agent-studio-model-btn {
   display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
   margin: 0; padding: 9px 12px; font-size: 13px; text-align: left;
