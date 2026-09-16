@@ -12,6 +12,7 @@ subject.
 """
 
 import json
+import os
 
 import pytest
 from innate_llm import (
@@ -1272,3 +1273,22 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_a_key_saved_in_settings_reaches_the_process_and_a_cleared_one_leaves_it(tmp_path, monkeypatch):
+    from brain_client.robot import llm as robot_llm
+
+    keys = tmp_path / ".env"
+    monkeypatch.setenv("INNATE_KEYS_ENV_FILE", str(keys))
+    monkeypatch.setenv("OPENAI_API_KEY", "from-the-container")  # the public demo: no file holds it
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(robot_llm, "_governed", set())
+
+    keys.write_text("ANTHROPIC_API_KEY=sk-ant-saved\n")
+    robot_llm.refresh_keys()
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-saved"
+
+    keys.write_text("# ANTHROPIC_API_KEY=\n")  # what the Keys page writes for a clear
+    robot_llm.refresh_keys()
+    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == "from-the-container"

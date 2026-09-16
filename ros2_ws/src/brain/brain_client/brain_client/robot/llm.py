@@ -75,11 +75,21 @@ class Llm:
         return self._route.provider
 
 
+_governed: set[str] = set()  # the key names the keys file has held: those a clear there removes here
+
+
 def refresh_keys() -> None:
-    """The vendor keys as the keys file holds them now, so one saved in Settings after boot reaches the next
-    ``configure()``. A key cleared there stays in this process until restart."""
+    """The vendor keys as the keys file holds them now, so one saved or cleared in Settings after boot
+    reaches the next ``configure()``. A key the file never held — passed as environment, as the public
+    demo does — is left alone."""
     fresh = parse_key_value_env(keys_env_path())
-    os.environ.update({name: fresh[name].strip() for name in KEY_ENVS if fresh.get(name, "").strip()})
+    for name in KEY_ENVS:
+        value = fresh.get(name, "").strip()
+        if value:
+            os.environ[name] = value
+            _governed.add(name)
+        elif name in _governed:
+            os.environ.pop(name, None)
 
 
 def _jpeg(b64: str) -> bytes:
