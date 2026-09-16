@@ -3,7 +3,7 @@
 <package format="3">
   <name>cloud_clients</name>
   <version>0.1.0</version>
-  <description>Innate cloud client libraries: auth, proxy, and training.</description>
+  <description>Innate cloud client libraries: auth, proxy, LLM vendors, and training.</description>
   <maintainer email="eng@innate.bot">Innate Engineering</maintainer>
   <license>Apache-2.0</license>
 

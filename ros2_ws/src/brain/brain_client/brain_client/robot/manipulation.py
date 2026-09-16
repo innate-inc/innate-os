@@ -155,7 +155,7 @@ class Manipulation:
 
     def __init__(self, node: Node, logger, lazy: bool = False):
         """``lazy`` defers the state feeds until :meth:`start`."""
-        self.node = rclpy.create_node(f"{node.get_name()}_manipulation_interface")
+        self.node = rclpy.create_node(f"{node.get_name()}_manipulation_interface", start_parameter_services=False)
         self.logger = logger
         self.safety = Safety(logger)
         # Spins only while a skill is active; parked between skills to keep

@@ -65,6 +65,7 @@
  * @property {string} title  Section h2.
  * @property {string} [note]  Text above the section card.
  * @property {Knob[]} knobs
+ * @property {boolean} [keys]  Render the API-keys control (backed by /keys.json, no knobs) in place of a knob card.
  */
 
 /**
@@ -76,6 +77,8 @@
  * @property {boolean} [hasSpeakerVolume]  Inject the live speaker-volume control.
  * @property {PageSection[]} sections
  */
+
+import { MODEL_OPTIONS } from "../models.js";
 
 const P = "ros__parameters";
 
@@ -95,6 +98,16 @@ const STT_BACKEND_OPTIONS = [
   { value: "elevenlabs_batch", label: "ElevenLabs Scribe (batch)" },
   { value: "gemini", label: "Gemini (batch)" },
   { value: "elevenlabs", label: "ElevenLabs Scribe (realtime)" },
+];
+
+const THINKING_OPTIONS = [
+  { value: "", label: "Model default" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
+  { value: "max", label: "Max" },
 ];
 
 // The robot's OS ships on Etc/UTC, so the agent's clock has to be told where the
@@ -121,26 +134,99 @@ const VAD_ENGINE_OPTIONS = [
 /** @type {SettingsPage[]} */
 export const SETTINGS_PAGES = [
   {
+    icon: "brain.svg",
+    title: "Agent",
+    summary: "The model it thinks with, how it hears and speaks, what it sees",
+    note: "The agent loop that runs on the robot: its model, its ears and voice, and how often it looks around.",
+    sections: [
+      {
+        title: "Model",
+        note: "One model thinks for the agent; a skill that needs a model of its own names it in its code. Pick Custom… to type any vendor:name — openai-chat:<name> reaches a server on your network, set under Custom model.",
+        knobs: [
+          { path: ["brain_client_node", P, "llm_model"], label: "Model", default: "google:gemini-3.6-flash", type: "string", doc: "vendor:name — google, anthropic and openai reach the vendor through the Innate proxy or your own key; openai-chat is any OpenAI-compatible server (vLLM, Ollama, NIM).", options: MODEL_OPTIONS, customPlaceholder: "openai-chat:model-name", live: "/brain_client_node" },
+          { path: ["brain_client_node", P, "llm_thinking"], label: "Brain thinking", default: "minimal", type: "string", doc: "How long the model reasons before each reply. A level the model lacks rounds to its nearest; Model default lets the vendor choose.", options: THINKING_OPTIONS, live: "/brain_client_node" },
+          { path: ["brain_client_node", P, "llm_base_url"], label: "Server URL", default: "", type: "string", doc: "For an openai-chat model: the server's .../v1 root on your network. A key, if it needs one, is LLM_API_KEY in .env. Ignored for the vendors' own APIs.", subsection: "Custom model", live: "/brain_client_node" },
+          { path: ["brain_client_node", P, "llm_extra_body"], label: "Extra request fields", default: "", type: "string", doc: "A JSON object merged into every request for a server's own knobs, e.g. {\"chat_template_kwargs\": {\"enable_thinking\": false}}. Leave empty unless the server asks for one.", subsection: "Custom model", live: "/brain_client_node" },
+        ],
+      },
+      {
+        title: "Keys",
+        note: "Each vendor's API key — and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills — written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is used by the next model switch or skill call, no restart needed. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
+        keys: true,
+        knobs: [],
+      },
+      {
+        title: "Hearing",
+        note: "Which service turns the microphone into text. The backend picks which model knob applies.",
+        knobs: [
+          { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone" },
+          { path: ["input_manager_node", P, "stt_language"], label: "Language", default: "en", type: "string", doc: "Transcription language code" },
+          { path: ["input_manager_node", P, "elevenlabs_stt_model"], label: "Scribe realtime model", default: "scribe_v2_realtime", type: "string", doc: "ElevenLabs model for the elevenlabs (realtime) backend" },
+          { path: ["input_manager_node", P, "elevenlabs_batch_stt_model"], label: "Scribe batch model", default: "scribe_v2", type: "string", doc: "ElevenLabs model for the elevenlabs_batch backend" },
+          { path: ["input_manager_node", P, "gemini_stt_model"], label: "Gemini STT model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model for the gemini backend" },
+        ],
+      },
+      {
+        title: "Voice detection",
+        note: "The local detector that decides when someone is speaking and when they have finished, ahead of every backend.",
+        knobs: [
+          { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend" },
+          { path: ["input_manager_node", P, "stt_vad_threshold"], label: "VAD threshold", default: 0.2, type: "float", doc: "Lower is more sensitive to speech (silero engine)" },
+          { path: ["input_manager_node", P, "stt_energy_threshold"], label: "Energy threshold", default: 0.01, type: "float", doc: "RMS that counts as speech (energy engine only)" },
+          { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.5, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)" },
+          { path: ["input_manager_node", P, "stt_agc_max_db"], label: "Mic gain ceiling", default: 24, type: "float", unit: "dB", doc: "Software AGC max boost toward -6 dBFS peak; 0 disables" },
+          { path: ["input_manager_node", P, "stt_filter_background_audio"], label: "Filter background", default: true, type: "bool", doc: "Scribe realtime: server-side gate against nearby conversations and ambient noise" },
+        ],
+      },
+      {
+        title: "Speaking",
+        note: "Saving swaps the voice on the next thing the robot says — a clip already playing finishes in the old one.",
+        knobs: [
+          // `/**` in the file so a restart reaches every node that declares it, but the
+          // live push goes to brain_client_node alone — it owns the only TTS that speaks.
+          { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },
+        ],
+      },
+      {
+        title: "Looking",
+        note: "What the agent sees each turn and how often it takes a look. The camera figures ground a pointed pixel to a floor target, so they follow the hardware, not taste; supervision is the slower rate used while a skill is already running.",
+        knobs: [
+          { path: ["brain_client_node", P, "vertical_fov"], label: "Camera vertical FOV", default: 80, type: "float", unit: "°", doc: "Camera vertical field of view", subsection: "What it sees" },
+          { path: ["brain_client_node", P, "x_cam"], label: "Camera forward offset", default: 0.0197, type: "float", unit: "m", doc: "Camera forward offset from base_link", subsection: "What it sees" },
+          { path: ["brain_client_node", P, "height_cam"], label: "Camera height", default: 0.19663, type: "float", unit: "m", doc: "Camera height above the floor", subsection: "What it sees" },
+          { path: ["brain_client_node", P, "scan_stale_after_sec"], label: "Scan stale after", default: 10, type: "float", unit: "s", doc: "Seconds without a lidar scan before flagging stale", subsection: "What it sees" },
+          { path: ["brain_client_node", P, "send_arm_camera_image"], label: "Send arm-camera image", default: true, type: "bool", doc: "Also send the arm wrist camera image to the model", subsection: "What it sees" },
+          { path: ["brain_client_node", P, "idle_turn_interval"], label: "Idle interval", default: 3, type: "float", unit: "s", doc: "Seconds between looks when no skill is running", subsection: "How often" },
+          { path: ["brain_client_node", P, "supervision_turn_interval"], label: "Supervision interval", default: 5, type: "float", unit: "s", doc: "Seconds between looks while a skill runs", subsection: "How often" },
+        ],
+      },
+      {
+        title: "Clock",
+        note: "The agent reads the local date and time on every turn, so it can tell morning from midnight and answer when asked. Set where the ROBOT is — not where you are, which differs when you teleoperate.",
+        knobs: [
+          { path: ["brain_client_node", P, "timezone"], label: "Time zone", default: "", type: "string", doc: "IANA time zone for the clock the agent sees. \"Robot system setting\" follows the robot's OS, which ships on UTC — pick a zone here unless you have set one over SSH. Any other IANA name works in Custom.", options: TIMEZONE_OPTIONS, customPlaceholder: "e.g. Australia/Sydney", live: "/brain_client_node" },
+        ],
+      },
+      {
+        title: "Diagnostics",
+        knobs: [
+          { path: ["brain_client_node", P, "log_everything"], label: "Verbose logging", default: true, type: "bool", doc: "Log every turn's full input" },
+        ],
+      },
+    ],
+  },
+  {
     hasSpeakerVolume: true,
     icon: "volume.svg",
     title: "Sound",
-    summary: "Speaker volume, robot voice, and the sound it makes driving",
-    note: "Adjust how loud the robot speaks, choose its voice, and pick what it sounds like on the move.",
+    summary: "Speaker volume and the sound it makes driving",
+    note: "Adjust how loud the robot is and pick what it sounds like on the move. Its voice is under Agent.",
     sections: [
       {
         title: "Driving sound",
         note: "The costume the acceleration wears. Swapping is live and gain-ramped so it cannot click, but nothing is audible until the robot moves.",
         knobs: [
           { path: ["motor_sound", P, "motor_sound", "voice"], label: "Motor sound", default: "lip_trill", type: "string", doc: "What the robot sounds like as it drives. The list is read off the robot, so it holds whatever this build can actually play; a name it does not have falls back to the motor whine.", options: [], optionsFrom: { node: "/motor_sound", param: "motor_sound.voice_options" }, customPlaceholder: "Type a voice name", live: "/motor_sound" },
-        ],
-      },
-      {
-        title: "Robot voice",
-        note: "Saving swaps the voice on the next thing the robot says — a clip already playing finishes in the old one.",
-        knobs: [
-          // `/**` in the file so a restart reaches every node that declares it, but the
-          // live push goes to brain_client_node alone — it owns the only TTS that speaks.
-          { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },
         ],
       },
     ],
@@ -295,64 +381,6 @@ export const SETTINGS_PAGES = [
           { path: ["manipulation_server", P, "learned_base_speed_scale"], label: "Learned base speed", default: 1, type: "float", unit: "×", doc: "Base-speed scale for the learned policy (1.0 = full predicted speed)", subsection: "Execution" },
           { path: ["manipulation_server", P, "n_action_steps"], label: "Replan horizon", default: 0, type: "int", doc: "Replan horizon; 0 = auto (min(40, chunk_size))", subsection: "Policy" },
           { path: ["manipulation_server", P, "temporal_ensemble_coeff"], label: "Action smoothing", default: 0, type: "float", doc: "ACT temporal-ensemble coefficient; 0 = disabled (default). 0.01 is a good value to enable it", subsection: "Policy" },
-        ],
-      },
-    ],
-  },
-  {
-    icon: "cloud.svg",
-    title: "Brain client",
-    summary: "What the brain sees, how often it looks, and its models",
-    note: "Tune the agent loop that runs on the robot, plus realtime speech model selection.",
-    sections: [
-      {
-        title: "Sensing",
-        note: "What the brain sees each turn. The camera figures ground a pointed pixel to a floor target, so they follow the hardware, not taste.",
-        knobs: [
-          { path: ["brain_client_node", P, "vertical_fov"], label: "Camera vertical FOV", default: 80, type: "float", unit: "°", doc: "Camera vertical field of view" },
-          { path: ["brain_client_node", P, "x_cam"], label: "Camera forward offset", default: 0.0197, type: "float", unit: "m", doc: "Camera forward offset from base_link" },
-          { path: ["brain_client_node", P, "height_cam"], label: "Camera height", default: 0.19663, type: "float", unit: "m", doc: "Camera height above the floor" },
-          { path: ["brain_client_node", P, "scan_stale_after_sec"], label: "Scan stale after", default: 10, type: "float", unit: "s", doc: "Seconds without a lidar scan before flagging stale" },
-          { path: ["brain_client_node", P, "send_arm_camera_image"], label: "Send arm-camera image", default: true, type: "bool", doc: "Also send the arm wrist camera image to the model" },
-        ],
-      },
-      {
-        title: "Clock",
-        note: "The agent reads the local date and time on every turn, so it can tell morning from midnight and answer when asked. Set where the ROBOT is — not where you are, which differs when you teleoperate.",
-        knobs: [
-          { path: ["brain_client_node", P, "timezone"], label: "Time zone", default: "", type: "string", doc: "IANA time zone for the clock the agent sees. \"Robot system setting\" follows the robot's OS, which ships on UTC — pick a zone here unless you have set one over SSH. Any other IANA name works in Custom.", options: TIMEZONE_OPTIONS, customPlaceholder: "e.g. Australia/Sydney", live: "/brain_client_node" },
-        ],
-      },
-      {
-        title: "Turn cadence",
-        note: "How often the brain takes a look. Supervision is the slower rate used while a skill is already running.",
-        knobs: [
-          { path: ["brain_client_node", P, "idle_turn_interval"], label: "Idle interval", default: 3, type: "float", unit: "s", doc: "Seconds between looks when no skill is running" },
-          { path: ["brain_client_node", P, "supervision_turn_interval"], label: "Supervision interval", default: 5, type: "float", unit: "s", doc: "Seconds between looks while a skill runs" },
-        ],
-      },
-      {
-        title: "AI models",
-        note: "The brain and the speech-to-text path use separate models. The transcribe backend picks which STT model knob applies.",
-        knobs: [
-          { path: ["brain_client_node", P, "gemini_model"], label: "Brain model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model powering the local brain", subsection: "Brain" },
-          { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "elevenlabs_batch_stt_model"], label: "Scribe batch model", default: "scribe_v2", type: "string", doc: "ElevenLabs model for the elevenlabs_batch backend", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "gemini_stt_model"], label: "Gemini STT model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model for the gemini backend", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "elevenlabs_stt_model"], label: "Scribe realtime model", default: "scribe_v2_realtime", type: "string", doc: "ElevenLabs model for the elevenlabs (realtime) backend", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_language"], label: "Language", default: "en", type: "string", doc: "Transcription language code", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_vad_threshold"], label: "VAD threshold", default: 0.2, type: "float", doc: "Lower is more sensitive to speech (silero engine)", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_energy_threshold"], label: "Energy threshold", default: 0.01, type: "float", doc: "RMS that counts as speech (energy engine only)", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.5, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_agc_max_db"], label: "Mic gain ceiling", default: 24, type: "float", unit: "dB", doc: "Software AGC max boost toward -6 dBFS peak; 0 disables", subsection: "Speech to text" },
-          { path: ["input_manager_node", P, "stt_filter_background_audio"], label: "Filter background", default: true, type: "bool", doc: "Scribe realtime: server-side gate against nearby conversations and ambient noise", subsection: "Speech to text" },
-        ],
-      },
-      {
-        title: "Diagnostics",
-        knobs: [
-          { path: ["brain_client_node", P, "log_everything"], label: "Verbose logging", default: true, type: "bool", doc: "Log every turn's full input" },
         ],
       },
     ],

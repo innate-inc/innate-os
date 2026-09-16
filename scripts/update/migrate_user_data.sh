@@ -384,6 +384,21 @@ _migrate_stt_settings() {
     done
 }
 
+# The brain's model became provider-neutral: gemini_model → llm_model
+# ("google:" + the old value), gemini_thinking_level → llm_thinking.
+_migrate_llm_settings() {
+    local settings="$1/config/settings.yaml"
+    [ -f "$settings" ] || return 0
+    if grep -qE '^\s*gemini_model:' "$settings"; then
+        sed -i -E 's|^(\s*)gemini_model:\s*"?([^"#[:space:]]+)"?\s*(#.*)?$|\1llm_model: "google:\2"  # was gemini_model|' "$settings"
+        _mig_log "settings.yaml: gemini_model renamed to llm_model (google:<model>)."
+    fi
+    if grep -qE '^\s*gemini_thinking_level:' "$settings"; then
+        sed -i -E 's|^(\s*)gemini_thinking_level:|\1llm_thinking:|' "$settings"
+        _mig_log "settings.yaml: gemini_thinking_level renamed to llm_thinking."
+    fi
+}
+
 run_user_data_migrations() {
     local repo="${1:?run_user_data_migrations: repo dir required}"
     _migrate_dir_into_workspace "$repo" agents     custom_agents
@@ -396,6 +411,7 @@ run_user_data_migrations() {
     _migrate_primitives_models  "$repo"
     _migrate_nav_state          "$repo"
     _migrate_stt_settings       "$repo"
+    _migrate_llm_settings       "$repo"
 }
 
 # Execute when run directly (not when sourced).

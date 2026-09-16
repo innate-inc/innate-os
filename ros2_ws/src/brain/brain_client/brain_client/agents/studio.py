@@ -230,6 +230,7 @@ def studio_fields(agent: Agent) -> dict[str, str | bool]:
     return {
         "listen": MICRO_NAME in agent.input_names(),
         "gaze": agent.uses_gaze(),
+        "model": agent.model or "",
         "path": str(path) if path else "",
         "editable": agent.source == "user" and code is not None and conforms(code),
     }

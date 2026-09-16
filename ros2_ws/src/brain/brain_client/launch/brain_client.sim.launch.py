@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from mars_bringup.config_loader import get_env, load_env_file, settings_params
+from mars_bringup.config_loader import get_env, load_env_file, settings_node_params, settings_params
 
 from brain_client.common.logging import get_logging_env_vars
 
@@ -46,10 +46,15 @@ def generate_launch_description():
         default_value="True",
         description="Flag to enable full brain turn logging",
     )
-    gemini_model_arg = DeclareLaunchArgument(
-        "gemini_model",
-        default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
-        description="Gemini model powering the local brain",
+    llm_model_arg = DeclareLaunchArgument(
+        "llm_model",
+        default_value=get_env("LLM_MODEL", get_env("GEMINI_MODEL", "google:gemini-3.6-flash")),
+        description="Model powering the local brain, as provider:name (google | openai | anthropic | openai-chat)",
+    )
+    llm_base_url_arg = DeclareLaunchArgument(
+        "llm_base_url",
+        default_value=get_env("LLM_BASE_URL", ""),
+        description="OpenAI-compatible server for openai-chat models (a LAN vLLM, Ollama, NIM); empty = the vendor's API",
     )
 
     brain_client_node = Node(
@@ -64,7 +69,8 @@ def generate_launch_description():
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
-                "gemini_model": LaunchConfiguration("gemini_model"),
+                "llm_model": LaunchConfiguration("llm_model"),
+                "llm_base_url": LaunchConfiguration("llm_base_url"),
                 # Sim camera mount (the config.py defaults are the hardware's).
                 "x_cam": 0.0,
                 "height_cam": 0.2,
@@ -84,18 +90,24 @@ def generate_launch_description():
             simulator_mode_arg,
             current_nav_mode_topic_arg,
             log_everything_arg,
-            gemini_model_arg,
+            llm_model_arg,
+            llm_base_url_arg,
             brain_client_node,
             Node(
                 package="brain_client",
                 executable="skills_server.py",
                 name="skills_action_server",
                 output="screen",
+                # Skills ask the same model the brain runs on unless one names its own:
+                # the launch defaults, then settings.yaml's brain section, as for the brain.
                 parameters=[
                     {
                         "image_topic": LaunchConfiguration("image_topic"),
                         "map_topic": LaunchConfiguration("map_topic"),
-                    }
+                        "llm_model": LaunchConfiguration("llm_model"),
+                        "llm_base_url": LaunchConfiguration("llm_base_url"),
+                    },
+                    settings_node_params("brain_client_node", "llm_model", "llm_base_url", "llm_extra_body"),
                 ],
             ),
             # Backend for the webapp's /armsdk page, same as on the robot. The

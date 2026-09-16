@@ -51,6 +51,7 @@ from config import (
     PUBLISHED_PORT_ENV,
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
+    SERVER_BACKEND,
     SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_DERIVED,
     SIM_DIR,
@@ -3145,8 +3146,10 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == SERVER_BACKEND:
+        llm_level, llm_label = "healthy", "llm server"
     else:
-        llm_level, llm_label = "healthy", "gemini key"
+        llm_level, llm_label = "healthy", "vendor key"
 
     if all(level == "healthy" for level in (world_level, sim_level, transport_level, brain_level, llm_level)):
         stack_mood = ("healthy", "LIVE")

@@ -15,6 +15,7 @@
 import { ROBOT_INFO_TOPIC, SET_VOLUME_SERVICE, SHUTDOWN_SERVICE } from "../constants.js";
 import { ros } from "../rosClient.js";
 import { SETTINGS_PAGES } from "./catalog.js";
+import { modelReach } from "../models.js";
 import { GROUP_EXPAND_MS, SETTINGS_STYLE } from "./styles.js";
 
 // Assigned per mount by mount() at the bottom. The volume control uses the shared
@@ -523,6 +524,21 @@ function buildSettingsPage() {
     }
 
     for (const pageSection of settingsPage.sections) {
+      if (pageSection.keys) {
+        const keys = buildKeysSection(pageSection, accordion);
+        groupInner.appendChild(keys.section);
+        for (const keyRow of keys.rows) {
+          addSearchTarget({
+            label: keyRow.label,
+            description: keyRow.description,
+            row: keyRow.row,
+            group: ui,
+            breadcrumb: `${settingsPage.title} · ${pageSection.title}`,
+            extraSearchSources: [pageSearchSource],
+          });
+        }
+        continue;
+      }
       const sectionStart = entries.length;
       groupInner.appendChild(buildPageSection(pageSection));
       const sectionEntries = entries.slice(sectionStart);
@@ -610,6 +626,171 @@ function buildPageSection(pageSection) {
   }
   section.appendChild(card);
   return section;
+}
+
+// ── API keys ──────────────────────────────────────────────────────────
+// Keys never pass through settings.yaml (a ROS parameter is readable by every node and by
+// this page); the proxy writes them to .env and reports only set/not-set. The reachability
+// rule below mirrors innate_llm/configure.py — change one and change the other.
+
+const KEY_ROWS = [
+  { env: "GEMINI_API_KEY", label: "Google key", doc: "Gemini models with your own Google AI key. Not needed with an Innate service key." },
+  { env: "OPENAI_API_KEY", label: "OpenAI key", doc: "GPT models with your own OpenAI key. Not needed with an Innate service key." },
+  { env: "ANTHROPIC_API_KEY", label: "Anthropic key", doc: "Claude models. Needed even with an Innate service key — the proxy does not serve Anthropic yet." },
+  { env: "ANTHROPIC_WORKSPACE_ID", label: "Anthropic workspace", secret: false, doc: "Only for a key created for the organization rather than inside a workspace: the workspace to bill. Without it Anthropic refuses every request with a 400; a workspace-scoped key needs nothing here. Not a secret, so it is shown in full." },
+  { env: "LLM_API_KEY", label: "Local server key", doc: "Only if the OpenAI-compatible server under Custom model wants one; most on a home network do not." },
+];
+/**
+ * The Keys section: set/not-set per key with a paste field that POSTs straight to
+ * /keys.json (no Save-all round trip — a key is not a settings.yaml override), plus the
+ * reachability line under the Model picker, re-evaluated as the picker changes.
+ * @param {import("./catalog.js").PageSection} pageSection
+ * @param {HTMLElement} host  Where knob input/change events bubble to.
+ * @returns {{section: HTMLElement, rows: {row: HTMLElement, label: string, description: string}[]}}
+ */
+function buildKeysSection(pageSection, host) {
+  const section = textEl("section", "set-page-section");
+  section.appendChild(textEl("h2", "set-section-title", pageSection.title));
+  if (pageSection.note) section.appendChild(textEl("p", "set-section-note", pageSection.note));
+  const readonlyNote = textEl("p", "set-section-note");
+  readonlyNote.style.display = "none";
+  section.appendChild(readonlyNote);
+  const card = textEl("div", "set-card");
+  section.appendChild(card);
+
+  /** @type {any} */
+  let status = { keys: {}, service_key: false, readonly: true, loaded: false };
+  /** @type {(() => void)[]} */
+  const renderers = [];
+  /** @type {{row: HTMLElement, label: string, description: string}[]} */
+  const rows = [];
+
+  const addRow = (/** @type {string} */ label, /** @type {string} */ doc, /** @type {HTMLElement[]} */ controls) => {
+    const row = textEl("div", "set-row");
+    const controlContainer = textEl("div", "set-ctl");
+    const controlGroup = textEl("div", "set-ctl-main is-wide");
+    controlGroup.append(...controls);
+    controlContainer.appendChild(controlGroup);
+    row.append(buildRowText(label, doc), controlContainer);
+    card.appendChild(row);
+    rows.push({ row, label, description: doc });
+    return row;
+  };
+
+  const serviceState = textEl("span", "set-status muted", "…");
+  addRow(
+    "Innate service key",
+    "Provisioned with the robot: reaches Gemini and OpenAI models through the Innate proxy and pays for the voice. Not editable here.",
+    [serviceState],
+  );
+  renderers.push(() => {
+    serviceState.textContent = status.failed ? "—" : status.service_key ? "Set" : "Not set";
+    serviceState.className = "set-status " + (status.service_key ? "ok" : "muted");
+  });
+
+  const load = async () => {
+    try {
+      const res = await fetch("/keys.json", { cache: "no-store" });
+      // A robot whose webapp predates this page has no such route, and its SPA fallback
+      // answers 200 with index.html — so the parse, not the status, is what catches that.
+      status = { ...(await res.json()), loaded: true };
+    } catch {
+      status = { keys: {}, service_key: false, readonly: true, loaded: true, failed: true };
+    }
+    readonlyNote.textContent = status.failed
+      ? "Could not read key status from the robot. If it is running a build older than this page, restart it (innate restart) and reload."
+      : status.readonly
+        ? "Keys cannot be changed from this demo."
+        : "";
+    readonlyNote.style.display = readonlyNote.textContent ? "" : "none";
+    for (const render of renderers) render();
+    renderReach();
+  };
+
+  for (const spec of KEY_ROWS) {
+    const state = textEl("span", "set-status muted", "…");
+    const line = textEl("div", "set-key-ctl");
+    const input = inputEl(spec.secret === false ? "text" : "password", "set-text");
+    input.placeholder = spec.secret === false ? "wrkspc_…" : "Paste a key";
+    input.autocomplete = "off";
+    const note = textEl("span", "set-status muted", "");
+    const submit = async (/** @type {any} */ payload) => {
+      saveBtnKey.disabled = clearBtn.disabled = true;
+      note.className = "set-status muted";
+      note.textContent = "Saving…";
+      try {
+        const res = await fetch("/keys.json", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json();
+        note.className = "set-status " + (body.ok ? "ok" : "err");
+        note.textContent = body.message || (body.ok ? "Saved" : "Could not save");
+        if (body.ok) {
+          input.value = "";
+          await load();
+        }
+      } catch (err) {
+        note.className = "set-status err";
+        note.textContent = `Could not reach the robot: ${err}`;
+      } finally {
+        saveBtnKey.disabled = clearBtn.disabled = false;
+        for (const render of renderers) render();
+      }
+    };
+    const saveBtnKey = buttonEl("set-key-btn", "Save", (event) => {
+      event.stopPropagation();
+      if (input.value.trim()) submit({ sets: { [spec.env]: input.value } });
+      else input.focus();
+    });
+    const clearBtn = buttonEl("set-key-btn", "Clear", (event) => {
+      event.stopPropagation();
+      submit({ clears: [spec.env] });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") saveBtnKey.click();
+    });
+    line.append(input, saveBtnKey, clearBtn);
+    addRow(spec.label, spec.doc, [state, line, note]);
+    renderers.push(() => {
+      const key = status.keys?.[spec.env] || { set: false, hint: "", source: "file" };
+      const fromEnv = key.set && key.source === "environment";
+      state.textContent = status.failed ? "—" : key.set ? `Set ${key.hint}${fromEnv ? " (from the environment)" : ""}` : "Not set";
+      state.className = "set-status " + (key.set ? "ok" : "muted");
+      line.style.display = status.readonly ? "none" : "";
+      input.disabled = status.readonly;
+      saveBtnKey.disabled = status.readonly;
+      // A key the robot was started with is not in .env; clearing the file cannot remove it.
+      clearBtn.disabled = status.readonly || !key.set || fromEnv;
+    });
+  }
+
+  // The reachability line lives under the Model picker, which is built before this section.
+  const modelEntry = entries.find((e) => e.knob.path[e.knob.path.length - 1] === "llm_model");
+  const urlEntry = entries.find((e) => e.knob.path[e.knob.path.length - 1] === "llm_base_url");
+  const modelStatus = textEl("span", "set-status muted set-model-status", "");
+  modelEntry?.row.querySelector(".set-ctl-main")?.appendChild(modelStatus);
+  const renderReach = () => {
+    if (!modelEntry || !status.loaded || status.failed) return;
+    const reach = modelReach(String(modelEntry.value || ""), String(urlEntry?.value || "").trim(), status);
+    modelStatus.textContent = reach.text;
+    modelStatus.className = "set-status set-model-status " + (reach.ok ? "muted" : "warn");
+  };
+  for (const entry of [modelEntry, urlEntry]) {
+    if (!entry) continue;
+    const render = entry.render;
+    entry.render = () => {
+      render();
+      renderReach();
+    };
+  }
+  host.addEventListener("input", renderReach);
+  host.addEventListener("change", renderReach);
+
+  load();
+  return { section, rows };
 }
 
 /**
@@ -840,7 +1021,10 @@ function buildKnobControl(/** @type {HTMLElement} */ controlContainer, /** @type
     const fillSelect = () => {
       select.replaceChildren();
       for (const option of options) {
-        select.add(new Option(option.label, option.value));
+        // The stock value is named in the list itself: "Restore default" only appears
+        // once a row is already overridden, which is too late to answer "what shipped?".
+        const isDefault = String(option.value) === String(knob.default);
+        select.add(new Option(isDefault ? `${option.label} (default)` : option.label, option.value));
       }
       // A permanent "Custom…" choice that reveals a free-text field for any off-list value
       // (e.g. a voice id pasted from Cartesia's library, or one set over SSH).

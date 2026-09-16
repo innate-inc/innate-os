@@ -11558,6 +11558,42 @@ select.skill-input {
 .agent-studio-field .microlabel { color: var(--muted); }
 .agent-studio-field textarea { min-height: 168px; max-height: 40vh; resize: vertical; }
 .agent-studio-field textarea:read-only { resize: none; color: #c8c8d0; background: transparent; }
+/* Model: a button that opens a grouped listbox, in the flow like the skill chooser below.
+   It sits above the tabs, with the agent rather than inside the agent's own fields. */
+.agent-studio-model { position: relative; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 2px; }
+.agent-studio-model > .microlabel { color: var(--muted); }
+.agent-studio-model-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  margin: 0; padding: 9px 12px; font-size: 13px; text-align: left;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px; background: rgb(10 10 14 / 55%); color: inherit;
+}
+.agent-studio-model-btn:hover:not(:disabled) { border-color: rgb(121 101 231 / 55%); }
+.agent-studio-model-btn:disabled { opacity: .6; }
+.agent-studio-model-menu {
+  margin-top: 6px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 14px; background: rgb(10 10 14 / 92%);
+  max-height: 46vh; overflow-y: auto;
+}
+.agent-studio-model-group {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.agent-studio-model-group i { font-style: normal; letter-spacing: 0; text-transform: none; color: #e0a06a; }
+.agent-studio-model-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  margin: 0; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.agent-studio-model-row:hover, .agent-studio-model-row:focus-visible { background: rgb(255 255 255 / 7%); outline: none; }
+.agent-studio-model-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-studio-model-row-text b { font-weight: 500; }
+.agent-studio-model-row-text i { font-style: normal; font-size: 11px; color: #e0a06a; }
+.agent-studio-model-row.is-unreachable .agent-studio-model-row-text b { opacity: .55; }
+.agent-studio-model-row-tick { margin-left: auto; color: #7965e7; }
+.agent-studio-model-more { display: block; padding: 9px 10px 4px; font-size: 12px; color: #9a8cf0; text-decoration: none; }
+.agent-studio-model-more:hover { text-decoration: underline; }
+.agent-studio-model-note { margin: 6px 2px 0; font-size: 11px; color: #e0a06a; }
+.agent-studio-model-busy { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); }
 .agent-studio-add { margin-top: 8px; }
 /* In the flow rather than floating over the panel, which is only as tall as its tab. */
 .agent-studio-chooser {

@@ -29,6 +29,7 @@ from brain_messages.srv import (
     SaveAgent,
 )
 from geometry_msgs.msg import Twist
+from innate_llm import configure
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -48,7 +49,6 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -114,7 +114,9 @@ class BrainClientNode(Node):
         self._tts_handler = self._init_tts()
 
         # --- helper node for synchronous service calls (not spun by the executor) ---
-        self._service_call_node = rclpy.create_node("brain_client_service_caller")
+        # Helper nodes never start parameter services: the launch renames every node in the
+        # process to brain_client_node, and a sibling answering /set_parameters wins the race.
+        self._service_call_node = rclpy.create_node("brain_client_service_caller", start_parameter_services=False)
         self._reload_primitives_client = self._service_call_node.create_client(Trigger, "/brain/reload_primitives")
         self._reload_skills_client = self._service_call_node.create_client(ReloadSkillsAgents, "/brain/reload_skills")
 
@@ -175,6 +177,18 @@ class BrainClientNode(Node):
                 return SetParametersResult(
                     successful=False, reason=f"unknown timezone '{param.value}' (expected an IANA name, e.g. UTC)"
                 )
+            if param.name == "llm_model":
+                ok, detail = self.brain.use_model(str(param.value).strip(), agent=False)
+                if ok:
+                    self._follow_brain_model()
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
+            if param.name in ("llm_thinking", "llm_base_url", "llm_extra_body"):
+                ok, detail = self.brain.use_llm_setting(param.name, str(param.value).strip())
+                if ok:
+                    self._follow_brain_model()
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()
@@ -184,6 +198,14 @@ class BrainClientNode(Node):
                 return SetParametersResult(successful=False, reason="TTS is unavailable (no proxy)")
             self._tts_handler.set_voice(voice_id)
         return SetParametersResult(successful=True)
+
+    def _follow_brain_model(self) -> None:
+        """Recall rides the brain's model unless memory_llm_model names its own; without this
+        a live switch would leave searches answering from the model the robot booted on."""
+        llm = self.brain.llm
+        if self.memory_search is None or self.config.memory_llm_model or llm is None or llm.provider is None:
+            return
+        self.memory_search.use_provider(llm.provider)
 
     def _build_collaborators(self) -> None:
         cfg, state = self.config, self.state
@@ -202,10 +224,28 @@ class BrainClientNode(Node):
         self.memory_store = MemoryStore(
             get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
         )
-        rest = pick_rest(self._proxy)
+        llm = configure(
+            cfg.llm_model,
+            self._proxy,
+            base_url=cfg.llm_base_url,
+            extra_body=cfg.llm_extra_body,
+            logger=self.get_logger(),
+        )
+        self.get_logger().info(f"[Brain] model {llm.spec} via {llm.backend}")
+        recall = (
+            configure(
+                cfg.memory_llm_model,
+                self._proxy,
+                base_url=cfg.llm_base_url,
+                extra_body=cfg.llm_extra_body,
+                logger=self.get_logger(),
+            )
+            if cfg.memory_llm_model
+            else llm
+        )
         self.memory_search = (
-            MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
-            if rest is not None
+            MemorySearch(self.memory_store, recall.provider, logger=self.get_logger())
+            if recall.provider is not None
             else None
         )
         self.memory_recorder = MemoryRecorder(
@@ -247,6 +287,7 @@ class BrainClientNode(Node):
             roster=self.roster,
             chat=self.chat,
             gaze=self.gaze,
+            llm=llm,
             proxy=self._proxy,
             scan_health=self.scan_health,
             battery=self.battery,
@@ -331,6 +372,13 @@ class BrainClientNode(Node):
         self.state.active_skill_ids = (
             list(self.state.current_directive.skill_ids()) if self.state.current_directive else []
         )
+        # The boot agent's own model, if it names one: the loop has not started yet, so this
+        # is the swap at its cheapest. A model it cannot reach leaves the robot's setting in
+        # place and says so, rather than booting a brain that cannot think.
+        if self.state.current_directive is not None:
+            ok, detail = self.brain.use_model(self.state.current_directive.model, agent=True)
+            if not ok:
+                self.get_logger().error(f"[Brain] {self.state.current_directive.id}: {detail}")
         self.gaze.update()
         self.reload.start_watcher()
 
@@ -708,6 +756,10 @@ class BrainClientNode(Node):
                     "skills": self.state.registry.metadata,
                     "active_skills": self.roster.active_skill_ids(),
                     "brain_active": self.state.is_brain_active,
+                    # What an agent that names no model of its own thinks with, and what
+                    # the brain is on right now (they differ while an agent names one).
+                    "default_model": self.config.llm_model,
+                    "current_model": self.brain.model,
                     # Agents whose module failed to import or whose class failed
                     # to build — not selectable, shown disabled with the error.
                     # In the meta dict (not the agent list) so clients that

@@ -22,6 +22,7 @@
     "workspace",
     "ros2_ws/src/brain/brain_client",
     "ros2_ws/src/cloud/clients/proxy-client",
+    "ros2_ws/src/cloud/clients/innate-llm",
     "ros2_ws/install/brain_client/local/lib/python3.10/dist-packages",
     "ros2_ws/install/brain_messages/local/lib/python3.10/dist-packages",
     "ros2_ws/install/innate_cloud_msgs/local/lib/python3.10/dist-packages",

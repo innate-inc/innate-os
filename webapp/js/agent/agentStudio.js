@@ -12,6 +12,7 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
+import { fetchKeyStatus, modelLabel, modelReach, modelVendor, panelOptions, VENDOR_LABEL } from "../models.js";
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
@@ -129,6 +130,7 @@ function write(store, key, value) {
 }
 
 /** @typedef {import("../teleop/agentState.js").AgentEntry} AgentEntry */
+/** @typedef {import("../teleop/agentState.js").AgentSnapshot} AgentSnapshot */
 /** @typedef {{ id: string, group: string, load_error: string }} SkillRow */
 /** What the form holds; `isNew` until the brain has the file. */
 /** @typedef {{ id: string, name: string, prompt: string, skills: string[], listen: boolean, gaze: boolean, isNew: boolean }} Draft */
@@ -208,6 +210,42 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="5" aria-label="Agent prompt" placeholder="You are MARS, a friendly robot assistant…"></textarea>';
   const promptText = /** @type {HTMLTextAreaElement} */ (promptField.querySelector("textarea"));
+  // The robot's model, not this agent's: picking one writes the llm_model setting, which
+  // the brain applies without a restart — so it works on innate agents the form cannot edit.
+  // The list is grouped by vendor; a model the robot has no key for stays visible and says
+  // so, since hiding it would make the robot look incapable of a vendor one paste away.
+  const modelField = document.createElement("div");
+  modelField.className = "agent-studio-model";
+  modelField.innerHTML =
+    '<span class="microlabel">Model</span>' +
+    '<button type="button" class="agent-studio-model-btn" aria-haspopup="listbox" aria-expanded="false"></button>' +
+    '<div class="agent-studio-model-menu" role="listbox" aria-label="Model" hidden></div>' +
+    '<p class="agent-studio-model-note"></p>';
+  const modelBtn = /** @type {HTMLButtonElement} */ (modelField.querySelector(".agent-studio-model-btn"));
+  const modelMenu = /** @type {HTMLElement} */ (modelField.querySelector(".agent-studio-model-menu"));
+  const modelNote = /** @type {HTMLElement} */ (modelField.querySelector(".agent-studio-model-note"));
+  let modelOpen = false;
+  let modelBusy = false;
+  let modelError = "";
+  /** @type {{keys?: Record<string, {set: boolean}>, service_key?: boolean, loaded?: boolean}} */
+  let keyStatus = { keys: {}, service_key: false, loaded: false };
+  void fetchKeyStatus().then((status) => {
+    keyStatus = status;
+    render(true);
+  });
+
+  modelBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    modelOpen = !modelOpen;
+    render(true);
+  });
+  modelMenu.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    modelOpen = false;
+    modelBtn.focus();
+    render(true);
+  });
+
   const mobileName = document.createElement("h2");
   mobileName.className = "agent-studio-mobile-name";
   const mobilePrompt = document.createElement("div");
@@ -296,7 +334,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
   panes.identity.append(mobilePrompt);
-  panelEl.append(mobileName, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
+  // The model sits with the agent, not inside Identity: it is the robot's, and it applies
+  // to whichever agent is running rather than being one of this agent's saved fields.
+  panelEl.append(mobileName, modelField, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
   head.append(toggle, headAction);
   dock.append(head, panelEl);
   root.append(dock);
@@ -1206,6 +1246,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       pane.hidden = id !== tab || (!inStory && !f);
       tabs[id].setAttribute("aria-selected", String(id === tab));
     }
+    renderModel(onStoryAgent, s, agent, f);
     listenInput.checked = !!f?.listen;
     gazeInput.checked = !!f?.gaze;
     listenInput.disabled = gazeInput.disabled = !canEdit;
@@ -1284,6 +1325,111 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
    * @param {boolean} inStory @param {any} r @param {AgentEntry | null} agent
    * @param {Draft | null} f @param {boolean} canEdit
    */
+  /**
+   * The model button and its menu. What it shows and writes is the ROBOT's model, not this
+   * agent's: an innate agent the form cannot edit still switches here. An agent that pins
+   * one in code outranks the setting, so the row reports that instead of offering a change.
+   * @param {boolean} onStoryAgent @param {AgentSnapshot} snapshot
+   * @param {AgentEntry | null} agent @param {Draft | null} f
+   */
+  function renderModel(onStoryAgent, snapshot, agent, f) {
+    // The intro's agent belongs to the story, which picked its model; a draft being created
+    // is not yet the agent running: no row for either.
+    modelField.hidden = onStoryAgent || !f || f.isNew || compact;
+    const pinned = agent?.model || "";
+    const current = pinned || snapshot.currentModel || snapshot.defaultModel;
+    modelBtn.disabled = modelBusy || !!pinned;
+    modelBtn.innerHTML =
+      `<span>${escapeText(modelLabel(current))}</span>` +
+      (modelBusy ? '<i class="agent-studio-model-busy">switching…</i>' : "");
+    modelBtn.setAttribute("aria-expanded", String(modelOpen));
+    modelMenu.hidden = !modelOpen;
+    const reach = current ? panelReach(current) : { ok: true, text: "" };
+    modelNote.textContent = modelError
+      ? modelError
+      : pinned
+        ? `${agent?.name} sets this model in its own file; change it there or in Settings.`
+        : keyStatus.loaded && !reach.ok
+          ? reach.text
+          : "";
+    modelNote.hidden = !modelNote.textContent;
+    if (modelOpen) renderModelMenu(current);
+  }
+
+  /**
+   * What the panel can say about reaching `spec` — nothing for a model it cannot judge: an
+   * OpenAI-compatible server, whose URL the panel does not know. The brain running it is the proof.
+   * @param {string} spec
+   */
+  function panelReach(spec) {
+    const vendor = modelVendor(spec);
+    if (vendor === "openai-chat" || vendor === null) return { ok: true, text: "", short: "" };
+    return modelReach(spec, "", keyStatus);
+  }
+
+  /** @param {string} current */
+  function renderModelMenu(current) {
+    modelMenu.replaceChildren();
+    let vendor = "";
+    for (const option of panelOptions(current)) {
+      const reach = panelReach(option.value);
+      if (option.vendor !== vendor) {
+        vendor = option.vendor;
+        // A missing key belongs to the vendor, not to each of its models.
+        const label = VENDOR_LABEL[/** @type {keyof typeof VENDOR_LABEL} */ (vendor)] || vendor;
+        const why = keyStatus.loaded && !reach.ok ? reach.short : "";
+        const head = document.createElement("div");
+        head.className = "agent-studio-model-group";
+        head.innerHTML = `<span>${escapeText(label)}</span>${why ? `<i>${escapeText(why)}</i>` : ""}`;
+        modelMenu.append(head);
+      }
+      modelMenu.append(modelRow(option.value, option.label, option.value === current, reach.ok || !keyStatus.loaded));
+    }
+    const more = document.createElement("a");
+    more.className = "agent-studio-model-more";
+    more.href = "/settings";
+    more.textContent = "More models and keys…";
+    modelMenu.append(more);
+  }
+
+  /**
+   * @param {string} value @param {string} label
+   * @param {boolean} selected @param {boolean} reachable
+   */
+  function modelRow(value, label, selected, reachable) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "agent-studio-model-row" + (reachable ? "" : " is-unreachable");
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.innerHTML =
+      `<span class="agent-studio-model-row-text"><b>${escapeText(label)}</b></span>` +
+      (selected ? '<span class="agent-studio-model-row-tick">✓</span>' : "");
+    // A model with no key is still choosable: the brain refuses the switch and says why,
+    // which is more use than a row that cannot be clicked at all.
+    row.addEventListener("click", () => void chooseModel(value));
+    return row;
+  }
+
+  /** Point the robot at `spec`: the brain switches between turns, or refuses and says why. */
+  async function chooseModel(spec) {
+    modelOpen = false;
+    modelError = "";
+    modelBusy = true;
+    render(true);
+    const res = await agentState.setModel(spec);
+    modelBusy = false;
+    // A switch that did not persist is still a switch: say so without calling it a failure.
+    modelError = res.message;
+    render(true);
+  }
+
+  function escapeText(/** @type {string} */ text) {
+    const node = document.createElement("span");
+    node.textContent = text;
+    return node.innerHTML;
+  }
+
   function renderSkills(inStory, r, agent, f, canEdit) {
     const s = agentState.get();
     // In the story the roster is the story's agent, and only what it has been offered:
