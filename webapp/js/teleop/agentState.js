@@ -278,6 +278,9 @@ function createAgentState() {
           clears: [],
         }),
       });
+      // A read-only deployment (the public demo) registers no POST route at all: a 405 in plain text.
+      if (res.status === 405 || res.status === 403) return "Switched for this session; this robot keeps no settings.";
+      if (!res.ok) return `Switched, but not saved for the next restart: the robot answered ${res.status}`;
       const body = await res.json();
       return body?.ok ? "" : `Switched, but not saved for the next restart: ${body?.message || "the robot refused it"}`;
     } catch (err) {
