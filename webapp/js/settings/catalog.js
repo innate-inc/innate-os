@@ -101,14 +101,18 @@ const STT_BACKEND_OPTIONS = [
 // The models the picker offers: the current generation of each vendor the brain speaks.
 // Custom… takes any vendor:name, including openai-chat:<name> for a server on the network.
 const MODEL_OPTIONS = [
+  { value: "google:gemini-3.8-flash", label: "Gemini 3.8 Flash" },
+  { value: "google:gemini-3.7-flash", label: "Gemini 3.7 Flash" },
   { value: "google:gemini-3.6-flash", label: "Gemini 3.6 Flash" },
   { value: "google:gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-  { value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5" },
+  { value: "anthropic:claude-fable-5-1", label: "Claude Fable 5.1" },
   { value: "anthropic:claude-opus-5", label: "Claude Opus 5" },
+  { value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5" },
   { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5" },
+  { value: "openai:gpt-6-astra", label: "GPT-6 Astra" },
+  { value: "openai:gpt-5.6-sol", label: "GPT-5.6 Sol" },
   { value: "openai:gpt-5.6-terra", label: "GPT-5.6 Terra" },
   { value: "openai:gpt-5.6-luna", label: "GPT-5.6 Luna" },
-  { value: "openai:gpt-6-astra", label: "GPT-6 Astra" },
 ];
 
 const THINKING_OPTIONS = [
@@ -162,7 +166,7 @@ export const SETTINGS_PAGES = [
       },
       {
         title: "Keys",
-        note: "Each vendor's API key, written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is picked up on the next restart. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
+        note: "Each vendor's API key — and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills — written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is picked up on the next restart. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
         keys: true,
         knobs: [],
       },
