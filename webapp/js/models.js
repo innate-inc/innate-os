@@ -16,14 +16,14 @@ export const MODEL_OPTIONS = [
   { value: "google:gemini-3.7-flash", label: "Gemini 3.7 Flash", vendor: "google" },
   { value: "google:gemini-3.6-flash", label: "Gemini 3.6 Flash", vendor: "google" },
   { value: "google:gemini-3.5-flash", label: "Gemini 3.5 Flash", vendor: "google" },
-  { value: "anthropic:claude-fable-5-1", label: "Claude Fable 5.1", vendor: "anthropic" },
-  { value: "anthropic:claude-opus-5", label: "Claude Opus 5", vendor: "anthropic" },
-  { value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", vendor: "anthropic" },
-  { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5", vendor: "anthropic" },
   { value: "openai:gpt-6-astra", label: "GPT-6 Astra", vendor: "openai" },
   { value: "openai:gpt-5.6-sol", label: "GPT-5.6 Sol", vendor: "openai" },
   { value: "openai:gpt-5.6-terra", label: "GPT-5.6 Terra", vendor: "openai" },
   { value: "openai:gpt-5.6-luna", label: "GPT-5.6 Luna", vendor: "openai" },
+  { value: "anthropic:claude-fable-5-1", label: "Claude Fable 5.1", vendor: "anthropic" },
+  { value: "anthropic:claude-opus-5", label: "Claude Opus 5", vendor: "anthropic" },
+  { value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", vendor: "anthropic" },
+  { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5", vendor: "anthropic" },
 ];
 
 export const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI-compatible", anthropic: "Anthropic" };
