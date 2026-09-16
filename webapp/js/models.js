@@ -11,8 +11,9 @@
 // and their real logos need written permission. The names identify the models by themselves.
 
 /**
- * @typedef {{ value: string, label: string, vendor: string, panel?: boolean }} ModelOption
+ * @typedef {{ value: string, label: string, vendor: string, panel?: boolean, custom?: boolean }} ModelOption
  * `panel: false` keeps a model off the agent panel's quick menu; Settings still offers it.
+ * `custom` marks the robot's current model when it is no catalog entry.
  */
 
 /** @type {ModelOption[]} Most capable first within each vendor. */
@@ -31,7 +32,7 @@ export const MODEL_OPTIONS = [
   { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5", vendor: "anthropic" },
 ];
 
-export const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI-compatible", anthropic: "Anthropic" };
+export const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI-compatible", anthropic: "Anthropic", custom: "Custom" };
 export const VENDOR_KEY = { google: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", "openai-chat": "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY" };
 const KEY_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI", anthropic: "Anthropic" };
 
@@ -54,6 +55,23 @@ export function modelVendor(spec, baseUrl = "") {
 /** The catalog label for a spec, else the spec itself (a custom or LAN name). */
 export function modelLabel(/** @type {string} */ spec) {
   return MODEL_OPTIONS.find((option) => option.value === spec)?.label || spec;
+}
+
+/**
+ * The agent panel's menu: its options, plus the robot's current model when it is not among
+ * them — a Settings pick, a LAN model — beside its vendor's own, else last under Custom.
+ * @param {string} current @returns {ModelOption[]}
+ */
+export function panelOptions(current) {
+  const options = MODEL_OPTIONS.filter((option) => option.panel !== false);
+  if (!current || options.some((option) => option.value === current)) return options;
+  const extra = { value: current, label: modelLabel(current), vendor: modelVendor(current) || "custom", custom: true };
+  let at = options.length;
+  options.forEach((option, i) => {
+    if (option.vendor === extra.vendor) at = i + 1;
+  });
+  options.splice(at, 0, extra);
+  return options;
 }
 
 /**

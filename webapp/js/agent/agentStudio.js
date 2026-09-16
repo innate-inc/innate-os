@@ -12,7 +12,7 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
-import { MODEL_OPTIONS, fetchKeyStatus, modelLabel, modelReach, VENDOR_LABEL } from "../models.js";
+import { fetchKeyStatus, modelLabel, modelReach, modelVendor, panelOptions, VENDOR_LABEL } from "../models.js";
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
@@ -1343,7 +1343,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       (modelBusy ? '<i class="agent-studio-model-busy">switching…</i>' : "");
     modelBtn.setAttribute("aria-expanded", String(modelOpen));
     modelMenu.hidden = !modelOpen;
-    const reach = current ? modelReach(current, "", keyStatus) : { ok: true, text: "" };
+    const reach = current ? panelReach(current) : { ok: true, text: "" };
     modelNote.textContent = modelError
       ? modelError
       : pinned
@@ -1355,12 +1355,23 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (modelOpen) renderModelMenu(current);
   }
 
+  /**
+   * What the panel can say about reaching `spec` — nothing for a model it cannot judge: an
+   * OpenAI-compatible server, whose URL the panel does not know. The brain running it is the proof.
+   * @param {string} spec
+   */
+  function panelReach(spec) {
+    const vendor = modelVendor(spec);
+    if (vendor === "openai-chat" || vendor === null) return { ok: true, text: "", short: "" };
+    return modelReach(spec, "", keyStatus);
+  }
+
   /** @param {string} current */
   function renderModelMenu(current) {
     modelMenu.replaceChildren();
     let vendor = "";
-    for (const option of MODEL_OPTIONS.filter((option) => option.panel !== false)) {
-      const reach = modelReach(option.value, "", keyStatus);
+    for (const option of panelOptions(current)) {
+      const reach = panelReach(option.value);
       if (option.vendor !== vendor) {
         vendor = option.vendor;
         // A missing key belongs to the vendor, not to each of its models.
