@@ -25,7 +25,8 @@ _NO_MINIMAL = frozenset(LADDER) - {Thinking.MINIMAL}
 
 CATALOG: tuple[Model, ...] = (
     # Family rows: the current generation takes the defaults — adaptive thinking, the full ladder.
-    Model("gemini-", Vendor.GOOGLE),  # Gemini 3.6 Flash and kin
+    # Gemini: the family assumes no minimal rung (3.8 Flash 400s on it); the models known to take it are rows.
+    Model("gemini-", Vendor.GOOGLE, thinking=_NO_MINIMAL),
     Model("claude-", Vendor.ANTHROPIC),  # Fable 5.1 / 5, Opus 5 / 4.8 / 4.7, Sonnet 5
     Model("gpt-", Vendor.OPENAI, effort_with_tools=False),  # GPT-6 Astra, GPT-5.6 Sol / Terra / Luna
     # OpenAI's o-series: retired names, kept so a bare "o3-mini" in an old settings.yaml still routes to OpenAI.
@@ -33,7 +34,8 @@ CATALOG: tuple[Model, ...] = (
     Model("o3", Vendor.OPENAI),
     Model("o4", Vendor.OPENAI),
     # Exceptions, longest prefix first in effect.
-    Model("gemini-3.8-flash", Vendor.GOOGLE, thinking=_NO_MINIMAL),  # 400s on thinkingLevel MINIMAL
+    Model("gemini-3.5-flash", Vendor.GOOGLE),
+    Model("gemini-3.6-flash", Vendor.GOOGLE),
     Model("claude-opus-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
     Model("claude-sonnet-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
     Model("claude-haiku-4-5", Vendor.ANTHROPIC, budget_thinking=True),
