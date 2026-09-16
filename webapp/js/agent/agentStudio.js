@@ -1359,7 +1359,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function renderModelMenu(current) {
     modelMenu.replaceChildren();
     let vendor = "";
-    for (const option of MODEL_OPTIONS) {
+    for (const option of MODEL_OPTIONS.filter((option) => option.panel !== false)) {
       const reach = modelReach(option.value, "", keyStatus);
       if (option.vendor !== vendor) {
         vendor = option.vendor;

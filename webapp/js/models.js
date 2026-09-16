@@ -10,7 +10,10 @@
 // imitate our visual identity") and OpenAI ("don't design a similar logo") each rule out,
 // and their real logos need written permission. The names identify the models by themselves.
 
-/** @typedef {{ value: string, label: string, vendor: string }} ModelOption */
+/**
+ * @typedef {{ value: string, label: string, vendor: string, panel?: boolean }} ModelOption
+ * `panel: false` keeps a model off the agent panel's quick menu; Settings still offers it.
+ */
 
 /** @type {ModelOption[]} Most capable first within each vendor. */
 export const MODEL_OPTIONS = [
@@ -18,7 +21,7 @@ export const MODEL_OPTIONS = [
   { value: "google:gemini-3.7-flash", label: "Gemini 3.7 Flash", vendor: "google" },
   { value: "google:gemini-3.6-flash", label: "Gemini 3.6 Flash", vendor: "google" },
   { value: "google:gemini-3.5-flash", label: "Gemini 3.5 Flash", vendor: "google" },
-  { value: "openai:gpt-6-astra", label: "GPT-6 Astra", vendor: "openai" },
+  { value: "openai:gpt-6-astra", label: "GPT-6 Astra", vendor: "openai", panel: false },
   { value: "openai:gpt-5.6-sol", label: "GPT-5.6 Sol", vendor: "openai" },
   { value: "openai:gpt-5.6-terra", label: "GPT-5.6 Terra", vendor: "openai" },
   { value: "openai:gpt-5.6-luna", label: "GPT-5.6 Luna", vendor: "openai" },
