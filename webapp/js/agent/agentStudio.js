@@ -227,7 +227,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let modelOpen = false;
   let modelBusy = false;
   let modelError = "";
-  /** @type {{keys?: Record<string, {set: boolean}>, service_key?: boolean, loaded?: boolean}} */
+  /** @type {{keys?: Record<string, {set: boolean}>, service_key?: boolean, loaded?: boolean, readonly?: boolean}} */
   let keyStatus = { keys: {}, service_key: false, loaded: false };
   void fetchKeyStatus().then((status) => {
     keyStatus = status;
@@ -1371,7 +1371,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function renderModelMenu(current) {
     modelMenu.replaceChildren();
     let vendor = "";
-    for (const option of panelOptions(current)) {
+    for (const option of panelOptions(current, keyStatus)) {
       const reach = panelReach(option.value);
       if (option.vendor !== vendor) {
         vendor = option.vendor;

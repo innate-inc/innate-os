@@ -2250,6 +2250,9 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 .cam-map-host.big {
   position: absolute;
   inset: 0;
+  /* The thumbnail's 100% would outrank the insets below and run the map past the frame. */
+  width: auto;
+  height: auto;
   background: #000;
 }
 
@@ -8817,6 +8820,13 @@ select.skill-input {
   z-index: 60;
 }
 
+/* The agent's pill floats over this layer's top-left corner and stays live in both views,
+   so the monitor starts below it — the way brain.css's right padding starts left of the
+   docked panel. The pill is 62px tall at its own inset, plus a gap. */
+.agent-cockpit .agent-brain {
+  padding-top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) + 74px);
+}
+
 .agent-cockpit .agent-panel {
   z-index: 12; /* above the brain layer; overlays sit at ≤8 */
 }
@@ -11175,6 +11185,20 @@ select.skill-input {
 .mem-search-card.is-found {
   border-color: rgb(180 140 255 / 45%);
   box-shadow: 0 8px 30px rgb(0 0 0 / 50%), 0 0 26px rgb(180 140 255 / 14%);
+}
+
+/* On the full stage the top belongs to the camera strip and the agent's pill, and the card
+   sits inside the map's own stacking context, so it can never paint over either — it rises
+   from the bottom instead. The offset clears the corner controls that sit there: 56px tall
+   at a 14px inset, plus a gap. */
+.cam-map-host.big .mem-search-card {
+  top: auto;
+  bottom: 82px;
+  transform: translate(-50%, 10px);
+}
+
+.cam-map-host.big .mem-search-card.is-in {
+  transform: translate(-50%, 0);
 }
 
 .mem-search-head {
