@@ -6,7 +6,9 @@
 // mirrors innate_llm/configure.py: a server URL, else the Innate service key for the
 // vendors the proxy serves, else that vendor's own key. Change one and change the other.
 //
-// The marks below are generic shapes, not the vendors' logos: a spark, a sunburst, a ring.
+// No vendor marks: a drawn lookalike is what Anthropic ("no alterations"), Google ("don't
+// imitate our visual identity") and OpenAI ("don't design a similar logo") each rule out,
+// and their real logos need written permission. The names identify the models by themselves.
 
 /** @typedef {{ value: string, label: string, vendor: string }} ModelOption */
 
@@ -29,22 +31,6 @@ export const MODEL_OPTIONS = [
 export const VENDOR_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI-compatible", anthropic: "Anthropic" };
 export const VENDOR_KEY = { google: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", "openai-chat": "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY" };
 const KEY_LABEL = { google: "Google", openai: "OpenAI", "openai-chat": "OpenAI", anthropic: "Anthropic" };
-
-/** Vendor marks, 16px, drawn in currentColor so they take the row's own colour. */
-const MARKS = {
-  google: '<path d="M8 1.6l1.6 4.8 4.8 1.6-4.8 1.6L8 14.4l-1.6-4.8L1.6 8l4.8-1.6z"/>',
-  anthropic:
-    '<path d="M8 1.4v13.2M1.4 8h13.2M3.3 3.3l9.4 9.4M12.7 3.3l-9.4 9.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
-  // A hexagon ring: at 16px a six-petal rosette competes with the sunburst beside it, and
-  // the vendors' own logos are theirs — three shapes that stay apart is what the row needs.
-  openai: '<path d="M8 1.7l5.5 3.15v6.3L8 14.3l-5.5-3.15v-6.3z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
-};
-
-/** @param {string} vendor */
-export function vendorMark(vendor) {
-  const body = MARKS[/** @type {keyof typeof MARKS} */ (vendor)] || MARKS.openai;
-  return `<svg class="model-mark model-mark-${vendor}" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">${body}</svg>`;
-}
 
 /**
  * The vendor of a model spec, read the way innate_llm/models.py:split_spec reads it — or

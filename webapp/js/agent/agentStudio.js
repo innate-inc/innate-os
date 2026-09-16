@@ -12,7 +12,7 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
-import { MODEL_OPTIONS, fetchKeyStatus, modelLabel, modelReach, vendorMark, VENDOR_LABEL } from "../models.js";
+import { MODEL_OPTIONS, fetchKeyStatus, modelLabel, modelReach, VENDOR_LABEL } from "../models.js";
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
@@ -1339,7 +1339,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const current = pinned || snapshot.currentModel || snapshot.defaultModel;
     modelBtn.disabled = modelBusy || !!pinned;
     modelBtn.innerHTML =
-      `${vendorMark(String(modelVendorOf(current)))}<span>${escapeText(modelLabel(current))}</span>` +
+      `<span>${escapeText(modelLabel(current))}</span>` +
       (modelBusy ? '<i class="agent-studio-model-busy">switching…</i>' : "");
     modelBtn.setAttribute("aria-expanded", String(modelOpen));
     modelMenu.hidden = !modelOpen;
@@ -1353,11 +1353,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
           : "";
     modelNote.hidden = !modelNote.textContent;
     if (modelOpen) renderModelMenu(current);
-  }
-
-  /** @param {string} spec */
-  function modelVendorOf(spec) {
-    return MODEL_OPTIONS.find((option) => option.value === spec)?.vendor || "openai";
   }
 
   /** @param {string} current */
@@ -1396,7 +1391,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", String(selected));
     row.innerHTML =
-      `<span class="agent-studio-model-row-mark">${vendorMark(String(modelVendorOf(value)))}</span>` +
       `<span class="agent-studio-model-row-text"><b>${escapeText(label)}</b></span>` +
       (selected ? '<span class="agent-studio-model-row-tick">✓</span>' : "");
     // A model with no key is still choosable: the brain refuses the switch and says why,

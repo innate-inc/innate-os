@@ -11588,18 +11588,12 @@ select.skill-input {
 .agent-studio-model-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .agent-studio-model-row-text b { font-weight: 500; }
 .agent-studio-model-row-text i { font-style: normal; font-size: 11px; color: #e0a06a; }
-.agent-studio-model-row.is-unreachable .agent-studio-model-row-mark,
 .agent-studio-model-row.is-unreachable .agent-studio-model-row-text b { opacity: .55; }
 .agent-studio-model-row-tick { margin-left: auto; color: #7965e7; }
 .agent-studio-model-more { display: block; padding: 9px 10px 4px; font-size: 12px; color: #9a8cf0; text-decoration: none; }
 .agent-studio-model-more:hover { text-decoration: underline; }
 .agent-studio-model-note { margin: 6px 2px 0; font-size: 11px; color: #e0a06a; }
 .agent-studio-model-busy { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); }
-/* The vendor marks are tinted, not coloured artwork: they inherit the row's state. */
-.model-mark { flex: none; }
-.model-mark-google { color: #8ab4f8; }
-.model-mark-anthropic { color: #d97757; }
-.model-mark-openai { color: #a7e3c8; }
 .agent-studio-add { margin-top: 8px; }
 /* In the flow rather than floating over the panel, which is only as tall as its tab. */
 .agent-studio-chooser {
