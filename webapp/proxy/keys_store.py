@@ -13,6 +13,7 @@ page over rosbridge included. ``.env`` is what the nodes load at boot
 restart. The page learns only whether a key is set and its last characters.
 """
 
+import contextlib
 import os
 import re
 import tempfile
@@ -72,15 +73,33 @@ def _apply_locked(sets: dict, clears: list) -> tuple[bool, str]:
     text = "\n".join(lines) + ("\n" if lines else "")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        # A key file is the operator's alone; a pre-existing .env keeps whatever mode it had.
-        os.chmod(tmp, path.stat().st_mode & 0o777 if existed else 0o600)
-        os.replace(tmp, str(path))
+        _write(path, text, existed=existed)
     except OSError as e:
         return False, f"could not write {path}: {e}"
     return True, "saved — takes effect on the next restart"
+
+
+def _write(path: Path, text: str, *, existed: bool) -> None:
+    """Replace the file atomically, else write through it.
+
+    The sim bind-mounts the host's ``.env`` onto this path, and no rename can replace a
+    mount point however writable the file is (EBUSY) — so the fallback truncates and writes
+    in place. One small write, and the alternative is a Settings page that cannot save a key
+    in the sim at all."""
+    # A key file is the operator's alone; a pre-existing .env keeps whatever mode it had.
+    mode = path.stat().st_mode & 0o777 if existed else 0o600
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, str(path))
+    except OSError:
+        with open(path, "w") as f:
+            f.write(text)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
 
 
 def _with_line(lines: list, name: str, new: str) -> list:

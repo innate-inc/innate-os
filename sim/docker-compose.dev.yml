@@ -108,7 +108,10 @@ services:
       # (runtime.install_layer_subtree).
       - ../sim/viewer/public:/root/innate-os/sim/viewer/public:ro
       - ../sim/viewer/dist-lib:/root/innate-os/sim/viewer/dist-lib:ro
-      - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:ro
+      # rw: the Settings page's Keys section writes vendor API keys here, and this is the
+      # file the sim's nodes read them from. A rename cannot replace a bind-mounted file,
+      # so keys_store writes through it (see _write there).
+      - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:rw
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build

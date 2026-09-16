@@ -122,3 +122,16 @@ def test_an_identifier_is_reported_in_full_while_keys_never_are(env):
     keys = keys_store.read_status()["keys"]
     assert keys["ANTHROPIC_WORKSPACE_ID"] == {"set": True, "hint": "wrkspc_01ABCDEF"}  # an id, not a credential
     assert keys["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234"}
+
+
+def test_a_bind_mounted_env_is_written_through_since_no_rename_can_replace_it(env, monkeypatch):
+    # The sim mounts the host's .env onto this path; os.replace onto a mount point is EBUSY.
+    monkeypatch.setattr(keys_store.os, "replace", _refuse)
+    ok, _ = keys_store.apply({"ANTHROPIC_API_KEY": "sk-ant-through-the-mount"}, [])
+    assert ok
+    assert env.read_text() == TEMPLATE + "ANTHROPIC_API_KEY=sk-ant-through-the-mount\n"
+    assert not list(env.parent.glob(".env.*.tmp"))  # the scratch file never survives
+
+
+def _refuse(*_args, **_kwargs):
+    raise OSError(16, "Device or resource busy")

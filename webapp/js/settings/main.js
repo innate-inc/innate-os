@@ -721,18 +721,24 @@ function buildKeysSection(pageSection, host) {
     [serviceState],
   );
   renderers.push(() => {
-    serviceState.textContent = status.failed ? "Could not read key status from the robot." : status.service_key ? "Set" : "Not set";
+    serviceState.textContent = status.failed ? "—" : status.service_key ? "Set" : "Not set";
     serviceState.className = "set-status " + (status.service_key ? "ok" : "muted");
   });
 
   const load = async () => {
     try {
       const res = await fetch("/keys.json", { cache: "no-store" });
+      // A robot whose webapp predates this page has no such route, and its SPA fallback
+      // answers 200 with index.html — so the parse, not the status, is what catches that.
       status = { ...(await res.json()), loaded: true };
     } catch {
       status = { keys: {}, service_key: false, readonly: true, loaded: true, failed: true };
     }
-    readonlyNote.textContent = status.readonly && !status.failed ? "Keys cannot be changed from this demo." : "";
+    readonlyNote.textContent = status.failed
+      ? "Could not read key status from the robot. If it is running a build older than this page, restart it (innate restart) and reload."
+      : status.readonly
+        ? "Keys cannot be changed from this demo."
+        : "";
     readonlyNote.style.display = readonlyNote.textContent ? "" : "none";
     for (const render of renderers) render();
     renderReach();
@@ -787,7 +793,7 @@ function buildKeysSection(pageSection, host) {
     addRow(spec.label, spec.doc, [state, line, note]);
     renderers.push(() => {
       const key = status.keys?.[spec.env] || { set: false, hint: "" };
-      state.textContent = key.set ? `Set ${key.hint}` : "Not set";
+      state.textContent = status.failed ? "—" : key.set ? `Set ${key.hint}` : "Not set";
       state.className = "set-status " + (key.set ? "ok" : "muted");
       line.style.display = status.readonly ? "none" : "";
       input.disabled = status.readonly;
