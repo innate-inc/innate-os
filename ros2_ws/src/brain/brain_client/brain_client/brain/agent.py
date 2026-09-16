@@ -129,6 +129,9 @@ class BrainAgent:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
         self.backend = llm.backend
+        # As resolved, not as typed: a bare "claude-sonnet-5" in settings reads back
+        # "anthropic:claude-sonnet-5" here, which is what the trace chip should show.
+        self.model = llm.spec
         provider = llm.provider
         if provider is not None and not provider.model.vision:
             self._logger.error(
@@ -726,7 +729,7 @@ class BrainAgent:
             TraceEvent.SNAPSHOT,
             active=self._state.is_brain_active,
             backend=self.backend,
-            model=self._config.llm_model,
+            model=self.model,
             interval=self._interval(),
             turn=self._turn_count,
             in_flight=self._turn_in_flight,

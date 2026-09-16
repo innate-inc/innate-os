@@ -209,6 +209,7 @@ class BrainClientNode(Node):
             extra_body=cfg.llm_extra_body,
             logger=self.get_logger(),
         )
+        self.get_logger().info(f"[Brain] model {llm.spec} via {llm.backend}")
         recall = (
             configure(
                 cfg.memory_llm_model,
