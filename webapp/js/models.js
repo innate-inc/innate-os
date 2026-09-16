@@ -35,7 +35,9 @@ const MARKS = {
   google: '<path d="M8 1.6l1.6 4.8 4.8 1.6-4.8 1.6L8 14.4l-1.6-4.8L1.6 8l4.8-1.6z"/>',
   anthropic:
     '<path d="M8 1.4v13.2M1.4 8h13.2M3.3 3.3l9.4 9.4M12.7 3.3l-9.4 9.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>',
-  openai: '<circle cx="8" cy="8" r="5.4" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="8" cy="8" r="1.6"/>',
+  // A hexagon ring: at 16px a six-petal rosette competes with the sunburst beside it, and
+  // the vendors' own logos are theirs — three shapes that stay apart is what the row needs.
+  openai: '<path d="M8 1.7l5.5 3.15v6.3L8 14.3l-5.5-3.15v-6.3z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
 };
 
 /** @param {string} vendor */
