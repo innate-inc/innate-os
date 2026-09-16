@@ -29,7 +29,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from innate_llm import Kind, LlmError, Message, Reply, Thinking, Tool, ToolCall
+from innate_llm import Kind, LlmError, Message, Reply, Thinking, Tool, ToolCall, configure
+from innate_llm.configure import DEFAULT_MODEL
 
 from brain_client.brain import grounding
 from brain_client.brain.context import ChatContext, Decision
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
     from brain_client.skills.roster import SkillRoster
     from brain_client.skills.runner import PrimitiveRunner
     from brain_client.transport.chat import ChatManager, SpeechStreamer
+    from innate_proxy import ProxyClient
 
 _NAV_TO_POSITION = "innate-os/navigate_to_position"
 _FRESH_FRAME_SEC = 3.0  # an older camera frame means the feed is broken; don't think blind
@@ -101,6 +103,7 @@ class BrainAgent:
         chat: ChatManager,
         gaze: GazeController,
         llm: Llm,
+        proxy: ProxyClient | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
@@ -128,6 +131,9 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
+        self._proxy = proxy
+        self._default_spec = config.llm_model  # the robot's setting; an agent may name its own
+        self._agent_spec: str | None = None
         self.backend = llm.backend
         # As resolved, not as typed: a bare "claude-sonnet-5" in settings reads back
         # "anthropic:claude-sonnet-5" here, which is what the trace chip should show.
@@ -233,6 +239,42 @@ class BrainAgent:
             self._logger.error("[Brain] Agent loop did not unwind within 5s")
         self._events.clear()
         return unwound
+
+    def use_model(self, spec: str | None, *, agent: bool) -> tuple[bool, str]:
+        """Switch to ``spec`` — the active agent's model (``agent``) or the robot's setting.
+
+        A switch starts a fresh conversation: history is a transcript of parts the previous
+        model signed, and the honest thing on a new one is to begin again. Refused rather
+        than applied when the new model has no way in (no key, no vision), so a mistyped
+        setting cannot take the brain down — the running one keeps thinking.
+        """
+        if agent:
+            self._agent_spec = spec
+        else:
+            self._default_spec = spec or DEFAULT_MODEL
+        wanted = self._agent_spec or self._default_spec
+        llm = configure(wanted, self._proxy, base_url=self._config.llm_base_url, extra_body=self._config.llm_extra_body)
+        if llm.spec == self.model and self._context is not None:
+            return True, llm.spec
+        if llm.provider is None:
+            return False, f"no way to reach {llm.spec}: add its API key under Settings → Agent → Keys"
+        if not llm.provider.model.vision:
+            return False, f"{llm.provider.model.name} takes no images, and the brain looks every turn"
+        was_running = self._runtime.running
+        if not self.stop():
+            return False, "the brain loop is stuck — stop and start the brain, then try again"
+        self.model, self.backend = llm.spec, llm.backend
+        self._context = ChatContext(
+            llm.provider,
+            thinking=self._thinking_level(self._config.llm_thinking),
+            max_history=self._config.history_max_entries,
+            max_image_turns=self._config.history_max_image_turns,
+            reference=self_reference_turns(),
+        )
+        self._logger.info(f"[Brain] model {llm.spec} via {llm.backend}")
+        if was_running and self._state.is_brain_active:
+            self._runtime.spawn(self._loop())
+        return True, llm.spec
 
     def reset(self) -> None:
         """Forget the conversation; a turn thinking under the old one dies with it."""

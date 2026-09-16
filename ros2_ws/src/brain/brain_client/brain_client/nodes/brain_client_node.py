@@ -175,6 +175,11 @@ class BrainClientNode(Node):
                 return SetParametersResult(
                     successful=False, reason=f"unknown timezone '{param.value}' (expected an IANA name, e.g. UTC)"
                 )
+            if param.name == "llm_model":
+                ok, detail = self.brain.use_model(str(param.value).strip(), agent=False)
+                if ok:
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()
@@ -266,6 +271,7 @@ class BrainClientNode(Node):
             chat=self.chat,
             gaze=self.gaze,
             llm=llm,
+            proxy=self._proxy,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,
@@ -349,6 +355,13 @@ class BrainClientNode(Node):
         self.state.active_skill_ids = (
             list(self.state.current_directive.skill_ids()) if self.state.current_directive else []
         )
+        # The boot agent's own model, if it names one: the loop has not started yet, so this
+        # is the swap at its cheapest. A model it cannot reach leaves the robot's setting in
+        # place and says so, rather than booting a brain that cannot think.
+        if self.state.current_directive is not None:
+            ok, detail = self.brain.use_model(self.state.current_directive.model, agent=True)
+            if not ok:
+                self.get_logger().error(f"[Brain] {self.state.current_directive.id}: {detail}")
         self.gaze.update()
         self.reload.start_watcher()
 

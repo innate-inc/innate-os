@@ -527,6 +527,8 @@ def agent_factory(monkeypatch):
         config = SimpleNamespace(
             llm_model="replay:m",
             llm_thinking="",
+            llm_base_url="",
+            llm_extra_body="",
             history_max_entries=60,
             history_max_image_turns=2,
             idle_turn_interval=3.0,
@@ -594,6 +596,59 @@ def no_pause(agent: BrainAgent, monkeypatch) -> None:
         pass
 
     monkeypatch.setattr(agent, "_pause", skip)
+
+
+# ---------- switching model ----------
+
+
+def fake_configure(monkeypatch, **providers):
+    """Stand in for configure(): each spec answers with the provider named for it, or none."""
+    from brain_client.brain import agent as agent_module
+
+    def configure(spec, proxy, **kwargs):
+        return Llm(spec, providers.get(spec), Backend.DIRECT if providers.get(spec) else Backend.UNCONFIGURED)
+
+    monkeypatch.setattr(agent_module, "configure", configure)
+
+
+def test_a_model_with_no_way_in_is_refused_and_the_running_one_keeps_thinking(agent_factory, monkeypatch):
+    # A mistyped setting, or Claude before its key is pasted, must not leave the robot
+    # with no brain at all — the switch fails and says how to fix it.
+    agent, _ = agent_factory()
+    serving = agent._context
+    fake_configure(monkeypatch)  # nothing is reachable
+
+    ok, detail = agent.use_model("anthropic:claude-sonnet-5", agent=False)
+
+    assert ok is False and "Keys" in detail
+    assert agent._context is serving and agent.model == "replay:m"
+
+
+def test_switching_starts_a_fresh_conversation_on_the_new_model(agent_factory, monkeypatch):
+    agent, _ = agent_factory()
+    agent._context.absorb(user_turn("hi", False), reply(Text("hello")))
+    fake_configure(monkeypatch, **{"google:gemini-3.6-flash": Replay([reply(Text("ok"))])})
+
+    ok, spec = agent.use_model("google:gemini-3.6-flash", agent=False)
+
+    assert (ok, spec) == (True, "google:gemini-3.6-flash")
+    assert agent.model == "google:gemini-3.6-flash"  # what the trace chip reports
+    assert agent._context is not None and agent._context.history == ()
+
+
+def test_the_active_agents_model_outranks_the_robots_setting(agent_factory, monkeypatch):
+    agent, _ = agent_factory()
+    fake_configure(
+        monkeypatch,
+        **{"anthropic:claude-opus-5": Replay([reply(Text("ok"))]), "replay:m": Replay([reply(Text("ok"))])},
+    )
+
+    agent.use_model("anthropic:claude-opus-5", agent=True)
+    # The Settings model changes under it: the agent asked for its own, so it keeps it.
+    assert agent.use_model("replay:m", agent=False) == (True, "anthropic:claude-opus-5")
+    assert agent.model == "anthropic:claude-opus-5"
+    # An agent that names none falls back to the setting, as it stood when it changed.
+    assert agent.use_model(None, agent=True) == (True, "replay:m")
 
 
 def test_failed_turn_leaves_events_queued_for_the_retry(agent_factory, monkeypatch):
