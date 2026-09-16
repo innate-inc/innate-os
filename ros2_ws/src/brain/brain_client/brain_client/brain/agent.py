@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from innate_llm import Message, Reply, Thinking, Tool, ToolCall
+from innate_llm import Kind, LlmError, Message, Reply, Thinking, Tool, ToolCall
 
 from brain_client.brain import grounding
 from brain_client.brain.context import ChatContext, Decision
@@ -77,6 +77,14 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
+
+
+def _retry_note(error: Exception) -> str:
+    """What the retry can achieve. A 4xx the vendor will refuse identically forever — a key it
+    rejects, a model the account cannot use — would otherwise read as a transient blip."""
+    if isinstance(error, LlmError) and error.kind == Kind.HTTP and not error.retryable:
+        return " — the robot keeps trying, but nothing changes until the setting is fixed."
+    return " — retrying."
 
 
 class BrainAgent:
@@ -389,7 +397,7 @@ class BrainAgent:
         self._error_streak += 1
         self._logger.error(f"[Brain] Turn failed ({self._error_streak}x): {error!r}")
         if self._error_streak == 1:
-            self._chat.emit_system(f"⚠️ Brain turn failed: {error} — retrying.")
+            self._chat.emit_system(f"⚠️ Brain turn failed: {error}{_retry_note(error)}")
         backoff = min(5.0 * self._error_streak, 30.0)
         if self._error_streak >= _DROP_EVENTS_AFTER and seen:
             # The batch itself may be what fails (e.g. an oversized request):

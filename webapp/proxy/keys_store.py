@@ -2,6 +2,10 @@
 # Copyright (c) 2026 Innate Inc
 """Vendor API keys for the Settings page: written to the robot's ``.env``, never read back.
 
+One managed name is not a credential — an Anthropic workspace id, which an
+organization-scoped key must name — and is reported in full; every key reports only
+whether it is set and its last characters.
+
 Keys stay out of settings.yaml on purpose — that file is a ROS parameter overlay,
 and a parameter is readable by every node and by anything on the graph, this
 page over rosbridge included. ``.env`` is what the nodes load at boot
@@ -15,7 +19,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-KEYS = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY")
+KEYS = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "LLM_API_KEY")
+SECRETS = frozenset(KEYS) - {"ANTHROPIC_WORKSPACE_ID"}
 SERVICE_KEY = "INNATE_SERVICE_KEY"
 SYSTEM_ENV_PATH = Path("/etc/innate.env")  # the provisioned service key lives here, read-only to this page
 
@@ -32,7 +37,10 @@ def env_path() -> Path:
 def read_status() -> dict:
     """``{keys: {NAME: {set, hint}}, service_key}`` — never a value."""
     values = {**_values(SYSTEM_ENV_PATH), **_values(env_path())}
-    keys = {name: {"set": bool(values.get(name)), "hint": _hint(values.get(name, ""))} for name in KEYS}
+    keys = {}
+    for name in KEYS:
+        value = values.get(name, "")
+        keys[name] = {"set": bool(value), "hint": _hint(value) if name in SECRETS else value}
     return {"keys": keys, "service_key": bool(values.get(SERVICE_KEY))}
 
 
@@ -45,7 +53,7 @@ def apply(sets: dict, clears: list) -> tuple[bool, str]:
         if not isinstance(value, str) or not value.strip():
             return False, f"{name}: a key must not be empty"
         if len(value) > _MAX_LEN or any(c in value for c in "\r\n\"'"):
-            return False, f"{name}: that does not look like an API key"
+            return False, f"{name}: that does not look like a key or an id"
     with _WRITE_LOCK:
         return _apply_locked({name: value.strip() for name, value in sets.items()}, list(clears))
 

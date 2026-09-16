@@ -44,6 +44,7 @@ class Warns(Protocol):
 
 DEFAULT_MODEL = "google:gemini-3.6-flash"
 LLM_API_KEY_ENV = "LLM_API_KEY"
+ANTHROPIC_WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID"
 TURN_TIMEOUT_SECS = 90.0
 
 
@@ -150,7 +151,14 @@ def vendor_headers(vendor: Vendor, key: str) -> dict[str, str]:
     if vendor == Vendor.GOOGLE:
         return {"x-goog-api-key": key}
     if vendor == Vendor.ANTHROPIC:
-        return {"x-api-key": key, "anthropic-version": anthropic.API_VERSION}
+        headers = {"x-api-key": key, "anthropic-version": anthropic.API_VERSION}
+        # A Console key made at the organization rather than inside a workspace carries no
+        # workspace of its own: every request is a 400 until one is named. A workspace-scoped
+        # key needs no header, so this is set only by operators whose key is the other kind.
+        workspace = os.environ.get(ANTHROPIC_WORKSPACE_ENV, "").strip()
+        if workspace:
+            headers["anthropic-workspace-id"] = workspace
+        return headers
     return _bearer(key)
 
 

@@ -115,3 +115,10 @@ async def test_the_readonly_demo_reports_keys_but_takes_none(tmp_path, monkeypat
         r = await session.post(base + "/keys.json", json={"sets": {"OPENAI_API_KEY": "sk-x"}})
         assert r.status in (404, 405)
         assert not (tmp_path / ".env").exists()
+
+
+def test_an_identifier_is_reported_in_full_while_keys_never_are(env):
+    keys_store.apply({"ANTHROPIC_WORKSPACE_ID": "wrkspc_01ABCDEF", "ANTHROPIC_API_KEY": "sk-ant-secret-1234"}, [])
+    keys = keys_store.read_status()["keys"]
+    assert keys["ANTHROPIC_WORKSPACE_ID"] == {"set": True, "hint": "wrkspc_01ABCDEF"}  # an id, not a credential
+    assert keys["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234"}

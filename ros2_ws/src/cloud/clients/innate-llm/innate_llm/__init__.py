@@ -10,6 +10,7 @@ in at the same seam.
 """
 
 from innate_llm.configure import Backend, Llm, Vendor, configure
+from innate_llm.errors import Kind
 from innate_llm.provider import Pinned, Provider
 from innate_llm.types import (
     Audio,
@@ -45,6 +46,7 @@ __all__ = [
     "Finish",
     "Image",
     "Json",
+    "Kind",
     "Llm",
     "LlmError",
     "Message",

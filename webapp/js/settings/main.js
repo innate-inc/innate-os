@@ -636,6 +636,7 @@ const KEY_ROWS = [
   { env: "GEMINI_API_KEY", label: "Google key", doc: "Gemini models with your own Google AI key. Not needed with an Innate service key." },
   { env: "OPENAI_API_KEY", label: "OpenAI key", doc: "GPT models with your own OpenAI key. Not needed with an Innate service key." },
   { env: "ANTHROPIC_API_KEY", label: "Anthropic key", doc: "Claude models. Needed even with an Innate service key — the proxy does not serve Anthropic yet." },
+  { env: "ANTHROPIC_WORKSPACE_ID", label: "Anthropic workspace", secret: false, doc: "Only for a key created for the organization rather than inside a workspace: the workspace to bill. Without it Anthropic refuses every request with a 400; a workspace-scoped key needs nothing here. Not a secret, so it is shown in full." },
   { env: "LLM_API_KEY", label: "Local server key", doc: "Only if the OpenAI-compatible server under Custom model wants one; most on a home network do not." },
 ];
 const VENDOR_KEY = { google: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", "openai-chat": "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY" };
@@ -740,8 +741,8 @@ function buildKeysSection(pageSection, host) {
   for (const spec of KEY_ROWS) {
     const state = textEl("span", "set-status muted", "…");
     const line = textEl("div", "set-key-ctl");
-    const input = inputEl("password", "set-text");
-    input.placeholder = "Paste a key";
+    const input = inputEl(spec.secret === false ? "text" : "password", "set-text");
+    input.placeholder = spec.secret === false ? "wrkspc_…" : "Paste a key";
     input.autocomplete = "off";
     const note = textEl("span", "set-status muted", "");
     const submit = async (/** @type {any} */ payload) => {
