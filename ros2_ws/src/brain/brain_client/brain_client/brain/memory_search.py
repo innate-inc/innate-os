@@ -103,6 +103,7 @@ class _CacheHandle:
     fingerprint: str
     memories: tuple[Memory, ...]  # frame numbers resolve against what was cached, not the live store
     expires_monotonic: float
+    provider: int = 0  # which provider built it; a handle never crosses a live model switch
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class MemorySearch:
         self._pinned: Pinned | None = provider if isinstance(provider, Pinned) else None
         self._logger = logger
         self._cache: _CacheHandle | None = None
+        self._provider_generation = 0
         self._cache_unsupported = self._pinned is None
         self._failed_revision: int | None = None  # the backend refused exactly this content (4xx); don't hammer
         self._retry_at = 0.0  # monotonic; transient build failures back off until then
@@ -148,6 +150,10 @@ class MemorySearch:
         self._cache_unsupported = self._pinned is None
         self._cache = None
         self._failed_revision = None
+        # A warm() already building a cache finishes against the old provider; the count is
+        # what stops its handle from being installed, and stops a search in flight from
+        # pairing an old handle with the new provider.
+        self._provider_generation += 1
 
     def cache_state(self) -> CacheState:
         """A stale-but-usable cache reports WARM — the search rides it with a
@@ -189,14 +195,14 @@ class MemorySearch:
                 found=False,
                 explanation="The robot has no memories of this map yet — drive around in navigation mode to build them.",
             )
-        cache = self._usable_cache(snapshot)
+        provider, cache = self._provider, self._usable_cache(snapshot)
         if cache is not None:
             # A stale cache still serves: the delta (new/refreshed frames plus
             # supersede/retire notes) rides alongside the question. The system
             # prompt lives in the cache, so the request carries none.
             request = _request((*self._delta(cache, snapshot), Text(_question(query))), pinned=cache.name)
             try:
-                reply = self._provider.run(request, timeout=_SEARCH_TIMEOUT_SEC)
+                reply = provider.run(request, timeout=_SEARCH_TIMEOUT_SEC)
                 return self._conclude(query, reply, snapshot, started, cached=True)
             except LlmError as error:
                 if error.status is None or error.status >= 500:
@@ -209,7 +215,7 @@ class MemorySearch:
                 self._logger.warn(f"[Memory] cached search failed ({error}); retrying without it")
         frames = self._frames(snapshot.memories)
         request = _request((*_content(frames), Text(_question(query))))
-        reply = self._provider.run(request, timeout=_SEARCH_TIMEOUT_SEC)
+        reply = provider.run(request, timeout=_SEARCH_TIMEOUT_SEC)
         return self._conclude(query, reply, snapshot, started, cached=False)
 
     def warm(self) -> None:
@@ -284,7 +290,9 @@ class MemorySearch:
         delta's supersede/retire notes trust stable ids, which a same-name
         remap resets — so the map is matched by fingerprint, not just name."""
         cache = self._cache
-        if cache is None or cache.map_name != snapshot.map_name or cache.fingerprint != snapshot.fingerprint:
+        if cache is None or cache.provider != self._provider_generation:
+            return None  # built against a model the brain has since left
+        if cache.map_name != snapshot.map_name or cache.fingerprint != snapshot.fingerprint:
             return None
         return cache if time.monotonic() < cache.expires_monotonic else None
 
@@ -310,6 +318,7 @@ class MemorySearch:
         pinned = self._pinned
         if pinned is None:
             return None
+        generation = self._provider_generation  # the provider this build belongs to
         started = time.monotonic()
         frames = self._frames(snapshot.memories)
         if len(frames) < _MIN_FRAMES_TO_CACHE:
@@ -342,6 +351,13 @@ class MemorySearch:
             self._retry_at = time.monotonic() + _WARM_RETRY_SEC
             self._logger.warn(f"[Memory] context cache creation failed ({error!r}); retrying in {_WARM_RETRY_SEC:.0f}s")
             return None
+        if generation != self._provider_generation:
+            # The brain switched model while this built: the handle belongs to a provider
+            # nothing will ask again, and installing it would serve the next search a 403.
+            with contextlib.suppress(Exception):
+                pinned.unpin(name)
+            self._logger.info("[Memory] dropped a cache built for the previous model")
+            return None
         old, self._cache = (
             self._cache,
             _CacheHandle(
@@ -351,6 +367,7 @@ class MemorySearch:
                 fingerprint=snapshot.fingerprint,
                 memories=tuple(memory for memory, _ in frames),
                 expires_monotonic=started + _TTL_SEC - _TTL_SAFETY_SEC,
+                provider=generation,
             ),
         )
         if old is not None:

@@ -22,7 +22,7 @@ from innate_llm import Event, Finish, Image, LlmError, Message, Reply, Request, 
 from innate_llm.replay import Replay
 
 from brain_client.brain import memory_search as memory_search_module
-from brain_client.brain.memory_search import MemorySearch, verdict_text
+from brain_client.brain.memory_search import CacheState, MemorySearch, verdict_text
 from brain_client.memory import recorder as recorder_module
 from brain_client.memory import selection as selection_module
 from brain_client.memory.coverage import Coverage, wedge_mask
@@ -1410,6 +1410,38 @@ def test_search_rides_a_fresh_cache_with_only_the_question(data_dir):
     assert verdict.found and verdict.cached and verdict.image == b"jpg-2"
     assert verdict.memory is not None and verdict.memory.x == 3.0
     assert "x=3.00m" in verdict_text(verdict) and "navigate_to_position" in verdict_text(verdict)
+
+
+def test_a_live_model_switch_leaves_no_cache_of_the_old_model_behind(data_dir):
+    # A handle names the model that built it: after the brain switches, a search must not
+    # ride the old one, and a warm() that was already building must not install its result.
+    search, fake, _ = make_search(data_dir, frames=6)
+    build_cache(search)
+    assert search.cache_state() == CacheState.WARM
+
+    successor = FakeGemini()
+    search.use_provider(successor)
+    assert search.cache_state() == CacheState.COLD  # the old handle is not offered
+
+    search.search("where is the kitchen")
+    assert successor.generates[-1].pinned is None  # the new model is asked without it
+    # And a build already running when the switch lands is dropped rather than installed —
+    # warm() runs in its own thread, so the switch can happen inside pin().
+    third = FakeGemini()
+
+    class SwitchesWhilePinning(FakeGemini):
+        def pin(self, *args, **kwargs):
+            name = super().pin(*args, **kwargs)
+            search.use_provider(third)  # the brain moved on before this build could install
+            return name
+
+    interrupted = SwitchesWhilePinning()
+    search.use_provider(interrupted)
+    build_cache(search)
+
+    assert search.cache_state() == CacheState.COLD  # nothing of the interrupted build survives
+    assert interrupted.deletes == ["cachedContents/c1"]  # unpinned where it was created
+    assert third.creates == []
 
 
 def test_a_search_never_builds_the_cache(data_dir):
