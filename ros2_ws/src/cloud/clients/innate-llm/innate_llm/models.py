@@ -21,6 +21,7 @@ from dataclasses import replace
 from innate_llm.types import LADDER, Model, Thinking, Vendor
 
 _NO_XHIGH = frozenset(LADDER) - {Thinking.XHIGH}
+_NO_MINIMAL = frozenset(LADDER) - {Thinking.MINIMAL}
 
 CATALOG: tuple[Model, ...] = (
     # Family rows: the current generation takes the defaults — adaptive thinking, the full ladder.
@@ -32,6 +33,7 @@ CATALOG: tuple[Model, ...] = (
     Model("o3", Vendor.OPENAI),
     Model("o4", Vendor.OPENAI),
     # Exceptions, longest prefix first in effect.
+    Model("gemini-3.8-flash", Vendor.GOOGLE, thinking=_NO_MINIMAL),  # 400s on thinkingLevel MINIMAL
     Model("claude-opus-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
     Model("claude-sonnet-4-6", Vendor.ANTHROPIC, thinking=_NO_XHIGH),
     Model("claude-haiku-4-5", Vendor.ANTHROPIC, budget_thinking=True),
