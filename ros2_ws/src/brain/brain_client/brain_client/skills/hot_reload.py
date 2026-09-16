@@ -208,7 +208,7 @@ class ReloadCoordinator:
         independently. Returns the rebuilt registry, or None on timeout.
         """
         received: dict = {}
-        waiter = rclpy.create_node("brain_client_reload_skills_waiter")
+        waiter = rclpy.create_node("brain_client_reload_skills_waiter", start_parameter_services=False)
         executor = SingleThreadedExecutor()
         try:
 

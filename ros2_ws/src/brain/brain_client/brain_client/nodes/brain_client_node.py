@@ -114,7 +114,9 @@ class BrainClientNode(Node):
         self._tts_handler = self._init_tts()
 
         # --- helper node for synchronous service calls (not spun by the executor) ---
-        self._service_call_node = rclpy.create_node("brain_client_service_caller")
+        # Helper nodes never start parameter services: the launch renames every node in the
+        # process to brain_client_node, and a sibling answering /set_parameters wins the race.
+        self._service_call_node = rclpy.create_node("brain_client_service_caller", start_parameter_services=False)
         self._reload_primitives_client = self._service_call_node.create_client(Trigger, "/brain/reload_primitives")
         self._reload_skills_client = self._service_call_node.create_client(ReloadSkillsAgents, "/brain/reload_skills")
 
