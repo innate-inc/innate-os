@@ -755,13 +755,15 @@ function buildKeysSection(pageSection, host) {
     line.append(input, saveBtnKey, clearBtn);
     addRow(spec.label, spec.doc, [state, line, note]);
     renderers.push(() => {
-      const key = status.keys?.[spec.env] || { set: false, hint: "" };
-      state.textContent = status.failed ? "—" : key.set ? `Set ${key.hint}` : "Not set";
+      const key = status.keys?.[spec.env] || { set: false, hint: "", source: "file" };
+      const fromEnv = key.set && key.source === "environment";
+      state.textContent = status.failed ? "—" : key.set ? `Set ${key.hint}${fromEnv ? " (from the environment)" : ""}` : "Not set";
       state.className = "set-status " + (key.set ? "ok" : "muted");
       line.style.display = status.readonly ? "none" : "";
       input.disabled = status.readonly;
       saveBtnKey.disabled = status.readonly;
-      clearBtn.disabled = status.readonly || !key.set;
+      // A key the robot was started with is not in .env; clearing the file cannot remove it.
+      clearBtn.disabled = status.readonly || !key.set || fromEnv;
     });
   }
 

@@ -60,8 +60,8 @@ def test_clear_leaves_the_placeholder(env):
 def test_status_carries_a_hint_never_the_value(env):
     keys_store.apply({"GEMINI_API_KEY": "AIza-gemini-secret-9876"}, [])
     status = keys_store.read_status()
-    assert status["keys"]["GEMINI_API_KEY"] == {"set": True, "hint": "…9876"}
-    assert status["keys"]["ANTHROPIC_API_KEY"] == {"set": False, "hint": ""}
+    assert status["keys"]["GEMINI_API_KEY"] == {"set": True, "hint": "…9876", "source": "file"}
+    assert status["keys"]["ANTHROPIC_API_KEY"] == {"set": False, "hint": "", "source": "file"}
     assert status["service_key"] is True
     assert "secret" not in repr(status)
 
@@ -104,7 +104,7 @@ async def test_routes_report_and_write_but_never_echo(tmp_path, monkeypatch):
         assert (await r.json())["ok"] is True
         r = await session.get(base + "/keys.json")
         body = await r.json()
-        assert body["keys"]["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234"}
+        assert body["keys"]["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234", "source": "file"}
         assert body["readonly"] is False and "secret" not in await r.text()
 
 
@@ -122,8 +122,12 @@ async def test_the_readonly_demo_reports_keys_but_takes_none(tmp_path, monkeypat
 def test_an_identifier_is_reported_in_full_while_keys_never_are(env):
     keys_store.apply({"ANTHROPIC_WORKSPACE_ID": "wrkspc_01ABCDEF", "ANTHROPIC_API_KEY": "sk-ant-secret-1234"}, [])
     keys = keys_store.read_status()["keys"]
-    assert keys["ANTHROPIC_WORKSPACE_ID"] == {"set": True, "hint": "wrkspc_01ABCDEF"}  # an id, not a credential
-    assert keys["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234"}
+    assert keys["ANTHROPIC_WORKSPACE_ID"] == {
+        "set": True,
+        "hint": "wrkspc_01ABCDEF",
+        "source": "file",
+    }  # an id, not a credential
+    assert keys["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…1234", "source": "file"}
 
 
 def test_a_bind_mounted_env_is_written_through_since_no_rename_can_replace_it(env, monkeypatch):
@@ -157,5 +161,11 @@ def test_keys_passed_as_environment_count_as_the_public_demo_passes_them(env, mo
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-demo-9999")
     status = keys_store.read_status()
     assert status["service_key"] is True
-    assert status["keys"]["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…9999"}
+    assert status["keys"]["ANTHROPIC_API_KEY"] == {"set": True, "hint": "…9999", "source": "environment"}
     assert not status["keys"]["GEMINI_API_KEY"]["set"]
+    # The file cannot take away what the environment gave: say so instead of a false success.
+    ok, message = keys_store.apply({}, ["ANTHROPIC_API_KEY"])
+    assert not ok and "environment" in message
+    env.write_text("ANTHROPIC_API_KEY=sk-ant-file-1234\n")
+    assert keys_store.read_status()["keys"]["ANTHROPIC_API_KEY"]["source"] == "file"
+    assert keys_store.apply({}, ["ANTHROPIC_API_KEY"])[0]

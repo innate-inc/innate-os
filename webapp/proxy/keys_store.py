@@ -54,12 +54,18 @@ def read_status() -> dict:
     keys file on top. The public demo passes its keys as container environment and has no
     ``.env`` at all; a key only the environment holds cannot be cleared from this page."""
     inherited = {name: os.environ.get(name, "") for name in (*KEYS, SERVICE_KEY)}
-    values = {**inherited, **_values(SYSTEM_ENV_PATH), **_values(env_path())}
+    filed = {**_values(SYSTEM_ENV_PATH), **_values(env_path())}
+    values = {**inherited, **filed}
     keys = {}
     for name in KEYS:
         value = values.get(name, "")
-        keys[name] = {"set": bool(value), "hint": _hint(value) if name in SECRETS else value}
+        source = "environment" if value and not filed.get(name) else "file"  # a value only the environment holds
+        keys[name] = {"set": bool(value), "hint": _hint(value) if name in SECRETS else value, "source": source}
     return {"keys": keys, "service_key": bool(values.get(SERVICE_KEY))}
+
+
+def _from_environment_only(name: str) -> bool:
+    return bool(os.environ.get(name)) and not {**_values(SYSTEM_ENV_PATH), **_values(env_path())}.get(name)
 
 
 def apply(sets: dict, clears: list) -> tuple[bool, str]:
@@ -72,6 +78,12 @@ def apply(sets: dict, clears: list) -> tuple[bool, str]:
             return False, f"{name}: a key must not be empty"
         if len(value) > _MAX_LEN or any(c in value for c in "\r\n\"'"):
             return False, f"{name}: that does not look like a key or an id"
+    for name in clears:
+        if _from_environment_only(name):
+            return (
+                False,
+                f"{name} comes from the environment this robot was started with, not from .env; clear it there",
+            )
     with _WRITE_LOCK:
         return _apply_locked({name: value.strip() for name, value in sets.items()}, list(clears))
 
@@ -93,7 +105,7 @@ def _apply_locked(sets: dict, clears: list) -> tuple[bool, str]:
         _write(path, text, existed=existed)
     except OSError as e:
         return False, f"could not write {path}: {e}"
-    return True, "saved — takes effect on the next restart"
+    return True, "saved — the next model switch or skill call uses it"
 
 
 # A rename onto a bind-mounted file fails with these however writable the file is; every
