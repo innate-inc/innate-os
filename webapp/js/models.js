@@ -60,10 +60,17 @@ export function modelLabel(/** @type {string} */ spec) {
 /**
  * The agent panel's menu: its options, plus the robot's current model when it is not among
  * them — a Settings pick, a LAN model — beside its vendor's own, else last under Custom.
- * @param {string} current @returns {ModelOption[]}
+ * With `status`, a read-only robot (the hosted sim demo) drops the models it cannot reach:
+ * its Settings refuses keys, so a missing one is permanent and the row is a dead end.
+ * @param {string} current @param {Parameters<typeof modelReach>[2] & {loaded?: boolean, readonly?: boolean}} [status]
+ * @returns {ModelOption[]}
  */
-export function panelOptions(current) {
-  const options = MODEL_OPTIONS.filter((option) => option.panel !== false);
+export function panelOptions(current, status) {
+  let options = MODEL_OPTIONS.filter((option) => option.panel !== false);
+  if (status?.loaded && status.readonly) {
+    const reachable = options.filter((option) => modelReach(option.value, "", status).ok);
+    if (reachable.length) options = reachable; // a robot that reaches nothing still shows what exists
+  }
   if (!current || options.some((option) => option.value === current)) return options;
   const extra = { value: current, label: modelLabel(current), vendor: modelVendor(current) || "custom", custom: true };
   let at = options.length;
