@@ -151,7 +151,7 @@ export const SETTINGS_PAGES = [
       },
       {
         title: "Keys",
-        note: "Each vendor's API key — and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills — written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is picked up on the next restart. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
+        note: "Each vendor's API key — and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills — written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is used by the next model switch or skill call, no restart needed. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
         keys: true,
         knobs: [],
       },

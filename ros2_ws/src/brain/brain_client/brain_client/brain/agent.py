@@ -50,6 +50,7 @@ from brain_client.brain.utils import (
     resolve_timezone,
 )
 from brain_client.perception.scan_health import ScanHealthReporter
+from brain_client.robot.llm import refresh_keys
 from brain_client.transport.chat import Sender
 
 if TYPE_CHECKING:
@@ -286,6 +287,7 @@ class BrainAgent:
 
     def _reconfigure(self, wanted: str | None = None, *, force: bool = False) -> tuple[bool, str]:
         wanted = wanted or self._agent_spec or self._default_spec
+        refresh_keys()
         try:
             llm = configure(wanted, self._proxy, base_url=self._base_url, extra_body=self._extra_body)
         except ValueError as error:  # an unknown vendor prefix, or extra_body that is not JSON

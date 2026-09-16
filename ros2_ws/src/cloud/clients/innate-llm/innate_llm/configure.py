@@ -62,6 +62,15 @@ _KEY_ENV: dict[Vendor, str] = {
     Vendor.OPENAI_CHAT: "OPENAI_API_KEY",
     Vendor.ANTHROPIC: "ANTHROPIC_API_KEY",
 }
+# Every environment name a route is read from — what a deployment refreshes when its key file changes.
+KEY_ENVS: tuple[str, ...] = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    ANTHROPIC_WORKSPACE_ENV,
+    LLM_API_KEY_ENV,
+)
 # The proxy's service path per vendor (no anthropic yet); OpenAI's adapters take a "/v1" root.
 _PROXY_SERVICE: dict[Vendor, str] = {
     Vendor.GOOGLE: "gemini",

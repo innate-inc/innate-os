@@ -18,7 +18,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from innate_llm import Image, Message, Request, Role, Text, configure
-from innate_llm.configure import DEFAULT_MODEL
+from innate_llm.configure import DEFAULT_MODEL, KEY_ENVS
+from mars_bringup.config_loader import keys_env_path, parse_key_value_env
 
 from brain_client.skills.types import cancellable_sleep
 
@@ -69,8 +70,16 @@ class Llm:
         if self._route is None:
             from innate_proxy import ProxyClient
 
+            refresh_keys()
             self._route = configure(self.model, ProxyClient(), base_url=self._base_url, extra_body=self._extra_body)
         return self._route.provider
+
+
+def refresh_keys() -> None:
+    """The vendor keys as the keys file holds them now, so one saved in Settings after boot reaches the next
+    ``configure()``. A key cleared there stays in this process until restart."""
+    fresh = parse_key_value_env(keys_env_path())
+    os.environ.update({name: fresh[name].strip() for name in KEY_ENVS if fresh.get(name, "").strip()})
 
 
 def _jpeg(b64: str) -> bytes:
