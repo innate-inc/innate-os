@@ -78,6 +78,8 @@
  * @property {PageSection[]} sections
  */
 
+import { MODEL_OPTIONS } from "../models.js";
+
 const P = "ros__parameters";
 
 // A few Cartesia stock voices for the TTS picker (ids from the Cartesia voice library).
@@ -96,23 +98,6 @@ const STT_BACKEND_OPTIONS = [
   { value: "elevenlabs_batch", label: "ElevenLabs Scribe (batch)" },
   { value: "gemini", label: "Gemini (batch)" },
   { value: "elevenlabs", label: "ElevenLabs Scribe (realtime)" },
-];
-
-// The models the picker offers: the current generation of each vendor the brain speaks.
-// Custom… takes any vendor:name, including openai-chat:<name> for a server on the network.
-const MODEL_OPTIONS = [
-  { value: "google:gemini-3.8-flash", label: "Gemini 3.8 Flash" },
-  { value: "google:gemini-3.7-flash", label: "Gemini 3.7 Flash" },
-  { value: "google:gemini-3.6-flash", label: "Gemini 3.6 Flash" },
-  { value: "google:gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-  { value: "anthropic:claude-fable-5-1", label: "Claude Fable 5.1" },
-  { value: "anthropic:claude-opus-5", label: "Claude Opus 5" },
-  { value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5" },
-  { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5" },
-  { value: "openai:gpt-6-astra", label: "GPT-6 Astra" },
-  { value: "openai:gpt-5.6-sol", label: "GPT-5.6 Sol" },
-  { value: "openai:gpt-5.6-terra", label: "GPT-5.6 Terra" },
-  { value: "openai:gpt-5.6-luna", label: "GPT-5.6 Luna" },
 ];
 
 const THINKING_OPTIONS = [

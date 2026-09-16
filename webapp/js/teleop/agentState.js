@@ -10,6 +10,7 @@
 import { ros } from "../rosClient.js";
 import {
   AGENT_STATUS_TOPIC,
+  BRAIN_NODE,
   GET_AVAILABLE_DIRECTIVES_SERVICE,
   SET_DIRECTIVE_TOPIC,
   SET_BRAIN_ACTIVE_SERVICE,
@@ -23,7 +24,7 @@ import {
  * @typedef {{
  *   id: string, name: string, prompt: string, skills: string[],
  *   source: "shipped" | "user", listen: boolean, gaze: boolean, listed: boolean,
- *   path: string, editable: boolean,
+ *   path: string, editable: boolean, model: string,
  * }} AgentEntry
  * @typedef {{ id: string, name: string, error: string, path: string }} BrokenEntry
  * @typedef {{ id: string, display_name: string, prompt: string, skill_ids: string[], listen: boolean, gaze: boolean }} AgentSpec
@@ -33,6 +34,8 @@ import {
  *   currentDirective: string,
  *   activeSkills: Set<string>,
  *   brainActive: boolean,
+ *   defaultModel: string,
+ *   currentModel: string,
  * }} AgentSnapshot
  */
 
@@ -53,7 +56,15 @@ export function sharedAgentState() {
 
 function createAgentState() {
   /** @type {AgentSnapshot} */
-  let state = { agents: [], broken: [], currentDirective: "", activeSkills: new Set(), brainActive: false };
+  let state = {
+    agents: [],
+    broken: [],
+    currentDirective: "",
+    activeSkills: new Set(),
+    brainActive: false,
+    defaultModel: "",
+    currentModel: "",
+  };
   /** @type {Set<(s: AgentSnapshot) => void>} */
   const listeners = new Set();
 
@@ -134,6 +145,8 @@ function createAgentState() {
           gaze: a.gaze === true,
           path: typeof a.path === "string" ? a.path : "",
           editable: a.editable === true,
+          // "" = this agent thinks with whatever the robot's llm_model setting names.
+          model: typeof a.model === "string" ? a.model : "",
         }));
       // Agents that failed to load (broken module/class). Shown disabled with
       // their error — same treatment as broken skills in the skills menu.
@@ -168,6 +181,8 @@ function createAgentState() {
         currentDirective: brainActive ? String(v?.current_directive ?? "") : "",
         activeSkills,
         brainActive,
+        defaultModel: String(meta?.default_model ?? ""),
+        currentModel: String(meta?.current_model ?? ""),
       };
       emit();
     } catch {
@@ -215,6 +230,29 @@ function createAgentState() {
     const res = await ros.callService(SAVE_AGENT_SERVICE, spec);
     if (res?.success) await refresh();
     return { success: !!res?.success, message: String(res?.message ?? ""), path: String(res?.path ?? "") };
+  }
+
+  /**
+   * Point the robot at `spec` — the llm_model parameter, which the brain applies without a
+   * restart and refuses when it has no way in (no key), so the reason comes back here.
+   * @param {string} spec @returns {Promise<{ success: boolean, message: string }>}
+   */
+  async function setModel(spec) {
+    const value = { type: 4, bool_value: false, integer_value: 0, double_value: 0, string_value: spec };
+    try {
+      const res = await ros.callService(`${BRAIN_NODE}/set_parameters`, {
+        parameters: [{ name: "llm_model", value }],
+      });
+      // The service resolves even when the node rejects the value: the result carries why.
+      const result = res?.results?.[0];
+      if (result?.successful) {
+        await refresh();
+        return { success: true, message: "" };
+      }
+      return { success: false, message: String(result?.reason || "the robot refused that model") };
+    } catch (err) {
+      return { success: false, message: `Could not reach the robot: ${err}` };
+    }
   }
 
   /** @param {string} id @returns {Promise<{ success: boolean, message: string }>} */
@@ -284,6 +322,7 @@ function createAgentState() {
     setDirective,
     setActiveSkills,
     saveAgent,
+    setModel,
     deleteAgent,
     resetBrain,
   };

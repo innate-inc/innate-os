@@ -739,6 +739,10 @@ class BrainClientNode(Node):
                     "skills": self.state.registry.metadata,
                     "active_skills": self.roster.active_skill_ids(),
                     "brain_active": self.state.is_brain_active,
+                    # What an agent that names no model of its own thinks with, and what
+                    # the brain is on right now (they differ while an agent names one).
+                    "default_model": self.config.llm_model,
+                    "current_model": self.brain.model,
                     # Agents whose module failed to import or whose class failed
                     # to build — not selectable, shown disabled with the error.
                     # In the meta dict (not the agent list) so clients that
