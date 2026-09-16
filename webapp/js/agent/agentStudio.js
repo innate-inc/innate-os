@@ -1333,8 +1333,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
    * @param {AgentEntry | null} agent @param {Draft | null} f
    */
   function renderModel(onStoryAgent, snapshot, agent, f) {
-    // The intro's agent belongs to the story, which picked its model: no row for it.
-    modelField.hidden = onStoryAgent || !f || compact;
+    // The intro's agent belongs to the story, which picked its model; a draft being created
+    // is not yet the agent running: no row for either.
+    modelField.hidden = onStoryAgent || !f || f.isNew || compact;
     const pinned = agent?.model || "";
     const current = pinned || snapshot.currentModel || snapshot.defaultModel;
     modelBtn.disabled = modelBusy || !!pinned;
