@@ -180,6 +180,11 @@ class BrainClientNode(Node):
                 if ok:
                     continue
                 return SetParametersResult(successful=False, reason=detail)
+            if param.name in ("llm_thinking", "llm_base_url", "llm_extra_body"):
+                ok, detail = self.brain.use_llm_setting(param.name, str(param.value).strip())
+                if ok:
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()

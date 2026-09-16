@@ -651,6 +651,26 @@ def test_the_active_agents_model_outranks_the_robots_setting(agent_factory, monk
     assert agent.use_model(None, agent=True) == (True, "replay:m")
 
 
+def test_a_server_url_change_reaches_the_next_request(agent_factory, monkeypatch):
+    # The URL is the whole configuration of a LAN model: applying the model name live while
+    # the route stayed at boot's value would send the new name to the old server.
+    agent, _ = agent_factory()
+    seen = {}
+    from brain_client.brain import agent as agent_module
+
+    def configure(spec, proxy, **kwargs):
+        seen.update(kwargs)
+        return Llm(spec, Replay([reply(Text("ok"))]), Backend.DIRECT)
+
+    monkeypatch.setattr(agent_module, "configure", configure)
+
+    assert agent.use_llm_setting("llm_base_url", "http://10.0.0.5:8000/v1")[0] is True
+    assert seen["base_url"] == "http://10.0.0.5:8000/v1"
+    # And it stays the route the next model switch is configured against.
+    agent.use_model("openai-chat:nemotron", agent=False)
+    assert seen["base_url"] == "http://10.0.0.5:8000/v1"
+
+
 def test_failed_turn_leaves_events_queued_for_the_retry(agent_factory, monkeypatch):
     agent, state = agent_factory()
 

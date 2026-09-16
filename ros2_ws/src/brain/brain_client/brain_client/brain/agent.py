@@ -132,8 +132,13 @@ class BrainAgent:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
         self._proxy = proxy
+        # The llm_* settings as they stand now: changing one rebuilds on the running model,
+        # so a LAN server's URL takes effect the same turn its model name does.
         self._default_spec = config.llm_model  # the robot's setting; an agent may name its own
         self._agent_spec: str | None = None
+        self._thinking = config.llm_thinking
+        self._base_url = config.llm_base_url
+        self._extra_body = config.llm_extra_body
         self.backend = llm.backend
         # As resolved, not as typed: a bare "claude-sonnet-5" in settings reads back
         # "anthropic:claude-sonnet-5" here, which is what the trace chip should show.
@@ -252,9 +257,25 @@ class BrainAgent:
             self._agent_spec = spec
         else:
             self._default_spec = spec or DEFAULT_MODEL
+        return self._reconfigure()
+
+    def use_llm_setting(self, name: str, value: str) -> tuple[bool, str]:
+        """A thinking level, a server URL or an extra-body JSON, applied to the running model.
+
+        Unlike the model itself these change nothing about *which* vendor answers, so the
+        rebuild is forced: the context carries the thinking level, and the route carries the
+        URL and the extra fields.
+        """
+        setattr(self, {"llm_thinking": "_thinking", "llm_base_url": "_base_url"}.get(name, "_extra_body"), value)
+        return self._reconfigure(force=True)
+
+    def _reconfigure(self, *, force: bool = False) -> tuple[bool, str]:
         wanted = self._agent_spec or self._default_spec
-        llm = configure(wanted, self._proxy, base_url=self._config.llm_base_url, extra_body=self._config.llm_extra_body)
-        if llm.spec == self.model and self._context is not None:
+        try:
+            llm = configure(wanted, self._proxy, base_url=self._base_url, extra_body=self._extra_body)
+        except ValueError as error:  # an unknown vendor prefix, or extra_body that is not JSON
+            return False, str(error)
+        if not force and llm.spec == self.model and self._context is not None:
             return True, llm.spec
         if llm.provider is None:
             return False, f"no way to reach {llm.spec}: add its API key under Settings → Agent → Keys"
@@ -266,7 +287,7 @@ class BrainAgent:
         self.model, self.backend = llm.spec, llm.backend
         self._context = ChatContext(
             llm.provider,
-            thinking=self._thinking_level(self._config.llm_thinking),
+            thinking=self._thinking_level(self._thinking),
             max_history=self._config.history_max_entries,
             max_image_turns=self._config.history_max_image_turns,
             reference=self_reference_turns(),
