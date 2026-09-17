@@ -82,6 +82,10 @@ services:
       # Loopback by default, like rosbridge; SIM_FOXGLOVE_BIND=0.0.0.0 opens it
       # to the LAN.
       - "${SIM_FOXGLOVE_BIND:-127.0.0.1}:${SIM_FOXGLOVE_PORT:-8765}:8765"
+      # LeRobot bridge (manipulation_server): a lerobot process on this machine drives the
+      # sim with --robot.remote_ip=localhost. Loopback only, like rosbridge.
+      - "127.0.0.1:${SIM_LEROBOT_ACTIONS_PORT:-5555}:5555"
+      - "127.0.0.1:${SIM_LEROBOT_OBSERVATIONS_PORT:-5556}:5556"
 
     volumes:
       # 1) Mount your local code (paths are relative to this file's directory)

@@ -18,3 +18,12 @@ manipulation_server:
     #   = 0 : disabled -- fall back to the chunked-queue path (replan every n_action_steps)
     # Disabled by default; 0.01 is a good starting value to enable smoothing (pins n_action_steps=1).
     temporal_ensemble_coeff: 0.0
+    # LeRobot bridge: a lerobot process (laptop, or a uv env on this Jetson) observes and drives the
+    # robot over ZMQ. See lerobot/README.md. Idle until a client connects; commands are ignored
+    # while a behavior is executing; the base stops if a commanding client goes silent for 0.5 s.
+    lerobot_bridge:
+      enabled: true
+      port_actions: 5555        # PULL: clients push JSON actions / heartbeats
+      port_observations: 5556   # PUB: 'state' (JSON) and 'obs' (JSON + one JPEG per camera)
+      rate_hz: 30.0
+      jpeg_quality: 90
