@@ -28,6 +28,7 @@ import {
   WEBRTC_ANSWER_TOPIC,
   WEBRTC_ICE_IN_TOPIC,
   WEBRTC_ICE_OUT_TOPIC,
+  WEBRTC_ACTIVE_STREAMS_TOPIC,
 } from "./constants.js";
 import { createLocalPeerConnection, describeIceCandidate, wireDiagnosticDataChannels } from "./webrtcConfig.js";
 import { setMicAudioActive } from "./micAudioState.js";
@@ -93,11 +94,13 @@ export class WebRtcSession {
   // no-reneg START (or no START at all, for promotion within the already-live set), so it's instant.
   /** @type {(MediaStream | null)[]} */ #videoStreams = [];
   /** @type {boolean[]} */ #videoLive = [];
+  /** @type {string[]} */ #cameraRoster = [];
   // Camera names the robot should push (the START `video:` payload). Bootstrap guess until the UI learns
   // the real roster from /webrtc/active_streams and calls setActiveCameras.
   /** @type {string[]} */ #activeCams = ["main"];
   #primaryIndex = 0;
   #primaryName = "main";
+  #preferRectifiedMainForOverlay = false;
   // Unique per page-load; the robot routes our offer/answer/ICE on the *_id topics by this id, so we
   // negotiate as an independent peer (and stream concurrently with any other device).
   #clientId = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
@@ -116,6 +119,56 @@ export class WebRtcSession {
     this.#unsubs = [
       rosClient.subscribe(WEBRTC_OFFER_TOPIC, (p) => void this.#onOffer(p), undefined, "std_msgs/msg/String"),
       rosClient.subscribe(WEBRTC_ICE_OUT_TOPIC, (p) => void this.#onIceOut(p), undefined, "std_msgs/msg/String"),
+      rosClient.subscribe(
+        WEBRTC_ACTIVE_STREAMS_TOPIC,
+        (p) => {
+          const raw = p?.data ?? p?.msg?.data;
+          if (typeof raw !== "string") return;
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed?.cameras)) {
+              const previousHadRectified = this.#cameraRoster.includes("main_rect");
+              this.#cameraRoster = parsed.cameras.filter((name) => typeof name === "string");
+              const nowHasRectified = this.#cameraRoster.includes("main_rect");
+              if (
+                this.#preferRectifiedMainForOverlay &&
+                previousHadRectified !== nowHasRectified &&
+                this.#activeCams.includes("main") &&
+                this.#started &&
+                this.#ros.state === "connected" &&
+                this.#pc
+              ) {
+                const effective = this.#effectiveActiveCameras(this.#activeCams);
+                if (effective.length > 0) {
+                  this.#ros.publish(WEBRTC_START_TOPIC, {
+                    data: JSON.stringify({
+                      source: "live",
+                      video: effective,
+                      audio: this.#state.audioRequested,
+                      client_id: this.#clientId,
+                    }),
+                  });
+                }
+                if (this.#primaryName === "main") {
+                  const effectiveMain = this.#effectiveCameraName("main");
+                  const idx = this.#cameraRoster.indexOf(effectiveMain);
+                  if (idx >= 0) {
+                    this.#primaryIndex = idx;
+                    const stream = this.#videoStreams[idx] ?? null;
+                    if (stream) {
+                      this.#patch({ videoStream: stream, status: this.#videoLive[idx] ? "streaming" : "connecting" });
+                    }
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore malformed status payloads.
+          }
+        },
+        undefined,
+        "std_msgs/msg/String",
+      ),
       // We're an independent peer (client_id), so we do NOT yield when another device opens the
       // camera — the robot fans out to all viewers concurrently. (No /webrtc/start watch / preemption.)
       rosClient.onStateChange((state) => {
@@ -221,20 +274,26 @@ export class WebRtcSession {
   setActiveCameras(names) {
     const next = [...names];
     if (next.length === this.#activeCams.length && next.every((n, i) => n === this.#activeCams[i])) return;
-    const wasEmpty = this.#activeCams.length === 0;
+    const wasEmpty = this.#effectiveActiveCameras(this.#activeCams).length === 0;
     this.#activeCams = next;
     if (!this.#started || this.#ros.state !== "connected") return;
+    const effective = this.#effectiveActiveCameras(this.#activeCams);
     // Empty set, returning from one, or no live pc → (re)handshake, which also handles the release case.
     // A normal switch between non-empty sets stays reneg-free.
-    if (next.length === 0 || wasEmpty || !this.#pc) {
+    if (effective.length === 0 || wasEmpty || !this.#pc) {
       this.#handshakeAttempts = 0;
       this.#handshake();
       return;
     }
     this.#ros.publish(WEBRTC_START_TOPIC, {
-      data: JSON.stringify({ source: "live", video: next, audio: this.#state.audioRequested, client_id: this.#clientId }),
+      data: JSON.stringify({
+        source: "live",
+        video: effective,
+        audio: this.#state.audioRequested,
+        client_id: this.#clientId,
+      }),
     });
-    console.log("[webrtc] active cameras ->", next.join("+"), "(no reconnect)");
+    console.log("[webrtc] active cameras ->", effective.join("+"), "(no reconnect)");
   }
 
   /**
@@ -244,14 +303,25 @@ export class WebRtcSession {
    * @param {string} name camera name (for diagnostics)
    */
   setPrimaryCamera(index, name) {
-    if (this.#primaryIndex === index) return;
-    this.#primaryIndex = index;
+    const effectiveName = this.#effectiveCameraName(name);
+    const rosterIndex = this.#cameraRoster.indexOf(effectiveName);
+    const effectiveIndex = rosterIndex >= 0 ? rosterIndex : index;
+    if (this.#primaryIndex === effectiveIndex && this.#primaryName === name) return;
+    this.#primaryIndex = effectiveIndex;
     this.#primaryName = name;
     // Show the now-primary track immediately; if it isn't live yet the previous frame/overlay holds until
     // its `unmute` lands (showLive patches it then).
-    const stream = this.#videoStreams[index] ?? null;
-    if (stream) this.#patch({ videoStream: stream, status: this.#videoLive[index] ? "streaming" : "connecting" });
-    console.log("[webrtc] primary camera " + name + " (index " + index + ", no reconnect)");
+    const stream = this.#videoStreams[effectiveIndex] ?? null;
+    if (stream) this.#patch({ videoStream: stream, status: this.#videoLive[effectiveIndex] ? "streaming" : "connecting" });
+    console.log(
+      "[webrtc] primary camera " +
+        name +
+        " (effective " +
+        effectiveName +
+        ", index " +
+        effectiveIndex +
+        ", no reconnect)",
+    );
   }
 
   /** @returns {{ index: number, name: string }} the currently displayed (big) camera */
@@ -267,6 +337,40 @@ export class WebRtcSession {
   showMainCamera() {
     this.setActiveCameras(["main"]);
     this.setPrimaryCamera(0, "main");
+  }
+
+  /**
+   * Prefer the rectified main stream while depth overlay is enabled.
+   * @param {boolean} on
+   */
+  setDepthOverlayMainRectified(on) {
+    if (this.#preferRectifiedMainForOverlay === on) return;
+    this.#preferRectifiedMainForOverlay = on;
+    if (!this.#started || this.#ros.state !== "connected") return;
+
+    const effective = this.#effectiveActiveCameras(this.#activeCams);
+    if (effective.length === 0 || !this.#pc) {
+      this.#handshakeAttempts = 0;
+      this.#handshake();
+      return;
+    }
+    this.#ros.publish(WEBRTC_START_TOPIC, {
+      data: JSON.stringify({
+        source: "live",
+        video: effective,
+        audio: this.#state.audioRequested,
+        client_id: this.#clientId,
+      }),
+    });
+    if (this.#primaryName === "main") {
+      const effectiveMain = this.#effectiveCameraName("main");
+      const idx = this.#cameraRoster.indexOf(effectiveMain);
+      if (idx >= 0) {
+        this.#primaryIndex = idx;
+        const stream = this.#videoStreams[idx] ?? null;
+        if (stream) this.#patch({ videoStream: stream, status: this.#videoLive[idx] ? "streaming" : "connecting" });
+      }
+    }
   }
 
   // ---- handshake ----------------------------------------------------------
@@ -369,7 +473,7 @@ export class WebRtcSession {
         audio: this.#state.audioRequested,
         client_id: this.#clientId,
         renegotiate: true,
-        video: this.#activeCams,
+        video: this.#effectiveActiveCameras(this.#activeCams),
       }),
     });
     console.log("[webrtc] handshake: START sent", { client_id: this.#clientId, audio: this.#builtWithAudio });
@@ -688,6 +792,25 @@ export class WebRtcSession {
       pc.oniceconnectionstatechange = null;
       pc.close();
     }
+  }
+
+  /**
+   * @param {string} name
+   * @returns {string}
+   */
+  #effectiveCameraName(name) {
+    if (name !== "main") return name;
+    if (!this.#preferRectifiedMainForOverlay) return name;
+    return this.#cameraRoster.includes("main_rect") ? "main_rect" : "main";
+  }
+
+  /**
+   * @param {string[]} names
+   * @returns {string[]}
+   */
+  #effectiveActiveCameras(names) {
+    const mapped = names.map((name) => this.#effectiveCameraName(name));
+    return [...new Set(mapped)];
   }
 
   /** @param {Partial<WebRtcState>} patch */

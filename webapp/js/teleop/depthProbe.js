@@ -8,6 +8,7 @@ const DEPTH_NEAR_M = 0.2;
 const DEPTH_FAR_M = 6.0;
 const OVERLAY_ALPHA = 170;
 const DEPTH_MODEL_KEY = "innate.teleop.depthModel";
+const CLASSICAL_RAW_KEY = "innate.teleop.depthClassicalRaw";
 
 const DEPTH_ICON =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -56,6 +57,17 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
   }
   controls.appendChild(modelSelect);
 
+  const rawToggle = document.createElement("label");
+  rawToggle.className = "depth-raw-toggle microlabel";
+  rawToggle.title = "Show classical depth colors without overlay blending";
+  const rawToggleInput = document.createElement("input");
+  rawToggleInput.type = "checkbox";
+  rawToggleInput.className = "depth-raw-toggle-input";
+  const rawToggleText = document.createElement("span");
+  rawToggleText.textContent = "Raw classical";
+  rawToggle.append(rawToggleInput, rawToggleText);
+  controls.appendChild(rawToggle);
+
   const canvas = document.createElement("canvas");
   canvas.className = "depth-overlay";
   canvas.hidden = true;
@@ -71,7 +83,9 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
   let enabled = false;
   let mainCamera = true;
   let source = sourceById(loadDepthModel()) ?? DEPTH_SOURCES[0];
+  let classicalRawView = loadClassicalRawView();
   modelSelect.value = source.id;
+  rawToggleInput.checked = classicalRawView;
   modelSelect.hidden = true;
   /** @type {DepthFrame | null} */
   let frame = null;
@@ -108,6 +122,7 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
 
   button.addEventListener("click", () => {
     enabled = !enabled;
+    session.setDepthOverlayMainRectified?.(enabled);
     if (enabled) subscribeDepth();
     else unsubscribeDepth();
     syncButton();
@@ -125,6 +140,13 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
       unsubscribeDepth();
       subscribeDepth();
     }
+    syncButton();
+    syncOverlay();
+  });
+
+  rawToggleInput.addEventListener("change", () => {
+    classicalRawView = rawToggleInput.checked;
+    saveClassicalRawView(classicalRawView);
     syncButton();
     syncOverlay();
   });
@@ -156,6 +178,7 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
     button.classList.toggle("limited", enabled && !mainCamera);
     button.setAttribute("aria-pressed", String(enabled));
     modelSelect.hidden = !enabled;
+    rawToggle.hidden = !enabled || source.id !== "classical";
     button.title = !enabled
       ? `Show depth overlay (${source.label})`
       : mainCamera
@@ -166,6 +189,7 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
   function syncOverlay() {
     const show = enabled && mainCamera && !!frame && !!ctx;
     canvas.hidden = !show;
+    canvas.classList.toggle("raw-classical", show && source.id === "classical" && classicalRawView);
     if (!show) {
       readout.hidden = true;
       return;
@@ -243,6 +267,8 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
 
   function paintDepth() {
     if (!ctx || !frame || canvas.hidden) return;
+    const rawClassical = source.id === "classical" && classicalRawView;
+    const pixelAlpha = rawClassical ? 255 : OVERLAY_ALPHA;
     const { width, height, depthM } = frame;
     if (!image || image.width !== width || image.height !== height) image = ctx.createImageData(width, height);
     const pixels = image.data;
@@ -258,7 +284,7 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
       pixels[offset] = r;
       pixels[offset + 1] = g;
       pixels[offset + 2] = b;
-      pixels[offset + 3] = OVERLAY_ALPHA;
+      pixels[offset + 3] = pixelAlpha;
     }
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
@@ -267,6 +293,7 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
 
   return {
     destroy() {
+      session.setDepthOverlayMainRectified?.(false);
       unsubSession();
       unsubscribeDepth();
       observer?.disconnect();
@@ -299,6 +326,23 @@ function loadDepthModel() {
 function saveDepthModel(id) {
   try {
     localStorage.setItem(DEPTH_MODEL_KEY, id);
+  } catch {
+    // Ignore storage errors (private mode, restricted storage).
+  }
+}
+
+function loadClassicalRawView() {
+  try {
+    return localStorage.getItem(CLASSICAL_RAW_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** @param {boolean} on */
+function saveClassicalRawView(on) {
+  try {
+    localStorage.setItem(CLASSICAL_RAW_KEY, on ? "1" : "0");
   } catch {
     // Ignore storage errors (private mode, restricted storage).
   }

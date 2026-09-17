@@ -830,6 +830,29 @@ select.skill-input {
   outline-offset: 2px;
 }
 
+.depth-raw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--ctl-glass);
+  color: var(--ctl-text);
+  box-shadow: var(--ctl-sheen);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.depth-raw-toggle-input {
+  margin: 0;
+}
+
+.depth-overlay.raw-classical {
+  opacity: 1;
+  image-rendering: pixelated;
+}
+
 .depth-cursor {
   position: absolute;
   z-index: 6;
