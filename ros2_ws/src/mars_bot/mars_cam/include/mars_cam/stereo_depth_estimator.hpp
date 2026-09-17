@@ -11,6 +11,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
@@ -23,6 +24,12 @@
 #include <message_filters/synchronizer.h>
 
 #include <opencv2/opencv.hpp>
+
+#include "mars_cam/evidence_grid.hpp"
+#include "mars_cam/ground_plane_estimator.hpp"
+
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 // VPI headers
 #include <vpi/VPI.h>
@@ -54,6 +61,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     bool submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect);
     void syncSGM();
     cv::Mat extractDisparity();
+    cv::Mat extractConfidence();
     void cleanupSGMWraps();
 
     // ── Rectification (depth_estimator/rectification.cpp) ──────────────────
@@ -71,10 +79,15 @@ class StereoDepthEstimator : public rclcpp::Node {
     void publishDisparityMsg(const cv::Mat& disparity_float, const rclcpp::Time& ts,
                              rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
     void publishDepth(const cv::Mat& disparity_float, const rclcpp::Time& ts);
+    void publishDepthOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect, const cv::Mat& mono_rect,
+                             bool has_color_input, const rclcpp::Time& ts);
+    void publishHeightAboveFloorOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect,
+                                        const cv::Mat& mono_rect, bool has_color_input, const rclcpp::Time& ts);
 
     // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
     void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
     void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect, const rclcpp::Time& ts);
+    void publishPointCloudNav(const cv::Mat& disparity_lowres, const cv::Mat& confidence, const rclcpp::Time& ts);
     // ── Footprint Overlay, Mask & Cutout (depth_estimator/publishing.cpp) ──
     void computeFootprintMaskCalib();
     void publishFootprintOverlay(const cv::Mat& color_rect, const rclcpp::Time& ts);
@@ -91,6 +104,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     void leftCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
     void rightCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
     bool initCalibrationFromCameraInfo();
+    void updateCloudRotation(const cv::Mat& R1);
+    void loadMountCorrection();
 
     // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
     struct FilterTimings {
@@ -102,8 +117,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     };
     void initFilterParams();       // filters/filter_chain.cpp
     void logFilterConfig() const;  // filters/filter_chain.cpp
-    void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings, float focal_length,
-                          float baseline);
+    void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, cv::Mat* overlay_disparity_lowres,
+                          FilterTimings& timings, float focal_length, float baseline);
     // Individual filters (filters/simple_filters.cpp, filters/advanced_filters.cpp)
     void applyMedian(cv::Mat& img);
     void applyBilateral(cv::Mat& img);
@@ -144,8 +159,12 @@ class StereoDepthEstimator : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rectified_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_color_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_overlay_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr height_overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_nav_pub_;
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pointcloud_nav_stats_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_cutout_pub_;
@@ -157,6 +176,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     std::string left_rectified_topic_, right_rectified_topic_;
     std::string left_rectified_color_topic_;
     std::string left_rectified_compressed_topic_;
+    std::string depth_overlay_topic_;
+    std::string height_overlay_topic_;
     std::string pointcloud_topic_;
     std::string pointcloud_color_topic_;
     std::string footprint_cloud_topic_;
@@ -168,6 +189,14 @@ class StereoDepthEstimator : public rclcpp::Node {
     double max_fps_{10.0};
     std::chrono::steady_clock::duration min_process_interval_{};
     int pointcloud_decimation_;
+    double depth_overlay_near_m_{0.25};
+    double depth_overlay_far_m_{2.0};
+    double depth_overlay_alpha_{0.45};
+    int overlay_value_smooth_kernel_{3};
+    double overlay_edge_feather_px_{3.0};
+    double height_overlay_min_m_{0.0};
+    double height_overlay_max_m_{0.30};
+    double height_overlay_alpha_{0.60};
 
     // VPI SGM parameters
     int include_diagonals_;
@@ -185,6 +214,51 @@ class StereoDepthEstimator : public rclcpp::Node {
     cv::Mat P1_;  // left projection matrix (3×4), for point cloud intrinsics
     double baseline_, focal_length_;
     int jpeg_quality_{80};
+
+    // Rotation taking a back-projected point from the rectified left frame into
+    // camera_optical_frame, which is the UNRECTIFIED left camera in the URDF.
+    // R1 alone leaves the cloud rotated relative to the frame it is stamped
+    // with; the mount corrections absorb the residual mechanical error on top.
+    cv::Matx33f cloud_rotation_{cv::Matx33f::eye()};
+    double mount_pitch_correction_deg_{0.0};
+    double mount_roll_correction_deg_{0.0};
+    // Camera height error the URDF cannot know about, applied to the nav cloud
+    // only — it is a translation, meaningless in the optical frame the other
+    // clouds are stamped with.
+    double mount_height_correction_m_{0.0};
+    std::string data_directory_;
+
+    // Beyond this age the arm-footprint mask is dropped rather than reused.
+    double footprint_max_age_sec_{0.5};
+
+    // Forward traversability corridor, in base_link metres. Only this volume is
+    // published for the costmap: pitch error grows with range, and at the -20
+    // degree head position 0.25-1.0m stays inside the lens region where the
+    // pinhole model still fits.
+    std::string nav_frame_;
+    std::string pointcloud_nav_topic_;
+    std::string pointcloud_nav_stats_topic_;
+    double nav_roi_x_min_, nav_roi_x_max_, nav_roi_half_width_, nav_roi_z_min_, nav_roi_z_max_;
+
+    // Temporal evidence filter: decides whether a detection is believable
+    // before the costmap ever sees it. STVL then decides how long a believed
+    // obstacle persists — a different question.
+    // Height is measured from the OBSERVED floor, not base_link z, so a wrong
+    // camera mount and a robot pitching over a bump both stop mattering.
+    GroundPlaneEstimator ground_;
+    bool ground_estimation_enabled_{true};
+    double ground_search_extra_width_m_{0.30};
+
+    EvidenceGrid evidence_;
+    std::string evidence_frame_;
+    rclcpp::Time last_evidence_stamp_{0, 0, RCL_ROS_TIME};
+    bool evidence_enabled_{true};
+    double confidence_full_trust_m_{0.8};
+    double confidence_no_trust_m_{2.0};
+    double evidence_publish_radius_m_{1.20};
+
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     // Rectification maps (calibration resolution)
     cv::Mat map1_left_, map2_left_;

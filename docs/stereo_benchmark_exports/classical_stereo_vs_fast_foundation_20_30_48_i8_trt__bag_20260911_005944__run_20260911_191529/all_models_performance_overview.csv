@@ -1,0 +1,3 @@
+model,inference_effective_fps,inference_latency_p95_ms,inference_latency_p99_ms,camera_to_disparity_latency_p95_ms,camera_to_pointcloud_latency_p95_ms,dropped_frames_pct,cpu_util_p95_pct,gpu_util_p95_pct,ram_used_p95_mb,power_p95_w,max_temperature_c,valid_pairs
+classical_stereo,8.0009,42.6995,49.4393,42.6995,55.6226,47.551,20.6,39,2705,7.713,55.75,10622
+fast_foundation_20_30_48_i8_trt,1.31081,1074.8,2073.68,1281.18,1587.01,90.8163,30.4,99,4034.4,13.1,59.718,1827

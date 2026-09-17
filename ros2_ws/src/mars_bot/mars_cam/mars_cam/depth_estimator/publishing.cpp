@@ -8,7 +8,72 @@
 #include <algorithm>
 #include <cmath>
 
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
+
 namespace mars_cam {
+
+namespace {
+
+void smoothOverlayValues(cv::Mat& normalized, const cv::Mat& valid_mask, int kernel_size) {
+    if (kernel_size <= 1 || normalized.empty() || valid_mask.empty())
+        return;
+    cv::Mat blurred;
+    cv::GaussianBlur(normalized, blurred, cv::Size(kernel_size, kernel_size), 0.0, 0.0, cv::BORDER_REPLICATE);
+    blurred.copyTo(normalized, valid_mask);
+}
+
+cv::Mat buildEdgeFeather(const cv::Mat& valid_mask, float base_alpha, float feather_px) {
+    cv::Mat alpha(valid_mask.size(), CV_32FC1, cv::Scalar(0.0f));
+    if (valid_mask.empty() || base_alpha <= 0.0f)
+        return alpha;
+
+    if (feather_px <= 0.0f) {
+        alpha.setTo(base_alpha, valid_mask);
+        return alpha;
+    }
+
+    cv::Mat inside_dist;
+    cv::distanceTransform(valid_mask, inside_dist, cv::DIST_L2, 3);
+
+    cv::Mat inv_mask;
+    cv::bitwise_not(valid_mask, inv_mask);
+    cv::Mat outside_dist;
+    cv::distanceTransform(inv_mask, outside_dist, cv::DIST_L2, 3);
+
+    cv::Mat signed_dist = inside_dist - outside_dist;
+    alpha = (signed_dist + feather_px) / (2.0f * feather_px);
+    cv::threshold(alpha, alpha, 1.0, 1.0, cv::THRESH_TRUNC);
+    cv::threshold(alpha, alpha, 0.0, 0.0, cv::THRESH_TOZERO);
+    alpha *= base_alpha;
+    return alpha;
+}
+
+cv::Mat blendWithAlpha(const cv::Mat& base_bgr, const cv::Mat& overlay_bgr, const cv::Mat& alpha) {
+    cv::Mat out = base_bgr.clone();
+    for (int y = 0; y < base_bgr.rows; ++y) {
+        const cv::Vec3b* b = base_bgr.ptr<cv::Vec3b>(y);
+        const cv::Vec3b* o = overlay_bgr.ptr<cv::Vec3b>(y);
+        const float* a = alpha.ptr<float>(y);
+        cv::Vec3b* d = out.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < base_bgr.cols; ++x) {
+            const float w = a[x];
+            if (w <= 0.0f)
+                continue;
+            if (w >= 1.0f) {
+                d[x] = o[x];
+                continue;
+            }
+            d[x][0] = static_cast<uint8_t>((1.0f - w) * b[x][0] + w * o[x][0]);
+            d[x][1] = static_cast<uint8_t>((1.0f - w) * b[x][1] + w * o[x][1]);
+            d[x][2] = static_cast<uint8_t>((1.0f - w) * b[x][2] + w * o[x][2]);
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 // =============================================================================
 // Publish mono-rectified left/right images (upscaled to input resolution)
@@ -167,6 +232,192 @@ void StereoDepthEstimator::publishDepth(const cv::Mat& disparity_float, const rc
 }
 
 // =============================================================================
+// Publish colorized depth over the rectified left image (near=red, far=blue).
+// Topic is for operator visualization only; raw metric depth stays on depth_topic.
+// =============================================================================
+void StereoDepthEstimator::publishDepthOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect,
+                                               const cv::Mat& mono_rect, bool has_color_input, const rclcpp::Time& ts) {
+    if (disparity_float.empty() || mono_rect.empty())
+        return;
+
+    const float fb = static_cast<float>(focal_length_) * std::abs(static_cast<float>(baseline_));
+    const float MAX_DEPTH_M = 10.0f;
+
+    cv::Mat depth_calib(calib_height_, calib_width_, CV_16UC1);
+    for (int y = 0; y < calib_height_; y++) {
+        const float* disp_row = disparity_float.ptr<float>(y);
+        uint16_t* depth_row = depth_calib.ptr<uint16_t>(y);
+        for (int x = 0; x < calib_width_; x++) {
+            const float d = disp_row[x];
+            if (d > 0.0f) {
+                float z = fb / d;
+                if (z > 0.0f && z <= MAX_DEPTH_M) {
+                    depth_row[x] = static_cast<uint16_t>(std::clamp(z * 1000.0f, 0.0f, 65535.0f));
+                } else {
+                    depth_row[x] = 0;
+                }
+            } else {
+                depth_row[x] = 0;
+            }
+        }
+    }
+
+    cv::Mat base_calib;
+    if (has_color_input && !color_rect.empty()) {
+        base_calib = color_rect;
+    } else if (!mono_rect.empty()) {
+        cv::cvtColor(mono_rect, base_calib, cv::COLOR_GRAY2BGR);
+    } else {
+        return;
+    }
+
+    const float near_m = std::max(0.01f, static_cast<float>(depth_overlay_near_m_));
+    const float far_m = std::max(near_m + 0.01f, static_cast<float>(depth_overlay_far_m_));
+    const float alpha = static_cast<float>(std::clamp(depth_overlay_alpha_, 0.0, 1.0));
+
+    cv::Mat depth_m;
+    depth_calib.convertTo(depth_m, CV_32FC1, 1.0 / 1000.0);
+    cv::Mat norm = (depth_m - near_m) / (far_m - near_m);
+    cv::threshold(norm, norm, 1.0, 1.0, cv::THRESH_TRUNC);
+    cv::threshold(norm, norm, 0.0, 0.0, cv::THRESH_TOZERO);
+    cv::Mat visual_norm = 1.0 - norm;
+    const cv::Mat valid_mask = depth_calib > 0;
+    smoothOverlayValues(visual_norm, valid_mask, overlay_value_smooth_kernel_);
+    cv::Mat visual_u8;
+    visual_norm.convertTo(visual_u8, CV_8UC1, 255.0);
+
+    cv::Mat depth_color;
+    cv::applyColorMap(visual_u8, depth_color, cv::COLORMAP_JET);
+
+    const cv::Mat alpha_map = buildEdgeFeather(valid_mask, alpha, static_cast<float>(overlay_edge_feather_px_));
+    const cv::Mat overlay = blendWithAlpha(base_calib, depth_color, alpha_map);
+
+    cv::Mat overlay_full;
+    cv::resize(overlay, overlay_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+
+    auto msg = std::make_unique<sensor_msgs::msg::Image>();
+    msg->header.stamp = ts;
+    msg->header.frame_id = frame_id_;
+    msg->height = image_height_;
+    msg->width = image_width_;
+    msg->encoding = "bgr8";
+    msg->is_bigendian = false;
+    msg->step = image_width_ * 3;
+    msg->data.resize(msg->height * msg->step);
+    memcpy(msg->data.data(), overlay_full.data, msg->data.size());
+    depth_overlay_pub_->publish(std::move(msg));
+}
+
+// =============================================================================
+// Publish colorized height-above-floor over the rectified left image.
+// Blue is near the floor, red is high above it.
+// =============================================================================
+void StereoDepthEstimator::publishHeightAboveFloorOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect,
+                                                          const cv::Mat& mono_rect, bool has_color_input,
+                                                          const rclcpp::Time& ts) {
+    if (disparity_float.empty())
+        return;
+
+    geometry_msgs::msg::TransformStamped tf_base;
+    try {
+        tf_base = tf_buffer_->lookupTransform(nav_frame_, frame_id_, tf2::TimePointZero);
+    } catch (const tf2::TransformException& e) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Height overlay transform unavailable: %s", e.what());
+        return;
+    }
+
+    cv::Matx33f R_base;
+    {
+        const auto& q = tf_base.transform.rotation;
+        const tf2::Matrix3x3 basis(tf2::Quaternion(q.x, q.y, q.z, q.w));
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                R_base(r, c) = static_cast<float>(basis[r][c]);
+    }
+    cv::Vec3f t_base(static_cast<float>(tf_base.transform.translation.x), static_cast<float>(tf_base.transform.translation.y),
+                     static_cast<float>(tf_base.transform.translation.z + mount_height_correction_m_));
+    const cv::Matx33f to_nav = R_base * cloud_rotation_;
+
+    const int dw = disparity_float.cols;
+    const int dh = disparity_float.rows;
+    const float s = static_cast<float>(dw) / static_cast<float>(calib_width_);
+    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * s;
+    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * s;
+    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * s;
+    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * s;
+    const float f_depth = static_cast<float>(focal_length_);
+    const float baseline = static_cast<float>(baseline_);
+
+    const GroundPlane& ground = ground_.plane();
+    const float min_h = static_cast<float>(height_overlay_min_m_);
+    const float max_h = std::max(min_h + 0.01f, static_cast<float>(height_overlay_max_m_));
+    const float span = max_h - min_h;
+    const float alpha = static_cast<float>(std::clamp(height_overlay_alpha_, 0.0, 1.0));
+
+    cv::Mat base_calib;
+    if (has_color_input && !color_rect.empty()) {
+        base_calib = color_rect;
+    } else if (!mono_rect.empty()) {
+        cv::cvtColor(mono_rect, base_calib, cv::COLOR_GRAY2BGR);
+    } else {
+        return;
+    }
+
+    cv::Mat norm_u8 = cv::Mat::zeros(dh, dw, CV_8UC1);
+    cv::Mat valid_mask = cv::Mat::zeros(dh, dw, CV_8UC1);
+    for (int py = 0; py < dh; ++py) {
+        const float* disp = disparity_float.ptr<float>(py);
+        uint8_t* dst = norm_u8.ptr<uint8_t>(py);
+        uint8_t* mask = valid_mask.ptr<uint8_t>(py);
+        for (int px = 0; px < dw; ++px) {
+            const float d = disp[px];
+            if (!(d > 0.0f) || !std::isfinite(d))
+                continue;
+            const float z = f_depth * baseline / d;
+            if (!(z > 0.0f) || !std::isfinite(z))
+                continue;
+
+            const cv::Vec3f in_base =
+                to_nav * cv::Vec3f((static_cast<float>(px) - cx) * z / fx, (static_cast<float>(py) - cy) * z / fy, z) +
+                t_base;
+            const float height = static_cast<float>(ground_estimation_enabled_
+                                                        ? ground.height_above(in_base[0], in_base[1], in_base[2])
+                                                        : in_base[2]);
+            const float h = std::max(min_h, std::min(max_h, height));
+            const float normalized = (h - min_h) / span;
+            dst[px] = static_cast<uint8_t>(std::clamp(normalized, 0.0f, 1.0f) * 255.0f);
+            mask[px] = 255;
+        }
+    }
+
+    cv::Mat visual_norm;
+    norm_u8.convertTo(visual_norm, CV_32FC1, 1.0 / 255.0);
+    smoothOverlayValues(visual_norm, valid_mask, overlay_value_smooth_kernel_);
+    visual_norm.convertTo(norm_u8, CV_8UC1, 255.0);
+    cv::Mat height_color;
+    cv::applyColorMap(norm_u8, height_color, cv::COLORMAP_JET);
+
+    const cv::Mat alpha_map = buildEdgeFeather(valid_mask, alpha, static_cast<float>(overlay_edge_feather_px_));
+    const cv::Mat overlay = blendWithAlpha(base_calib, height_color, alpha_map);
+
+    cv::Mat overlay_full;
+    cv::resize(overlay, overlay_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+
+    auto msg = std::make_unique<sensor_msgs::msg::Image>();
+    msg->header.stamp = ts;
+    msg->header.frame_id = frame_id_;
+    msg->height = image_height_;
+    msg->width = image_width_;
+    msg->encoding = "bgr8";
+    msg->is_bigendian = false;
+    msg->step = image_width_ * 3;
+    msg->data.resize(msg->height * msg->step);
+    memcpy(msg->data.data(), overlay_full.data, msg->data.size());
+    height_overlay_pub_->publish(std::move(msg));
+}
+
+// =============================================================================
 // Compute the footprint convex-hull mask at calibration resolution.
 // Stores the result in footprint_mask_calib_ (255 = robot body, 0 = free).
 // Called once per frame — reused by publishing and the disparity filter chain.
@@ -183,10 +434,29 @@ void StereoDepthEstimator::computeFootprintMaskCalib() {
     if (!cloud || cloud->width * cloud->height == 0)
         return;
 
+    // A stale mask is the dangerous failure: it keeps blanking wherever the arm
+    // used to be, which can hide a real obstacle there, while leaving the arm's
+    // new position unmasked anyway. Dropping it instead degrades to a phantom
+    // obstacle on the arm — annoying, but it stops the robot rather than
+    // driving it into something.
+    const double age_sec = (this->now() - rclcpp::Time(cloud->header.stamp)).seconds();
+    if (age_sec > footprint_max_age_sec_) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Footprint cloud is %.2fs stale (limit %.2fs) — arm not masked. Is dynamic_footprint up?",
+                             age_sec, footprint_max_age_sec_);
+        return;
+    }
+
     const float fx = static_cast<float>(P1_.at<double>(0, 0));
     const float fy = static_cast<float>(P1_.at<double>(1, 1));
     const float cx = static_cast<float>(P1_.at<double>(0, 2));
     const float cy = static_cast<float>(P1_.at<double>(1, 2));
+
+    // The cloud arrives in camera_optical_frame but P1 projects from the
+    // RECTIFIED frame, so the arm corners need rotating the opposite way to the
+    // point cloud. Without this the mask sits several pixels off the arm and
+    // its edges leak through as obstacles.
+    const cv::Matx33f optical_to_rectified = cloud_rotation_.t();
 
     std::vector<cv::Point2f> projected_pts;
 
@@ -195,12 +465,12 @@ void StereoDepthEstimator::computeFootprintMaskCalib() {
     sensor_msgs::PointCloud2ConstIterator<float> iz(*cloud, "z");
 
     for (; ix != ix.end(); ++ix, ++iy, ++iz) {
-        const float X = *ix;
-        const float Y = *iy;
-        const float Z = *iz;
-        if (Z <= 0.0f || !std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+        if (!std::isfinite(*ix) || !std::isfinite(*iy) || !std::isfinite(*iz))
             continue;
-        projected_pts.emplace_back(fx * X / Z + cx, fy * Y / Z + cy);
+        const cv::Vec3f p = optical_to_rectified * cv::Vec3f(*ix, *iy, *iz);
+        if (p[2] <= 0.0f)
+            continue;
+        projected_pts.emplace_back(fx * p[0] / p[2] + cx, fy * p[1] / p[2] + cy);
     }
 
     if (projected_pts.size() >= 3) {
