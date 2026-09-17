@@ -6,6 +6,9 @@ import argparse
 import subprocess
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FAST_FOUNDATION_CHECKOUT = REPO_ROOT / "ros2_ws" / "src" / "third_party" / "stereo_models" / "Fast-FoundationStereo"
+
 
 def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
@@ -15,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Fast-FoundationStereo single-engine TensorRT artifacts.")
     parser.add_argument(
         "--model-repo",
-        default="/home/jetson1/innate-os/ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo",
+        default=str(FAST_FOUNDATION_CHECKOUT),
         help="Path to Fast-FoundationStereo repository.",
     )
     parser.add_argument(

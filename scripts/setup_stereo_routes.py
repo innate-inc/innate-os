@@ -12,7 +12,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FAST_FOUNDATION_REPO = "https://github.com/NVlabs/Fast-FoundationStereo.git"
-FAST_FOUNDATION_REF = "master"
+# pinned: the benchmark runs in STEREO_BENCHMARK.md were produced against this commit
+FAST_FOUNDATION_COMMIT = "a290ba04c1b3ad1ec41a33974a157b2917b624d4"
 FAST_FOUNDATION_CHECKOUT = REPO_ROOT / "ros2_ws" / "src" / "third_party" / "stereo_models" / "Fast-FoundationStereo"
 FAST_FOUNDATION_VENV = REPO_ROOT / ".venvs" / "fast_foundation_stereo"
 PYTORCH_INDEX_CU124 = "https://download.pytorch.org/whl/cu124"
@@ -40,20 +41,20 @@ def _try_run(cmd: list[str], cwd: Path) -> bool:
     return result.returncode == 0
 
 
-def _ensure_git_checkout(target: Path, url: str, ref: str, update_existing: bool, dry_run: bool) -> None:
+def _ensure_git_checkout(target: Path, url: str, commit: str, update_existing: bool, dry_run: bool) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        if not (target / ".git").exists():
-            raise RuntimeError(f"Checkout path exists but is not a git repo: {target}")
-        if not update_existing:
-            print(f"[skip] keeping existing checkout: {target}")
-            return
-        _run(["git", "fetch", "--all"], cwd=target, dry_run=dry_run)
-        _run(["git", "checkout", ref], cwd=target, dry_run=dry_run)
-        _run(["git", "pull", "--ff-only", "origin", ref], cwd=target, dry_run=dry_run)
-        _run(["git", "submodule", "update", "--init", "--recursive"], cwd=target, dry_run=dry_run)
+    exists = target.exists()
+    if exists and not (target / ".git").exists():
+        raise RuntimeError(f"Checkout path exists but is not a git repo: {target}")
+    if exists and not update_existing:
+        print(f"[skip] keeping existing checkout: {target}")
         return
-    _run(["git", "clone", "--branch", ref, "--recursive", url, str(target)], cwd=REPO_ROOT, dry_run=dry_run)
+    if exists:
+        _run(["git", "fetch", "--all"], cwd=target, dry_run=dry_run)
+    else:
+        _run(["git", "clone", "--recursive", url, str(target)], cwd=REPO_ROOT, dry_run=dry_run)
+    _run(["git", "checkout", commit], cwd=target, dry_run=dry_run)
+    _run(["git", "submodule", "update", "--init", "--recursive"], cwd=target, dry_run=dry_run)
 
 
 def _run_lightweight_route(args: argparse.Namespace) -> None:
@@ -64,7 +65,7 @@ def _run_lightweight_route(args: argparse.Namespace) -> None:
     _ensure_git_checkout(
         target=checkout_dir,
         url=FAST_FOUNDATION_REPO,
-        ref=FAST_FOUNDATION_REF,
+        commit=args.ref,
         update_existing=not args.no_update_existing,
         dry_run=args.dry_run,
     )
@@ -139,6 +140,11 @@ def parse_args() -> argparse.Namespace:
         help="Setup route to execute.",
     )
     parser.add_argument("--checkout-dir", help="Override Fast-FoundationStereo checkout path.")
+    parser.add_argument(
+        "--ref",
+        default=FAST_FOUNDATION_COMMIT,
+        help="Fast-FoundationStereo commit or branch to check out.",
+    )
     parser.add_argument("--venv-dir", help="Override lightweight venv path.")
     parser.add_argument("--python", default="python3", help="Python executable used to create lightweight venv.")
     parser.add_argument("--skip-venv", action="store_true", help="Skip venv creation in lightweight route.")

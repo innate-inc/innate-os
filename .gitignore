@@ -119,6 +119,10 @@ data/.last_mode
 .onnx
 *.onnx
 
+# stereo benchmark: upstream Fast-FoundationStereo checkout, its weights and
+# TRT engines -- recreated by scripts/setup_stereo_routes.py
+ros2_ws/src/third_party/
+
 # arm_wave directory (local data, not tracked)
 arm_wave/
 

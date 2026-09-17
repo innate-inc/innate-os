@@ -56,9 +56,44 @@ sudo apt-get install -y python3.10-venv
 
 This route installs:
 
-- `ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo`
+- `ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo`, pinned to the commit the
+  runs below were measured against
 - `.venvs/fast_foundation_stereo`
 - `ros2 run mars_cam fast_foundation_stereo_node`
+
+Both paths are gitignored: nothing here is committed, and this script is the only way to
+recreate them on a fresh robot.
+
+### Fetch the checkpoints
+
+The weights are not in the upstream clone. Download `23-36-37` and `20-30-48` from the
+[Fast-FoundationStereo drive folder](https://drive.google.com/drive/folders/1HuTt7UIp7gQsMiDvJwVuWmKpvFzIIMap?usp=drive_link)
+and unpack them so each folder sits directly under `weights/`:
+
+```
+ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo/weights/
+  20-30-48/{cfg.yaml,model_best_bp2_serialize.pth}
+  23-36-37/{cfg.yaml,model_best_bp2_serialize.pth}
+```
+
+With no explicit `model_path`, the node takes the first checkpoint in sorted order, so
+`20-30-48` wins over `23-36-37`. A half-populated `weights/` folder therefore surfaces as a
+wrong-model run rather than an error.
+
+### Build the TensorRT engines
+
+TensorRT engines are tied to the board, the driver and the TensorRT version, so they are
+built locally and never shared between robots:
+
+```bash
+python3 /home/jetson1/innate-os/scripts/build_fast_foundation_trt_engines.py \
+  --checkpoint 23-36-37 \
+  --checkpoint 20-30-48
+```
+
+This writes `engines/<checkpoint>_i<valid_iters>_<height>x<width>/fast_foundationstereo.engine`,
+which is the `trt_engine_path` the next section launches. It needs `trtexec` at
+`/usr/src/tensorrt/bin/trtexec`; pass `--trtexec` if yours lives elsewhere.
 
 ## 4) Show Fast Foundation depth in teleop
 
