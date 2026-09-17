@@ -769,18 +769,18 @@ def prune_superseded_pulled_images(config: dict[str, object], *, cwd: Path, env:
         prune_stale_local_images(current, cwd=cwd, env=env, label=label, tag_prefix=prefix, keep_recent=keep)
 
 
-# Directories the container's ROS nodes create lazily on the workspace
-# bind-mount. The container runs as root: on native Linux a root mkdir lands
-# on the host as root:root and locks the user out of their own skills dir
-# (macOS is immune -- Docker Desktop's file sharing rewrites ownership).
-WORKSPACE_USER_DIRS = ("custom_agents", "custom_skills")
+# Host directories the container writes into. The container runs as root: on
+# native Linux a missing bind source, or a root mkdir on a bind-mount, lands on
+# the host as root:root and locks the user out of their own checkout (macOS is
+# immune -- Docker Desktop's file sharing rewrites ownership).
+USER_OWNED_BIND_DIRS = ("data", "workspace/custom_agents", "workspace/custom_skills")
 
 
-def ensure_workspace_dirs(config: dict[str, object]) -> None:
-    """Pre-create container-written workspace dirs as the invoking user."""
+def ensure_bind_mount_dirs(config: dict[str, object]) -> None:
+    """Pre-create container-written bind-mount dirs as the invoking user."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    for name in WORKSPACE_USER_DIRS:
-        path = os_repo / "workspace" / name
+    for name in USER_OWNED_BIND_DIRS:
+        path = os_repo / name
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -929,7 +929,11 @@ def _seed_nav_map(config: dict[str, object]) -> None:
         return
     state = os_repo / "data"
     state.mkdir(parents=True, exist_ok=True)
-    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    # Replaced, not rewritten: the container's mode manager recreates this file
+    # as root, and a rename needs only the (user-owned) directory to be writable.
+    staged = state / ".last_map.tmp"
+    staged.write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    os.replace(staged, state / ".last_map")
 
 
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
