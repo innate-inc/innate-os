@@ -371,6 +371,15 @@ class PropRegistry:
     def _is_bound(self, name: str) -> bool:
         return name in self._addr or name in self._soft
 
+    def rigid_body_ids(self) -> set[int]:
+        """Compiled body ids for props represented by one rigid body.
+
+        Deformables are intentionally absent: their control vertices compile
+        to many generated bodies and their flex appearance is not stored in
+        ``model.geom_rgba``.
+        """
+        return {body_id for body_id, _qpos, _dof, _mocap in self._addr.values()}
+
     # -- placement (callers hold the sim lock) --
 
     def _set_pose(self, data, name: str, x: float, y: float, z: float, yaw: float) -> None:

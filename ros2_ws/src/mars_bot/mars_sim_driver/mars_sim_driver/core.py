@@ -553,7 +553,7 @@ class VirtualMars:
     def _encode_display_colours(self) -> None:
         """Prop rgba is linear light to the viewer's three.js and a display value to
         MuJoCo; encoded once, the cameras show the colours the viewer shows."""
-        prop_bodies = {self.model.body(name).id for name in self.props.props}
+        prop_bodies = self.props.rigid_body_ids()
         geoms = [g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] in prop_bodies]
         self.model.geom_rgba[geoms, :3] = _linear_to_srgb(self.model.geom_rgba[geoms, :3])
 
