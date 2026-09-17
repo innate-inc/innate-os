@@ -70,6 +70,20 @@ Without `external_commands`, `send_action` forwards six absolute joint targets (
 an Innate behavior is executing, and stops the base if a commanding client goes silent for
 half a second.
 
+## Trying a model that is only on lerobot main
+
+New policies land on lerobot's `main` weeks before a PyPI release. The plugin only uses the
+stable robot, teleoperator, and dataset interfaces, so it runs unchanged against `main`
+(checked against 0.6.2 with the LaWAM adapter). Point this environment at main:
+
+```bash
+uv pip install --python .venv/bin/python \
+    "lerobot[dataset,lawam] @ git+https://github.com/huggingface/lerobot@main"
+```
+
+Swap `lawam` for the extra of the policy you want, and pin a commit instead of `main` when
+you need a reproducible run. `uv sync` puts the environment back on the released version.
+
 ## Export recorded skills
 
 ```bash
