@@ -23,7 +23,7 @@
 ## Try it without a robot
 
 <p align="center">
-  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot in the browser" width="85%"></a>
+  <a href="https://www.innate.bot/changelog/august-12-2026/wide/07-web-app.mp4"><img src="docs/assets/readme/sim-agent.gif" alt="Video of the MARS agent interface: asking the simulated robot what it sees" width="85%"></a>
 </p>
 
 **[Try the live simulator →](https://sim.innate.bot)** — no install, no robot.
