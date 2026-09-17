@@ -207,6 +207,14 @@ def test_kinematic_props_use_mocap_pose_without_a_freejoint():
     assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
 
 
+def test_rigid_body_ids_exclude_deformable_vertex_bodies():
+    registry = PropRegistry({})
+    registry._addr["rigid"] = (7, 0, 0, None)
+    registry._soft["deformable"] = object()
+
+    assert registry.rigid_body_ids() == {7}
+
+
 def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
     runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
     runtime.act = next(i for i, act in enumerate(runtime.acts) if act.label == "Pick up the cube")

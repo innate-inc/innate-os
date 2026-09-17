@@ -20,7 +20,10 @@ import type { PropInfo, PropViewerDef } from "./props";
 /** Rescale + re-origin a raw glb into its MuJoCo body's local frame (glb
  * exports bake arbitrary origins, orientations and unit scales). */
 function normalizeModel(scene: THREE.Object3D, def: PropViewerDef): void {
-  if (def.preNormalized) return;
+  // A deformable glb keeps an identity metre/Z-up node transform: after its
+  // rest-pose fallback, its position buffer receives world-space IDF1 skinning
+  // output. Any ordinary fit/re-origin transform would move it a second time.
+  if (def.preNormalized || def.deformable) return;
   if (def.rotateToZUp !== false) scene.rotation.x = Math.PI / 2; // glTF Y-up -> scene Z-up
   scene.updateMatrixWorld(true);
   const size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
