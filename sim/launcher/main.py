@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -433,8 +434,9 @@ def filesystem_hint(exc: OSError) -> str:
     """One actionable line for a filesystem error, instead of a traceback."""
     if exc.errno in (errno.EACCES, errno.EPERM) and exc.filename:
         # Seen on native Linux: a container running as root owns a path in the checkout.
-        owner = Path(exc.filename).parent
-        return f"Your user cannot write here. Fix with: sudo chown -R $(id -un):$(id -gn) {owner}"
+        path = Path(exc.filename)
+        owned = path if path.is_dir() else path.parent
+        return f"Your user cannot write here. Fix with: sudo chown -R $(id -un):$(id -gn) {shlex.quote(str(owned))}"
     # e.g. a full disk that flipped the filesystem read-only (seen in a user test).
     return (
         "This is a filesystem problem, not an Innate one -- check free disk space "
