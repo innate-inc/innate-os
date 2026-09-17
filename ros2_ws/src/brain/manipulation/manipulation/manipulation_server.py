@@ -939,7 +939,10 @@ class ManipulationServer(Node):
         now = time.monotonic()
         bridge.commands_blocked = self.execution_running
         bridge.poll(now)
-        self._bridge_active = bridge.active(now)
+        active = bridge.active(now)
+        if active != self._bridge_active:
+            self.get_logger().info("LeRobot client connected" if active else "LeRobot client idle")
+        self._bridge_active = active
         joint_state = self.latest_joint_state
         if not self._bridge_active or joint_state is None or len(joint_state.position) < 6:
             return
