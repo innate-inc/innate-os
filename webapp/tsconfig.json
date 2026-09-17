@@ -12,6 +12,6 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["js/**/*"],
-  "//": "micWorklet.js runs in the AudioWorklet global scope (AudioWorkletProcessor, registerProcessor, sampleRate), which lib.dom does not declare.",
-  "exclude": ["js/agent/micWorklet.js"]
+  "//": "micWorklet.js runs in the AudioWorklet global scope (AudioWorkletProcessor, registerProcessor, sampleRate) and tracker.worker.js in the classic Worker scope (importScripts, a global `exports` for the vendored CommonJS bundle); lib.dom declares neither.",
+  "exclude": ["js/agent/micWorklet.js", "js/handControl/tracker.worker.js"]
 }

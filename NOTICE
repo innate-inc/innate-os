@@ -64,6 +64,23 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --------------------------------------------------------------------------------
+MediaPipe Tasks Vision -- Apache License, Version 2.0
+--------------------------------------------------------------------------------
+
+Copyright 2023 The MediaPipe Authors (https://ai.google.dev/edge/mediapipe).
+Vendored at version 0.10.32 so the robot serves the webapp's camera arm control
+entirely itself, with no CDN at runtime:
+
+    webapp/public/vendor/mediapipe-0.10.32/vision_bundle.js
+    webapp/public/vendor/mediapipe-0.10.32/wasm/vision_wasm_internal.js
+    webapp/public/vendor/mediapipe-0.10.32/wasm/vision_wasm_internal.wasm
+    webapp/public/vendor/mediapipe-0.10.32/hand_landmarker.task
+
+The last is the published Hand Landmarker model bundle (float16, v1,
+sha256 fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1),
+licensed under the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
 Simulator assets
 --------------------------------------------------------------------------------
 

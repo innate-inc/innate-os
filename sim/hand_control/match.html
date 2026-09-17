@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f5f0" />
+    <title>Teach your hand · Innate</title>
+    <link rel="icon" href="/favicon.svg" />
+  </head>
+  <body class="matching">
+    <header class="topbar">
+      <a class="brand" href="/">✳ innate.</a
+      ><span class="product-name">Teach your hand</span>
+      <div class="top-status">
+        <span class="sim-label">SIMULATION</span
+        ><span id="connection" class="connection">Connecting…</span>
+      </div>
+    </header>
+    <main class="match-layout">
+      <section class="match-stage">
+        <div class="match-heading">
+          <p class="eyebrow">YOUR GESTURES. YOUR INSTINCT.</p>
+          <h1 id="pose-title">Let’s find your natural mapping.</h1>
+          <p id="pose-prompt">
+            We show the robot pose. You show the hand pose that feels right.
+          </p>
+        </div>
+        <canvas
+          id="scene"
+          aria-label="Robot pose to match. Drag to orbit and inspect the claw."
+        ></canvas>
+        <div class="match-views">
+          <button id="side-view">View from the side</button
+          ><span>Drag to orbit</span>
+        </div>
+        <div class="match-stage-footer">
+          <span id="robot-status">Preparing MARS…</span
+          ><strong id="step-count">16 poses · about 3 minutes</strong>
+        </div>
+      </section>
+      <aside class="match-panel">
+        <section class="match-camera-card">
+          <div class="card-heading">
+            <h2>Your interpretation</h2>
+            <span id="hand-status" class="mini-status">Camera off</span>
+          </div>
+          <div class="match-camera">
+            <video id="camera" autoplay muted playsinline></video
+            ><canvas id="landmarks"></canvas
+            ><video id="take-preview" muted playsinline loop hidden></video>
+            <div id="camera-empty">
+              Use your hand as if it were the robot’s claw.
+            </div>
+            <div id="countdown" hidden></div>
+            <span id="record-light" hidden>● RECORDING YOUR MATCH</span>
+          </div>
+          <p class="match-privacy">
+            Camera stays local. Only takes you keep are saved on this Mac.
+          </p>
+        </section>
+        <section class="match-actions">
+          <div class="match-progress">
+            <span id="progress-label">A short calibration, guided by you</span
+            ><span id="saved-count">0 / 16 saved</span>
+          </div>
+          <progress id="progress" value="0" max="16"></progress>
+          <p id="instruction">
+            Make the gesture that would make you expect the robot to look like
+            this. There is no prescribed hand pose.
+          </p>
+          <button id="primary" class="primary-button" disabled>
+            Preparing…
+          </button>
+          <p id="shortcut">
+            When ready, press Space. A 2-second countdown gives you time to
+            settle.
+          </p>
+          <div id="review" hidden>
+            <p class="review-heading">Did that feel natural?</p>
+            <label for="notes" class="sr-only"
+              >Optional notes about this match</label
+            ><textarea
+              id="notes"
+              maxlength="1000"
+              placeholder="Optional: what felt confusing?"
+            ></textarea
+            ><button id="comfortable" class="primary-button">
+              Keep · feels natural</button
+            ><button id="awkward" class="match-secondary">
+              Keep · feels awkward</button
+            ><button id="retry" class="match-quiet">Record again</button>
+          </div>
+          <div class="match-navigation">
+            <button id="back" disabled>← Previous pose</button
+            ><button id="skip" disabled>I can’t match this naturally</button>
+          </div>
+          <p id="feedback" role="status" aria-live="polite">
+            The robot holds each pose while you choose your gesture.
+          </p>
+          <div id="error" class="error-box" role="alert" hidden></div>
+          <div id="complete" hidden>
+            <h2>Your matches are saved.</h2>
+            <p>
+              Tell me <strong>“poses done”</strong>. I’ll use your recordings to
+              learn which movements and rotations feel intuitive to you.
+            </p>
+            <p id="session-summary"></p>
+            <button id="review-start" class="match-secondary">
+              Review or redo a pose
+            </button>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <footer>
+      <a href="/">← Back to hand control</a
+      ><span>Space · record a match <b> / </b> Esc · pause</span
+      ><button id="new-session" class="match-quiet">
+        New matching session
+      </button>
+    </footer>
+    <script type="module" src="/src/match.js"></script>
+  </body>
+</html>
