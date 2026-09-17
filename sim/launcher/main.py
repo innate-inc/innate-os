@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import subprocess
 import sys
+from pathlib import Path
 
 if sys.version_info < (3, 10):  # noqa: UP036
     print("Error: the Innate launcher requires Python 3.10 or newer.", file=sys.stderr)
@@ -44,6 +46,7 @@ from runtime import (
     clean_runtime,
     collect_status_snapshot,
     down_os,
+    ensure_bind_mount_dirs,
     ensure_docker_available,
     ensure_os_container,
     ensure_sim_assets,
@@ -51,7 +54,6 @@ from runtime import (
     ensure_skill_assets,
     ensure_uv_available,
     ensure_viewer_public_assets,
-    ensure_workspace_dirs,
     ensure_world_server,
     open_os_container_shell,
     prefetch_runtime,
@@ -116,9 +118,9 @@ def cmd_up(
         ensure_uv_available()  # the sim world always runs on the host via uv
         report_configured_keys(config)
         # Before anything containerized runs: claims the container-written
-        # workspace dirs for the invoking user (root-owned bind-mount dirs on
+        # bind-mount dirs for the invoking user (root-owned bind-mount dirs on
         # Linux otherwise), and warns if an earlier run already claimed them.
-        ensure_workspace_dirs(config)
+        ensure_bind_mount_dirs(config)
         # Before the fast path, not after it: the containers it removes are
         # exactly what an upgrade from a still-running older stack leaves
         # behind -- and one of them holds the ports this stack needs.
@@ -427,6 +429,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def filesystem_hint(exc: OSError) -> str:
+    """One actionable line for a filesystem error, instead of a traceback."""
+    if exc.errno in (errno.EACCES, errno.EPERM) and exc.filename:
+        # Seen on native Linux: a container running as root owns a path in the checkout.
+        owner = Path(exc.filename).parent
+        return f"Your user cannot write here. Fix with: sudo chown -R $(id -un):$(id -gn) {owner}"
+    # e.g. a full disk that flipped the filesystem read-only (seen in a user test).
+    return (
+        "This is a filesystem problem, not an Innate one -- check free disk space "
+        "(a full disk can leave the filesystem mounted read-only until a reboot)."
+    )
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:])
@@ -491,14 +506,7 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
-        # e.g. a full disk that flipped the filesystem read-only (seen in a
-        # user test): one actionable line, not a traceback.
-        print(
-            f"Error: {exc}\n"
-            "This is a filesystem problem, not an Innate one -- check free disk space "
-            "(a full disk can leave the filesystem mounted read-only until a reboot).",
-            file=sys.stderr,
-        )
+        print(f"Error: {exc}\n{filesystem_hint(exc)}", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
         print(f"Command failed: {' '.join(exc.cmd)}", file=sys.stderr)
