@@ -46,7 +46,9 @@ NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 WRIST_AIM_PX = (320, 280)
 # The arm reports its wrist origin; the fingertips land this far ahead of it in the top-down grasp.
 FINGERTIP_X_OFF = -0.01
-DRIVE_MAX_M, TURN_MAX_DEG, LIFT_Z = 0.6, 90.0, 0.22
+DRIVE_MAX_M, TURN_MAX_DEG, LIFT_Z = 0.3, 90.0, 0.22
+# Slower than the mobility defaults (0.10 m/s, 0.5 rad/s): a model step is small and near things.
+DRIVE_SPEED, TURN_SPEED = (0.06, 0.03), (0.3, 0.1)  # (max, min) m/s and rad/s
 # One look per few centimetres: a grid estimate is good to ~5 cm, so a move that commits further than
 # this on one estimate lands on or beside the target and the model then reasons from a floor-level view.
 NUDGE_MAX_M = 0.05
@@ -70,7 +72,8 @@ your earlier actions did. Reply with ONE JSON object and nothing else:
 {{"see": "<one sentence: what you observe that matters>", "do": "<action>", ...its parameters}}.
 
 Actions:
-- drive: forward_m (-0.6..0.6, negative backs up), turn_deg (-90..90, positive turns left). Turns, then drives.
+- drive: forward_m (-{DRIVE_MAX_M}..{DRIVE_MAX_M}, negative backs up), turn_deg (-{TURN_MAX_DEG:.0f}..{TURN_MAX_DEG:.0f},
+  positive turns left). Turns, then drives.
 - nudge: dx, dy, dz — move the fingertips by that much (metres, base_link axes, each within
   +-{NUDGE_MAX_M * 100:.0f} cm). pitch_deg (0 = gripper straight ahead, 90 = straight down) and roll_deg
   (0 = fingers straddle along y, 90 = along x) are optional and keep their last value. The first nudge from a
@@ -189,8 +192,12 @@ class DoTask(Skill):
         forward = _clamp(_num(act, "forward_m"), DRIVE_MAX_M)
         if 0.15 <= self.arm.x and self.arm.z < 0.05:
             return "nothing moved: the fingertips are on the floor and would drag; lift them before driving"
-        turned = abs(turn) < 1.0 or self.mobility.rotate_by(self._xyt, math.radians(turn), logger=self.logger)
-        driven = abs(forward) < 0.01 or self.mobility.drive(self._xyt, forward, logger=self.logger)
+        turned = abs(turn) < 1.0 or self.mobility.rotate_by(
+            self._xyt, math.radians(turn), wz_max=TURN_SPEED[0], wz_min=TURN_SPEED[1], logger=self.logger
+        )
+        driven = abs(forward) < 0.01 or self.mobility.drive(
+            self._xyt, forward, v_max=DRIVE_SPEED[0], v_min=DRIVE_SPEED[1], logger=self.logger
+        )
         return f"turned {turn:+.0f} deg, drove {forward:+.2f} m" + ("" if turned and driven else " (stopped short)")
 
     def _nudge(self, act: dict) -> str:
