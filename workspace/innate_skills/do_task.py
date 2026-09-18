@@ -144,8 +144,7 @@ class DoTask(Skill):
                 history.append(f"{step}. saw: {see} | did: {_describe(decision)} | result: {result}")
             self.fail(f"Out of steps ({max_steps}) before finishing: {task}")
         finally:
-            self.mobility.stop()
-            self._fold()
+            self.mobility.stop()  # the arm stays where the model left it: resting it is its call
 
     # --- one decision ---
 
