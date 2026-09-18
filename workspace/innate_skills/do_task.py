@@ -77,7 +77,8 @@ Actions:
 - nudge: dx, dy, dz — move the fingertips by that much (metres, base_link axes, each within
   +-{NUDGE_MAX_M * 100:.0f} cm). pitch_deg (0 = gripper straight ahead, 90 = straight down) and roll_deg
   (0 = fingers straddle along y, 90 = along x) are optional and keep their last value. The first nudge from a
-  fold brings the arm out to its zero pose: straight ahead, horizontal.
+  fold brings the arm out to its zero pose: straight ahead, horizontal, about 40 cm in front of the robot — so
+  with the arm folded, do not drive up close to things; it needs that room to come out.
 - grip: close (true/false). The result says whether the fingers stopped on something.
 - look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}).
 - rest: fold the arm away (keeps whatever it holds).
