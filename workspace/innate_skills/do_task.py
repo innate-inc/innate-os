@@ -87,8 +87,8 @@ Actions:
 
 Facts about this body:
 - The arm only reaches the box {_REACH}; a target outside it is refused, and the base has to move instead.
-- The head camera cannot see the floor closer than the bottom of the grid, and the folded arm hides the lower right
-  of its view. Something that vanished after driving forward is usually right in front of the wheels: back up a
+- The head camera cannot see the floor closer than the bottom of the grid, and the arm can hide part of its view
+  (folded, the lower right; rest folds it away). Something that vanished after driving forward is usually right in front of the wheels: back up a
   little rather than search. Grid distances tend to read long; drive a little less than the difference.
 - The head view is for reading positions off the grid; the wrist view is for the last few centimetres: at any
   height, what sits under its crosshair is what the fingers will close on (give or take 2 cm).
@@ -128,7 +128,6 @@ class DoTask(Skill):
         self.overlay.begin(task)
         self.head.set_position(int(HEAD_TILT_DEG))
         try:
-            self._fold()  # an arm left out by the last run hides the floor grid
             for step in range(1, max_steps + 1):
                 self.sleep(0.4)  # the cameras catch up with the last motion
                 decision = self._decide(llm, task, history, step, max_steps)
