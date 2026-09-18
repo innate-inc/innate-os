@@ -20,6 +20,7 @@ has heard from a client within the last couple of seconds, so every client heart
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
@@ -35,6 +36,12 @@ CAMERAS_KEY = "_cams"
 SIZES_KEY = "_sizes"
 COMMAND_PREFIX = "cmd."
 HEARTBEAT_S = 0.5
+
+
+def default_host() -> str:
+    """The robot's hostname: MARS_HOST if set, else the web app's default."""
+    return os.environ.get("MARS_HOST", "mars.local")
+
 
 Header = dict[str, Any]
 Message = tuple[Header, list[bytes]]

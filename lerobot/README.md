@@ -21,9 +21,15 @@ LeRobot bridge listening on :5555 (actions) and :5556 (observations)
 ```
 
 If it says `LeRobot bridge disabled: …` the line names the reason; `innate update reinstall`
-installs the missing Python dependency and rebuilds. Every command below takes the robot's
-hostname, the one you type into the browser for the web app (`mars.local` by default), in
-both `--robot.remote_ip` and `--teleop.remote_ip`.
+installs the missing Python dependency and rebuilds. Tell the laptop the robot's hostname
+once, the one you type into the browser for the web app:
+
+```bash
+export MARS_HOST=mars.local       # or mars-the-2nd.local, or an IP
+```
+
+Every command below reads it. `--robot.remote_ip=…` and `--teleop.remote_ip=…` override it,
+which is how the same commands target the simulator with `localhost`.
 
 ## Install
 
@@ -45,9 +51,8 @@ Start the simulator as usual (`./innate-sim up`; the container publishes the bri
 5555 and 5556 on loopback, or `INNATE_SIM_PORT_BASE + 7/8`), then from the same machine:
 
 ```bash
-uv run lerobot-teleoperate --robot.type=mars --robot.remote_ip=localhost \
-    --robot.external_commands=true --teleop.type=mars_passthrough --teleop.remote_ip=localhost \
-    --display_data=true
+MARS_HOST=localhost uv run lerobot-teleoperate --robot.type=mars \
+    --robot.external_commands=true --teleop.type=mars_passthrough --display_data=true
 ```
 
 Drive the sim from the web app. `--display_data=true` opens Rerun with both cameras and the
@@ -62,9 +67,9 @@ so the client never re-sends that command behind the operator:
 
 ```bash
 uv run lerobot-record \
-    --robot.type=mars --robot.remote_ip=mars.local --robot.external_commands=true \
-    --teleop.type=mars_passthrough --teleop.remote_ip=mars.local \
-    --dataset.repo_id=innate/mars-tidy-up --dataset.single_task="Put the ball in the box" \
+    --robot.type=mars --robot.external_commands=true --teleop.type=mars_passthrough \
+    --dataset.repo_id=YOUR_HF_NAME/mars-tidy-up --dataset.no_stamp=true \
+    --dataset.single_task="Put the ball in the box" \
     --dataset.fps=30 --dataset.num_episodes=10 --dataset.push_to_hub=false
 ```
 
@@ -76,10 +81,10 @@ stops. lerobot appends a date-time stamp to the repo id unless you pass
 ## Replay and policies
 
 ```bash
-uv run lerobot-replay --robot.type=mars --robot.remote_ip=mars.local \
-    --dataset.repo_id=innate/mars-tidy-up --dataset.episode=0
-uv run lerobot-rollout --strategy.type=base --policy.path=<checkpoint> \
-    --robot.type=mars --robot.remote_ip=mars.local --task="Put the ball in the box"
+uv run lerobot-replay --robot.type=mars \
+    --dataset.repo_id=YOUR_HF_NAME/mars-tidy-up --dataset.episode=0
+uv run lerobot-rollout --strategy.type=base --policy.path=outputs/train/act_mars/checkpoints/last/pretrained_model \
+    --robot.type=mars --task="Put the ball in the box"
 ```
 
 Without `external_commands`, `send_action` forwards six absolute joint targets (rad) to
@@ -145,6 +150,9 @@ Python (it is in `ros2_ws/pip-requirements.txt`); `manipulation_server` logs
 - `No 'obs' messages from the MARS bridge …`: innate-os is not reachable at that address, the
   bridge is disabled, or the ports are not published (sim). Check the manipulation_server log.
 - `torchcodec is installed but cannot be loaded` on macOS: harmless, lerobot falls back to PyAV.
+  The `objc … AVFFrameReceiver is implemented in both` lines on macOS are harmless too.
+- `zsh: no such file or directory: you`: a placeholder like `<you>` was pasted literally; the shell
+  read the angle brackets as redirection. Placeholders in these docs are spelled `YOUR_HF_NAME`.
 - The robot ignores `send_action` while an Innate skill or policy is executing (`busy` in the
   state header); wait for it to finish.
 - The base stops half a second after the last action: that is the watchdog. Keep sending
