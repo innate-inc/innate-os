@@ -47,6 +47,9 @@ WRIST_AIM_PX = (320, 280)
 # The arm reports its wrist origin; the fingertips land this far ahead of it in the top-down grasp.
 FINGERTIP_X_OFF = -0.01
 DRIVE_MAX_M, TURN_MAX_DEG, LIFT_Z = 0.3, 90.0, 0.22
+# Skill-local wrist-origin limit in base_link, to reduce shoulder loading.
+ARM_MAX_X = 0.30
+ARM_REACH_X = (Manipulation.REACH_X[0], ARM_MAX_X)
 # Slower than the mobility defaults (0.10 m/s, 0.5 rad/s): a model step is small and near things.
 DRIVE_SPEED, TURN_SPEED = (0.06, 0.03), (0.3, 0.1)  # (max, min) m/s and rad/s
 # One look per few centimetres: a grid estimate is good to ~5 cm, so a move that commits further than
@@ -77,8 +80,9 @@ Actions:
 - nudge: dx, dy, dz — move the fingertips by that much (metres, base_link axes, each within
   +-{NUDGE_MAX_M * 100:.0f} cm). pitch_deg (0 = gripper straight ahead, 90 = straight down) and roll_deg
   (0 = fingers straddle along y, 90 = along x) are optional and keep their last value. The first nudge from a
-  fold brings the arm out to its zero pose: straight ahead, horizontal, about 40 cm in front of the robot — so
-  with the arm folded, do not drive up close to things; it needs that room to come out.
+  fold brings the arm out to a compact pose: wrist at x={ARM_MAX_X:.2f} m, z={LIFT_Z:.2f} m, gripper horizontal.
+  Wrist targets must stay at x <= {ARM_MAX_X:.2f} m to reduce shoulder load; move the base closer instead of
+  extending farther. With the arm folded, leave room in front for it to come out.
 - grip: close (true/false). The result says whether the fingers stopped on something.
 - look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}).
 - rest: fold the arm away (keeps whatever it holds).
@@ -203,9 +207,9 @@ class DoTask(Skill):
 
     def _nudge(self, act: dict) -> str:
         if self.arm.x < 0.15:
-            self.manipulation.move_joints(Manipulation.ZERO[:5], duration=2.0)
-            self._rpy = (0.0, 0.0, 0.0)
-            return "arm brought out to its zero pose; " + self._arm_report(self.arm.z)
+            self._rpy = self._orientation(ARM_MAX_X, 0.0, 0.0, 0.0)
+            self._move_to(ARM_MAX_X, 0.0, LIFT_Z, duration=2.0)
+            return "arm brought out to its compact pose; " + self._arm_report(LIFT_Z)
         cur = self.arm
         dx, dy, dz = (_clamp(_num(act, k), NUDGE_MAX_M) for k in ("dx", "dy", "dz"))
         x, y, z = cur.x + dx, cur.y + dy, cur.z + dz
@@ -220,7 +224,7 @@ class DoTask(Skill):
     def _grip(self, act: dict) -> str:
         if act.get("close"):
             if self.arm.z < 0.05:  # un-press from the floor so the fingers close around the object, not drag it
-                self._move_to(self.arm.x, self.arm.y, self.arm.z + 0.01, duration=0.5)
+                self._move_to(min(self.arm.x, ARM_MAX_X), self.arm.y, self.arm.z + 0.01, duration=0.5)
             self.manipulation.gripper_close(GRIP_STRENGTH, duration=1.0)
         else:
             self.manipulation.gripper_open(duration=0.8)
@@ -245,12 +249,15 @@ class DoTask(Skill):
     def _fold(self) -> None:
         if self.arm.x < 0.15:
             return
-        if self.arm.z < LIFT_Z - 0.05:
-            self._move_to(self.arm.x, self.arm.y, LIFT_Z, duration=1.0)
+        if self.arm.z < LIFT_Z - 0.05 or self.arm.x > ARM_MAX_X:
+            self._move_to(min(self.arm.x, ARM_MAX_X), self.arm.y, max(self.arm.z, LIFT_Z), duration=1.0)
         self.manipulation.move_joints(NAV_ARM, duration=2.0)
 
     def _move_to(self, x: float, y: float, z: float, duration: float = 1.5) -> None:
-        roll, pitch, yaw = self._rpy
+        if not math.isfinite(x) or x > ARM_MAX_X:
+            raise ArmFailed(f"wrist x must be at most {ARM_MAX_X:.2f} m; move the base closer")
+        roll, pitch, _ = self._rpy
+        yaw = arm_bearing(x, y)
         self.manipulation.move_to(
             x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=duration, tolerance_xy=None, tolerance_z=None
         )
@@ -283,7 +290,7 @@ class DoTask(Skill):
         for y in GRID_Y:
             _polyline(img, [floor_to_pixel(x, y, tilt) for x in np.arange(0.2, 1.01, 0.05)], (200, 200, 200))
             _label(img, f"y{y:+.1f}", floor_to_pixel(0.22, y, tilt))
-        (x0, x1), (y0, y1) = Manipulation.REACH_X, Manipulation.REACH_Y
+        (x0, x1), (y0, y1) = ARM_REACH_X, Manipulation.REACH_Y
         x0, x1 = x0 + FINGERTIP_X_OFF, x1 + FINGERTIP_X_OFF
         box = [(x0, y0), (x0, y1), (x1, y1), (x1, y0), (x0, y0)]
         _polyline(img, [floor_to_pixel(x, y, tilt) for x, y in box], (0, 140, 255), 2)
@@ -314,9 +321,9 @@ def _parse_json(text: str) -> dict:
 
 
 def _out_of_reach(x: float, y: float) -> str | None:
-    """Past the box the arm still moves but cannot reach the floor, so a target there is refused with the fix."""
-    (x0, x1), (y0, y1) = Manipulation.REACH_X, Manipulation.REACH_Y
-    if x0 - 0.01 <= x <= x1 + 0.01 and y0 - 0.01 <= y <= y1 + 0.01:
+    """Keep nudges in the grasp box and under the skill-local shoulder-load limit."""
+    (x0, x1), (y0, y1) = ARM_REACH_X, Manipulation.REACH_Y
+    if x0 - 0.01 <= x <= x1 and y0 - 0.01 <= y <= y1 + 0.01:
         return None
     x0, x1, x = x0 + FINGERTIP_X_OFF, x1 + FINGERTIP_X_OFF, x + FINGERTIP_X_OFF
     return (
