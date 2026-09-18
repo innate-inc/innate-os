@@ -220,6 +220,12 @@ export const LEADER_POSITIONS_TOPIC = "/leader_positions";
 // app's "Reboot Arm Servos" button calls.
 export const ARM_REBOOT_SERVICE = "/mars/arm/reboot";
 
+// Scan every servo for hardware errors, then reboot/reconfigure and enable
+// torque only on the failed ones. Healthy servos are left alone.
+export const ARM_FIX_ERROR_SERVICE = "/mars/arm/fix_error";
+export const ARM_FIX_ERROR_CONFIRM =
+  "Reboot only the servo(s) with hardware errors? Torque re-enables on those servos after reboot. Healthy servos are left unchanged.";
+
 // The reboot power-cycles the servos and "takes a few seconds" — give the
 // service call more room than the 10s default before timing out.
 export const ARM_REBOOT_TIMEOUT_MS = 20_000;
