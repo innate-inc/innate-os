@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
-    "lerobot[dataset]>=0.6.1,<0.7",
+    "lerobot[dataset,viz]>=0.6.1,<0.7",
     "pyzmq>=26",
     "h5py>=3.10",
     "numpy>=2.0",

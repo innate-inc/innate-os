@@ -10,9 +10,24 @@ on the robot over two ZMQ sockets; the bridge is on by default and idles until a
 connects. That process can run on a laptop (`--robot.remote_ip=mars.local`) or on the Jetson
 itself in this package's own Python 3.12 environment (`--robot.remote_ip=localhost`).
 
+## On the robot
+
+The bridge ships with innate-os from this branch on; nothing extra runs on the robot. Update
+it the usual way (`innate update`, or `innate update --dev apply <branch>` for a branch) and
+check the manipulation server's log, in `innate view` or the webapp Logging page, for:
+
+```
+LeRobot bridge listening on :5555 (actions) and :5556 (observations)
+```
+
+If it says `LeRobot bridge disabled: …` the line names the reason; `innate update reinstall`
+installs the missing Python dependency and rebuilds. Every command below takes the robot's
+hostname, the one you type into the browser for the web app (`mars.local` by default), in
+both `--robot.remote_ip` and `--teleop.remote_ip`.
+
 ## Install
 
-lerobot main needs Python 3.12; the robot's ROS stack is Python 3.10. Keep the two apart with
+On the laptop. lerobot main needs Python 3.12; the robot's ROS stack is Python 3.10. Keep the two apart with
 [uv](https://docs.astral.sh/uv/), which downloads its own interpreter:
 
 ```bash
@@ -31,11 +46,13 @@ Start the simulator as usual (`./innate-sim up`; the container publishes the bri
 
 ```bash
 uv run lerobot-teleoperate --robot.type=mars --robot.remote_ip=localhost \
-    --robot.external_commands=true --teleop.type=mars_passthrough --teleop.remote_ip=localhost
+    --robot.external_commands=true --teleop.type=mars_passthrough --teleop.remote_ip=localhost \
+    --display_data=true
 ```
 
-Drive the sim from the web app; the terminal shows lerobot observing the commanded joints.
-Every command below works against the sim the same way with `remote_ip=localhost`.
+Drive the sim from the web app. `--display_data=true` opens Rerun with both cameras and the
+joint plots; without it the terminal only prints the loop rate. Every command below works
+against the sim the same way with `remote_ip=localhost`.
 
 ## Record with the Innate app driving
 
