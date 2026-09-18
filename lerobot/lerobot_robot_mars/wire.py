@@ -6,14 +6,14 @@ The bridge (``manipulation/lerobot_bridge.py`` in innate-os) binds two ZMQ socke
 
 - PULL on ``port_actions``: clients PUSH one JSON object per message. ``{"_hb": 1}`` is a
   heartbeat; anything with the six ``jointN.pos`` keys is a command (``x.vel`` and
-  ``theta.vel`` optional, default 0).
+  ``theta.vel`` optional, default 0); ``{"_head": deg}`` tilts the head.
 - PUB on ``port_observations``: one frame per message, ``<topic> <json header>\n<payload>``.
   Topic ``state`` has no payload; topic ``obs`` carries the JPEGs of the cameras in ``_cams``
   concatenated, their lengths in ``_sizes``. Single frames let the subscriber conflate, so a
   client always reads the newest observation, never a backlog.
 
 The header holds ``jointN.pos`` (measured, rad), ``cmd.jointN.pos`` and ``cmd.x.vel`` /
-``cmd.theta.vel`` (last commanded), ``seq``, ``t``, ``busy``. The bridge only streams while it
+``cmd.theta.vel`` (last commanded), ``head.deg`` (measured tilt), ``seq``, ``t``, ``busy``. The bridge only streams while it
 has heard from a client within the last couple of seconds, so every client heartbeats.
 """
 
@@ -34,6 +34,8 @@ TOPIC_OBS = b"obs"
 HEARTBEAT_KEY = "_hb"
 CAMERAS_KEY = "_cams"
 SIZES_KEY = "_sizes"
+HEAD_KEY = "_head"
+HEAD_STATE_KEY = "head.deg"
 COMMAND_PREFIX = "cmd."
 HEARTBEAT_S = 0.5
 
@@ -136,6 +138,9 @@ class Link:
 
     def send(self, payload: dict[str, float]) -> None:
         self._send(payload)
+
+    def set_head(self, deg: float) -> None:
+        self._send({HEAD_KEY: deg})
 
     def heartbeat(self) -> None:
         self._send({HEARTBEAT_KEY: 1})

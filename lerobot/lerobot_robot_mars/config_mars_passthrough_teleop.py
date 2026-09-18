@@ -22,4 +22,4 @@ class MarsPassthroughTeleopConfig(TeleoperatorConfig):
     port_actions: int = DEFAULT_PORT_ACTIONS
     port_observations: int = DEFAULT_PORT_OBSERVATIONS
     connect_timeout_s: float = 5.0
-    poll_timeout_ms: int = 50
+    poll_timeout_ms: int = 5

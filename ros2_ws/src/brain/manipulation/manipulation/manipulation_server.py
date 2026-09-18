@@ -182,6 +182,7 @@ class ManipulationServer(Node):
         self._bridge_active = False
         self._last_arm_command: list[float] | None = None
         self._last_cmd_vel: tuple[float, float] = (0.0, 0.0)
+        self._head_deg: float | None = None
         self.lerobot_bridge = self._start_lerobot_bridge()
 
         self.get_logger().info("Behavior server ready - pure execution engine using absolute skill directories")
@@ -896,6 +897,7 @@ class ManipulationServer(Node):
             port_actions=port_actions,
             port_observations=port_observations,
             jpeg_quality=int(self.get_parameter("lerobot_bridge.jpeg_quality").value),
+            on_head=self._bridge_head,
             log=lambda message: self.get_logger().warn(message, throttle_duration_sec=2.0),
         )
         bridge.bind()
@@ -904,6 +906,7 @@ class ManipulationServer(Node):
             Float64MultiArray, "/mars/arm/commands", self._arm_command_callback, cmd_qos
         )
         self._cmd_vel_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 1)
+        self._head_sub = self.create_subscription(String, "/mars/head/current_position", self._head_callback, 1)
         self._start_sensor_subscriptions()
         self.create_timer(1.0 / max(rate_hz, 1.0), self._lerobot_bridge_tick)
         self.get_logger().info(
@@ -924,6 +927,15 @@ class ManipulationServer(Node):
     def _bridge_base(self, vx: float, wz: float) -> None:
         self._last_cmd_vel = (vx, wz)
         self._publish_base(vx, wz, 1.0)
+
+    def _bridge_head(self, deg: float) -> None:
+        self.head_set_position_pub.publish(Int32(data=int(round(deg))))
+
+    def _head_callback(self, msg: String) -> None:
+        try:
+            self._head_deg = float(json.loads(msg.data)["current_position"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return
 
     def _arm_command_callback(self, msg: Float64MultiArray) -> None:
         if len(msg.data) >= 6:
@@ -954,6 +966,7 @@ class ManipulationServer(Node):
             base=self._last_cmd_vel,
             images={"head": self.latest_image1, "wrist": self.latest_image2},
             busy=self.execution_running,
+            head_deg=self._head_deg,
         )
 
     def _resize_matrices(self, h, w):

@@ -78,6 +78,10 @@ stops. lerobot appends a date-time stamp to the repo id unless you pass
 `--dataset.no_stamp=true`. The dataset lands under `$HF_LEROBOT_HOME/<repo id>` (override with
 `--dataset.root=...`); add `--dataset.push_to_hub=true` after `huggingface-cli login` to publish it.
 
+To add episodes to an existing dataset, repeat the command with `--resume=true` and an explicit
+`--dataset.root=$HOME/.cache/huggingface/lerobot/YOUR_HF_NAME/mars-tidy-up`; lerobot refuses to
+resume without a root. `--dataset.num_episodes` then counts the episodes of this session.
+
 ## Replay and policies
 
 ```bash
@@ -88,9 +92,11 @@ uv run lerobot-rollout --strategy.type=base --policy.path=outputs/train/act_mars
 ```
 
 Without `external_commands`, `send_action` forwards six absolute joint targets (rad) to
-`/mars/arm/commands` and the base twist to `/cmd_vel_skills`. The bridge ignores commands while
-an Innate behavior is executing, and stops the base if a commanding client goes silent for
-half a second.
+`/mars/arm/commands` and the base twist to `/cmd_vel_skills`. Close the app's teleop view first:
+while the app is teleoperating it keeps publishing its own arm and base commands, the base mux
+gives those priority, and the two arm streams fight. The bridge also ignores commands while an
+Innate behavior is executing, and stops the base if a commanding client goes silent for half a
+second.
 
 ## Trying a model that is only on lerobot main
 
@@ -131,6 +137,14 @@ The recorder's progress and termination columns are not stored; both are functio
 `frame_index` and episode length. `schema.py` is the single definition shared by the live
 client and the converter.
 
+**Head angle.** What the head camera sees depends on the head tilt, so it is fixed per dataset
+and written to `meta/mars.json` (`head_angle_deg`), next to lerobot's own metadata and uploaded
+with it. The client sets the head to `--robot.head_angle_deg` (default -20, the robot's "AI
+position") when it connects and commands it back if someone tilts it mid-session, for recording,
+replay, and rollout alike; `--robot.head_angle_deg=null` leaves the head alone. The converter
+takes the angle the recorder logged, or notes the default as assumed. Use the same angle for
+rollout as the dataset was recorded with; the client warns when they differ.
+
 ## Protocol
 
 Documented in `lerobot_robot_mars/wire.py` and pinned on both sides by `tests/test_wire.py`,
@@ -155,5 +169,7 @@ Python (it is in `ros2_ws/pip-requirements.txt`); `manipulation_server` logs
   read the angle brackets as redirection. Placeholders in these docs are spelled `YOUR_HF_NAME`.
 - The robot ignores `send_action` while an Innate skill or policy is executing (`busy` in the
   state header); wait for it to finish.
+- Replay or rollout moves the arm oddly and the base not at all: the app is still teleoperating.
+  Leave the teleop view in the app before replaying.
 - The base stops half a second after the last action: that is the watchdog. Keep sending
   actions at the control rate, as `lerobot-record` and `lerobot-rollout` do.

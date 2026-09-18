@@ -8,7 +8,8 @@ sensor data and three publish callbacks. The client half lives in innate-os/lero
 
 Sockets (bridge binds, clients connect):
 - PULL ``port_actions``: one JSON object per message. ``{"_hb": 1}`` is a heartbeat; an object
-  with the six ``jointN.pos`` keys is a command (``x.vel`` / ``theta.vel`` optional, default 0).
+  with the six ``jointN.pos`` keys is a command (``x.vel`` / ``theta.vel`` optional, default 0);
+  ``{"_head": deg}`` tilts the head. The header reports the measured tilt as ``head.deg``.
 - PUB ``port_observations``: every message is one frame, ``<topic> <json header>\n<payload>``.
   Topic ``state`` has no payload. Topic ``obs`` carries the JPEGs of the cameras listed in
   ``_cams`` concatenated, their byte lengths in ``_sizes``. One frame per message lets a
@@ -35,6 +36,8 @@ TOPIC_OBS = b"obs"
 HEARTBEAT_KEY = "_hb"
 CAMERAS_KEY = "_cams"
 SIZES_KEY = "_sizes"
+HEAD_KEY = "_head"
+HEAD_STATE_KEY = "head.deg"
 COMMAND_PREFIX = "cmd."
 
 JOINTS: tuple[str, ...] = ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
@@ -45,6 +48,7 @@ CAMERAS: tuple[str, ...] = ("head", "wrist")
 ArmCallback = Callable[[Sequence[float]], None]
 BaseCallback = Callable[[float, float], None]
 StopCallback = Callable[[], None]
+HeadCallback = Callable[[float], None]
 Log = Callable[[str], None]
 
 
@@ -61,11 +65,13 @@ class LeRobotBridge:
         idle_after_s: float = 2.0,
         watchdog_s: float = 0.5,
         bind_address: str = "*",
+        on_head: HeadCallback = lambda _deg: None,
         log: Log = lambda _message: None,
     ) -> None:
         self._on_arm = on_arm
         self._on_base = on_base
         self._on_stop_base = on_stop_base
+        self._on_head = on_head
         self._port_actions = port_actions
         self._port_observations = port_observations
         self._jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
@@ -118,9 +124,11 @@ class LeRobotBridge:
                 break
             self._last_seen = now
             payload = _parse(raw)
-            if payload is None or HEARTBEAT_KEY in payload:
+            if payload is None:
                 continue
-            newest = payload
+            self._apply_head(payload)
+            if any(key in payload for key in JOINT_KEYS):
+                newest = payload
         if newest is not None:
             self._apply(newest, now)
         self._watchdog(now)
@@ -134,12 +142,13 @@ class LeRobotBridge:
         base: tuple[float, float],
         images: Mapping[str, np.ndarray | None],
         busy: bool,
+        head_deg: float | None = None,
     ) -> bool:
         """Send one state message and one observation message; False when no client is listening."""
         if self._pub is None or not self.active(now):
             return False
         self._seq += 1
-        header: dict[str, object] = {"seq": self._seq, "t": now, "busy": busy}
+        header: dict[str, object] = {"seq": self._seq, "t": now, "busy": busy, HEAD_STATE_KEY: head_deg}
         header.update(zip(JOINT_KEYS, (float(v) for v in joints), strict=True))
         header.update(zip((COMMAND_PREFIX + k for k in JOINT_KEYS), (float(v) for v in commanded), strict=True))
         header.update(zip((COMMAND_PREFIX + k for k in BASE_KEYS), (float(v) for v in base), strict=True))
@@ -163,6 +172,16 @@ class LeRobotBridge:
             return b""
         ok, jpeg = cv2.imencode(".jpg", image_bgr, self._jpeg_params)
         return jpeg.tobytes() if ok else b""
+
+    def _apply_head(self, payload: dict) -> None:
+        if HEAD_KEY not in payload or self.commands_blocked:
+            return
+        try:
+            deg = float(payload[HEAD_KEY])
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(deg):
+            self._on_head(deg)
 
     def _apply(self, payload: dict, now: float) -> None:
         joints = _floats(payload, JOINT_KEYS, required=True)

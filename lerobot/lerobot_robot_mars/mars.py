@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from functools import cached_property
 
@@ -13,6 +14,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 from lerobot.utils.errors import DeviceNotConnectedError
 
 from .config_mars import MarsConfig
+from .dataset_meta import read_sidecar, recording_root, write_sidecar
 from .schema import (
     ACTION_NAMES,
     BASE_NAMES,
@@ -23,7 +25,7 @@ from .schema import (
     camera_features,
     observation_features,
 )
-from .wire import CAMERAS_KEY, TOPIC_OBS, Header, Link, Message
+from .wire import CAMERAS_KEY, HEAD_STATE_KEY, TOPIC_OBS, Header, Link, Message
 
 RobotObservation = dict[str, object]
 RobotAction = dict[str, object]
@@ -45,6 +47,8 @@ class Mars(Robot):
         self._link = Link(config.remote_ip, config.port_actions, config.port_observations, TOPIC_OBS)
         self._state: dict[str, float] = {}
         self._frames: dict[str, np.ndarray] = {}
+        self._head_deg: float | None = None
+        self._last_head_command = 0.0
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
@@ -81,6 +85,8 @@ class Mars(Robot):
                 "MARS bridge is not sending %s frames yet; recording blank frames until it does",
                 self._missing_cameras(),
             )
+        self._set_head()
+        self._note_head_in_dataset()
 
     def _missing_cameras(self) -> list[str]:
         return [camera for camera in CAMERA_ORDER if camera not in self._frames]
@@ -95,6 +101,7 @@ class Mars(Robot):
         message = self._link.latest(self.config.poll_timeout_ms)
         if message is not None:
             self._absorb(message)
+        self._hold_head()
         observation: RobotObservation = dict(self._state)
         for camera in CAMERA_ORDER:
             observation[camera] = self._frames.get(camera, _blank_frame())
@@ -113,9 +120,46 @@ class Mars(Robot):
             self._link.send(payload)
         return {name: payload[name] for name in ACTION_NAMES}
 
+    def _set_head(self) -> None:
+        if self.config.head_angle_deg is None:
+            return
+        self._link.set_head(self.config.head_angle_deg)
+        self._last_head_command = time.monotonic()
+
+    def _hold_head(self) -> None:
+        target = self.config.head_angle_deg
+        if target is None or self._head_deg is None:
+            return
+        if abs(self._head_deg - target) <= self.config.head_tolerance_deg:
+            return
+        if time.monotonic() - self._last_head_command < self.config.head_reassert_s:
+            return
+        logger.warning(
+            "MARS head is at %.0f deg but this session holds %.0f deg; commanding it back", self._head_deg, target
+        )
+        self._set_head()
+
+    def _note_head_in_dataset(self) -> None:
+        root = recording_root(sys.argv)
+        if root is None:
+            return
+        existing = read_sidecar(root)
+        if existing is None:
+            write_sidecar(root, head_angle_deg=self.config.head_angle_deg, source="lerobot")
+            return
+        if existing.get("head_angle_deg") != self.config.head_angle_deg:
+            logger.warning(
+                "%s was recorded with the head at %s deg; this session uses %s deg",
+                root,
+                existing.get("head_angle_deg"),
+                self.config.head_angle_deg,
+            )
+
     def _absorb(self, message: Message) -> None:
         header, jpegs = message
         self._state = _state_from(header)
+        head = header.get(HEAD_STATE_KEY)
+        self._head_deg = float(head) if isinstance(head, int | float) else None
         cameras = header.get(CAMERAS_KEY)
         if not isinstance(cameras, list):
             return
