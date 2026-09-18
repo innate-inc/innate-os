@@ -391,8 +391,8 @@ export function createChatStream(opts = {}) {
   }
 
   /** @param {string} key @param {string} name @param {string} status @param {number} ts @param {string} [reason]
-   *  @param {any} [args] */
-  function addSkillRun(key, name, status, ts, reason, args) {
+   *  @param {any} [args] @param {string} [feedback] one progress line the skill streamed, appended to its log */
+  function addSkillRun(key, name, status, ts, reason, args, feedback) {
     const wasAtBottom = atBottom();
     const cls = ["running", "completed", "failed", "interrupted"].includes(status) ? status : "running";
     const displayName = skillDisplayName(name);
@@ -430,11 +430,13 @@ export function createChatStream(opts = {}) {
       detail.className = "chat-skill-detail";
       const parameters = document.createElement("div");
       parameters.className = "chat-skill-parameters";
+      const log = document.createElement("ol");
+      log.className = "chat-skill-log mono";
       const failure = document.createElement("div");
       failure.className = "chat-skill-failure";
-      detail.append(parameters, failure);
+      detail.append(parameters, log, failure);
       wrap.append(head, detail);
-      const createdRun = { wrap, head, summary, status: statusEl, parameters, failure, hasDetail: false };
+      const createdRun = { wrap, head, summary, status: statusEl, parameters, log, failure, hasDetail: false };
       run = createdRun;
       head.addEventListener("click", () => {
         if (!createdRun.hasDetail) return;
@@ -454,6 +456,13 @@ export function createChatStream(opts = {}) {
     if (inputs.rows.length) {
       run.summary.textContent = inputs.summary;
       renderSkillParameters(run.parameters, inputs.rows);
+      run.hasDetail = true;
+    }
+    if (feedback) {
+      const line = document.createElement("li");
+      line.textContent = feedback;
+      run.log.append(line);
+      line.scrollIntoView({ block: "nearest" });
       run.hasDetail = true;
     }
     run.status.textContent = skillStatusLabel(cls);
@@ -500,7 +509,8 @@ export function createChatStream(opts = {}) {
       const status = String(e?.taskStatus ?? "");
       if (!name || !status) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
-      addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
+      const feedback = typeof e?.feedback === "string" ? e.feedback : "";
+      addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args, feedback);
       return;
     }
     const text = String(e?.text ?? "");

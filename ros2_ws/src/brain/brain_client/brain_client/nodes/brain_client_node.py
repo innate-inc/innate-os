@@ -603,6 +603,8 @@ class BrainClientNode(Node):
         An agent-run skill appears only here — the runner leaves the echo to the
         skills server, a different process that cannot reach this history — and
         both publishers can announce one run, so a run/status pair lands once.
+        A progress line the skill streamed is its own entry every time, so a
+        replayed card keeps its log.
         """
         try:
             payload = json.loads(msg.data)
@@ -614,10 +616,12 @@ class BrainClientNode(Node):
             return
         skill_id = payload.get("skill_id")
         primitive_id = payload.get("primitive_id")
+        feedback = payload.get("feedback")
         key = (str(primitive_id or skill_id or name), status)
-        if key in self._recorded_skill_runs:
-            return
-        self._recorded_skill_runs.append(key)
+        if not feedback:
+            if key in self._recorded_skill_runs:
+                return
+            self._recorded_skill_runs.append(key)
         reason = payload.get("reason")
         self.chat.history.append(
             {
@@ -629,6 +633,7 @@ class BrainClientNode(Node):
                 "skillId": skill_id,
                 **({"failureReason": reason} if reason else {}),
                 **({"args": payload["args"]} if payload.get("args") else {}),
+                **({"feedback": feedback} if feedback else {}),
             }
         )
 

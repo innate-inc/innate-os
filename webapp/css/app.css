@@ -7245,8 +7245,20 @@ select.skill-input {
 }
 
 .chat-skill-parameters:empty,
+.chat-skill-log:empty,
 .chat-skill-failure:empty {
   display: none;
+}
+
+.chat-skill-log {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgb(231 231 234 / 74%);
+  overflow-wrap: anywhere;
 }
 
 .chat-skill-detail-label {
