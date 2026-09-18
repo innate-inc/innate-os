@@ -89,7 +89,8 @@ Facts about this body:
 - The arm only reaches the box {_REACH}; a target outside it is refused, and the base has to move instead.
 - The head camera cannot see the floor closer than the bottom of the grid, and the arm can hide part of its view
   (folded, the lower right; rest folds it away). Something that vanished after driving forward is usually right in front of the wheels: back up a
-  little rather than search. Grid distances tend to read long; drive a little less than the difference.
+  little rather than search. Both cameras are wide-angle: things look farther away than they are, so trust the
+  grid over your sense of distance, and expect even grid reads to run a little long.
 - The head view is for reading positions off the grid; the wrist view is for the last few centimetres: at any
   height, what sits under its crosshair is what the fingers will close on (give or take 2 cm).
 - The fingers close where they are: they only catch what is between them at that height, so something on the
