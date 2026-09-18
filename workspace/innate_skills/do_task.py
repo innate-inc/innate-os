@@ -35,6 +35,7 @@ from innate.exceptions import ArmFailed, ArmUnhealthy
 from innate.geometry import arm_bearing, floor_to_pixel
 
 HEAD_TILT_DEG = -20.0
+HEAD_RANGE_DEG = (-25.0, 15.0)  # the driver's typical range, used when it reports none
 GRIP_STRENGTH = 0.6
 GRIPPER_EMPTY_J6 = -0.085
 # Folded with the wrist flat: REST pitches the gripper up into the head camera.
@@ -82,6 +83,8 @@ Actions:
   the arm out to its zero pose (straight ahead, horizontal).
 - grip: close (true/false). Closing reports whether the fingers stopped on something; a gripper that closed on
   nothing stays closed until you open it.
+- look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}); the grid
+  follows the head, so it stays readable at any tilt.
 - rest: fold the arm away (keeps whatever it holds).
 - done: message — the task is complete. fail: message — it cannot be done.
 
@@ -191,7 +194,7 @@ class DoTask(Skill):
         )
 
     def _act(self, decision: dict) -> str:
-        do = {"drive": self._drive, "nudge": self._nudge, "grip": self._grip, "rest": self._rest}
+        do = {"drive": self._drive, "nudge": self._nudge, "grip": self._grip, "look": self._look, "rest": self._rest}
         run = do.get(str(decision.get("do")))
         if run is None:
             return "not a known action; reply with one JSON object whose 'do' is one of the listed actions"
@@ -237,6 +240,14 @@ class DoTask(Skill):
         self._closed = bool(act.get("close"))
         self.sleep(0.8)
         return f"gripper {self._grip_state()}"
+
+    def _look(self, act: dict) -> str:
+        head = self.head_position
+        low, high = head.min_degrees or HEAD_RANGE_DEG[0], head.max_degrees or HEAD_RANGE_DEG[1]
+        tilt = int(round(max(low, min(high, _num(act, "tilt_deg", HEAD_TILT_DEG)))))
+        self.head.set_position(tilt)
+        self.sleep(1.0)
+        return f"head tilted to {self.head_position.pitch_degrees:.0f} deg"
 
     def _rest(self, act: dict) -> str:
         self._fold()
