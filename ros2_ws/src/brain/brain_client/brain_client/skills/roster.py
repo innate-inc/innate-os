@@ -16,7 +16,10 @@ import json
 from brain_messages.msg import AvailableSkills
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
+from brain_client.common.script_paths import LEARNED_GROUP
 from brain_client.skills.registry import SkillMeta, SkillRegistry
+
+LEARN_SKILL_ID = "innate-os/learn_skill"
 
 AVAILABLE_SKILLS_QOS = QoSProfile(
     depth=1,
@@ -87,8 +90,17 @@ class SkillRoster:
     def available_skill_ids(self) -> list[str]:
         return [p["id"] for p in self._state.registry.metadata]
 
+    def learned_skill_ids(self) -> list[str]:
+        """Skills the robot wrote for itself (custom_skills/learned/)."""
+        return [
+            meta["id"]
+            for meta in self._state.registry.metadata
+            if meta["group"] == LEARNED_GROUP and meta["id"].startswith("local/")
+        ]
+
     def active_skill_ids(self) -> list[str]:
-        """The available skills the current directive has enabled, in roster order."""
+        """The available skills the current directive has enabled, in roster order.
+        A directive that can learn also uses what it learned."""
         if self._state.current_directive is None:
             return []
         current_skill_ids = (
@@ -97,6 +109,8 @@ class SkillRoster:
             else list(self._state.current_directive.skill_ids())
         )
         current_skill_set = set(current_skill_ids)
+        if LEARN_SKILL_ID in current_skill_set:
+            current_skill_set.update(self.learned_skill_ids())
         return [skill_id for skill_id in self.available_skill_ids() if skill_id in current_skill_set]
 
     def set_active_skill_ids(self, requested_skills: list[str]) -> list[str]:
