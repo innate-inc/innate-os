@@ -37,6 +37,7 @@ from brain_client.skills import overlay
 from brain_client.skills.catalog import SkillRepository
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
 from brain_client.skills.invoker import SkillInvoker
+from brain_client.skills.lifecycle import decode_substep_feedback
 from brain_client.skills.robot_state import RobotStateProvider
 from brain_client.skills.types import (
     RobotStateType,
@@ -303,7 +304,7 @@ class SkillsActionServer(Node):
         self._publish_skill_status(run_id, skill_type, name, "running", args=inputs)
         try:
             if entry is not None:
-                result = self._execute_code_skill(goal_handle, skill_type, inputs, entry)
+                result = self._execute_code_skill(goal_handle, skill_type, inputs, entry, run_id, name)
             elif physical is not None:
                 result = self._execute_physical_skill(goal_handle, skill_type, physical)
             else:
@@ -350,6 +351,7 @@ class SkillsActionServer(Node):
         status: str,
         reason: str | None = None,
         args: dict | None = None,
+        feedback: str | None = None,
     ) -> None:
         payload = {
             "primitive_name": name,
@@ -365,6 +367,8 @@ class SkillsActionServer(Node):
         # emotion, so clients show them alongside the name.
         if args:
             payload["args"] = args
+        if feedback:
+            payload["feedback"] = feedback
         self._skill_status_pub.publish(String(data=json.dumps(payload)))
 
     def _create_run_node(self):
@@ -410,13 +414,16 @@ class SkillsActionServer(Node):
             # SkillCancelled is a BaseException; must not escape the caller's finally.
             self.get_logger().error(f"Error shutting down {type(skill).__name__} run instance: {e}")
 
-    def _execute_code_skill(self, goal_handle, skill_type, inputs, entry):
+    def _execute_code_skill(self, goal_handle, skill_type, inputs, entry, run_id: str, name: str):
         def _publish_feedback(update_message: str, image_b64: str | None = None):
             feedback_msg = ExecuteSkill.Feedback()
             feedback_msg.feedback = update_message
             feedback_msg.image_b64 = image_b64 or ""
             goal_handle.publish_feedback(feedback_msg)
             self.get_logger().debug(f"Published feedback for '{skill_type}': {update_message}")
+            # The goal's feedback reaches only its caller; the run card every client shows follows the status topic.
+            if decode_substep_feedback(update_message) is None:
+                self._publish_skill_status(run_id, skill_type, name, "running", args=inputs, feedback=update_message)
 
         run_node = None
         try:
