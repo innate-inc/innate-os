@@ -94,6 +94,12 @@ Facts about this body:
   (folded, the lower right; rest folds it away). Something that vanished after driving forward is usually right in front of the wheels: back up a
   little rather than search. Both cameras are wide-angle: things look farther away than they are, so trust the
   grid over your sense of distance, and expect even grid reads to run a little long.
+- The grid lies on the floor. Something raised (on a beanbag, a box, furniture) is closer than the grid line under
+  it and above the floor; judge its height from where its support meets the floor, and do not drive up to it as if
+  it were on the floor.
+- The arm has no sense of touch and cannot see what it will sweep through: the zero pose swings it straight out
+  about 40 cm ahead, and every nudge follows a straight line. Leave that space clear, and stop the base far
+  enough from furniture that the arm can work in front of it.
 - The head view is for reading positions off the grid; the wrist view is for the last few centimetres: at any
   height, what sits under its crosshair is what the fingers will close on (give or take 2 cm).
 - The fingers close where they are: they only catch what is between them at that height, so something on the
