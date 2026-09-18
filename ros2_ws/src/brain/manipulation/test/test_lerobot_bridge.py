@@ -44,6 +44,7 @@ class Harness:
     def __init__(self, **kwargs: float) -> None:
         self.arm: list[list[float]] = []
         self.base: list[tuple[float, float]] = []
+        self.heads: list[float] = []
         self.stops = 0
         self.port_actions = free_port()
         self.port_observations = free_port()
@@ -54,6 +55,7 @@ class Harness:
             port_actions=self.port_actions,
             port_observations=self.port_observations,
             bind_address="127.0.0.1",
+            on_head=self.heads.append,
             **kwargs,
         )
         self.context = zmq.Context()
@@ -135,6 +137,19 @@ def test_blocked_bridge_keeps_hands_off() -> None:
         assert h.arm == [] and h.base == []
 
 
+def test_head_command_is_forwarded_unless_blocked_and_is_not_an_action() -> None:
+    with Harness() as h:
+        h.send({"_head": -20})
+        h.send({"_head": "up"})
+        h.bridge.poll(now=1.0)
+        assert h.heads == [-20.0]
+        assert h.arm == [] and h.base == [] and h.stops == 0
+        h.bridge.commands_blocked = True
+        h.send({"_head": 10})
+        h.bridge.poll(now=1.1)
+        assert h.heads == [-20.0]
+
+
 def test_publish_carries_state_and_jpegs_only_while_active() -> None:
     with Harness() as h:
         image = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -145,7 +160,13 @@ def test_publish_carries_state_and_jpegs_only_while_active() -> None:
         h.send({"_hb": 1})
         h.bridge.poll(now=1.0)
         assert h.bridge.publish(
-            1.0, joints=JOINTS, commanded=[0.0] * 6, base=(0.1, 0.2), images={"head": image, "wrist": None}, busy=True
+            1.0,
+            joints=JOINTS,
+            commanded=[0.0] * 6,
+            base=(0.1, 0.2),
+            images={"head": image, "wrist": None},
+            busy=True,
+            head_deg=-19.5,
         )
         messages = h.receive()
         state, _ = messages[TOPIC_STATE]
@@ -153,6 +174,7 @@ def test_publish_carries_state_and_jpegs_only_while_active() -> None:
         assert [state["cmd." + k] for k in JOINT_KEYS] == [0.0] * 6
         assert (state["cmd.x.vel"], state["cmd.theta.vel"]) == (0.1, 0.2)
         assert state["busy"] is True and state["seq"] == 1
+        assert state["head.deg"] == -19.5
         header, payload = messages[TOPIC_OBS]
         assert header[CAMERAS_KEY] == list(CAMERAS)
         assert header[SIZES_KEY] == [len(payload), 0]

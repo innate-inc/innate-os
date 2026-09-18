@@ -90,7 +90,7 @@ export MARS_HOST=mars-the-2nd.local     # the hostname you use for the web app
 uv run lerobot-record --help</code></pre>
     <p class="expect"><b>Pass:</b> help text prints. All later commands run from this folder in this shell; <code>MARS_HOST</code> is where they find the robot.</p></div></div>
   <div class="step"><input type="checkbox" id="c0c"><div><label for="c0c">Scene fixed</label>
-    <p>One task, one object, one placement area. Set the head angle from the app and leave it alone for the whole run; recording and inference must see the same view. Optional: <code>uv run hf auth login</code> if you want to push a private dataset later.</p></div></div>
+    <p>One task, one object, one placement area. lerobot tilts the head to -20° when it connects and holds it there for every stage, so recording and inference see the same view; the angle is saved in the dataset's <code>meta/mars.json</code>. Optional: <code>uv run hf auth login</code> if you want to push a private dataset later.</p></div></div>
 
   <h2 id="s1"><span class="n">1</span>Teleop passthrough</h2>
   <div class="step"><input type="checkbox" id="c1a"><div><label for="c1a">lerobot observes the robot while the app drives</label>
@@ -121,7 +121,7 @@ uv run lerobot-record --help</code></pre>
     <p class="expect"><b>Pass:</b> both camera streams play in Rerun, in colour (not blue-tinted), with joint plots that match what you did. Gripper is <code>joint6.pos</code>.</p></div></div>
 
   <h2 id="s3"><span class="n">3</span>Replay</h2>
-  <div class="callout"><div class="t">First time lerobot moves the robot</div>Clear the arm's workspace and give the base room: recorded base motion replays too. Keep the app's stop button at hand. Ctrl+C stops the arm commands and the base halts by itself half a second later.</div>
+  <div class="callout"><div class="t">First time lerobot moves the robot</div>Leave the teleop view in the phone app first; while it is open the app keeps publishing its own commands and wins over lerobot. Clear the arm's workspace and give the base room: recorded base motion replays too. Keep the app's stop button at hand. Ctrl+C stops the arm commands and the base halts by itself half a second later.</div>
   <div class="step"><input type="checkbox" id="c3a"><div><label for="c3a">Replay episode 0</label>
     <p class="where">laptop</p>
 <pre><code>uv run lerobot-replay --robot.type=mars \
@@ -136,7 +136,7 @@ uv run lerobot-record --help</code></pre>
     --policy.type=act --policy.device=mps \
     --output_dir=outputs/train/act_mars --job_name=act_mars \
     --steps=20000 --batch_size=8 --save_freq=5000 \
-    --wandb.enable=false</code></pre>
+    --policy.push_to_hub=false --wandb.enable=false</code></pre>
     <p class="expect"><b>Pass:</b> loss trends down over the run; checkpoints appear under <code>outputs/train/act_mars/checkpoints/</code>. Twenty thousand steps is a first pass; the default is 100k. Training elsewhere: push the dataset first with <code>--dataset.push_to_hub=true --dataset.private=true</code> on the record command.</p></div></div>
 
   <h2 id="s5"><span class="n">5</span>Inference on the robot</h2>

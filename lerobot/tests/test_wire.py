@@ -32,6 +32,8 @@ class FakeRobot:
     def __init__(self, bridge_module: ModuleType, *, watchdog_s: float = 0.3, idle_after_s: float = 1.0) -> None:
         self.arm: list[list[float]] = []
         self.base: list[tuple[float, float]] = []
+        self.heads: list[float] = []
+        self.head_deg: float | None = -20.0
         self.stops = 0
         self.port_actions = free_port()
         self.port_observations = free_port()
@@ -42,6 +44,7 @@ class FakeRobot:
             port_actions=self.port_actions,
             port_observations=self.port_observations,
             bind_address="127.0.0.1",
+            on_head=self.heads.append,
             watchdog_s=watchdog_s,
             idle_after_s=idle_after_s,
         )
@@ -66,7 +69,15 @@ class FakeRobot:
         while not self._stop_event.is_set():
             now = time.monotonic()
             self.bridge.poll(now)
-            self.bridge.publish(now, joints=JOINTS, commanded=COMMANDED, base=BASE, images=self.images, busy=False)
+            self.bridge.publish(
+                now,
+                joints=JOINTS,
+                commanded=COMMANDED,
+                base=BASE,
+                images=self.images,
+                busy=False,
+                head_deg=self.head_deg,
+            )
             time.sleep(1 / 30)
 
 
@@ -85,6 +96,8 @@ def test_protocol_constants_match(bridge_module: ModuleType) -> None:
     assert bridge_module.HEARTBEAT_KEY == wire.HEARTBEAT_KEY
     assert bridge_module.CAMERAS_KEY == wire.CAMERAS_KEY
     assert bridge_module.SIZES_KEY == wire.SIZES_KEY
+    assert bridge_module.HEAD_KEY == wire.HEAD_KEY
+    assert bridge_module.HEAD_STATE_KEY == wire.HEAD_STATE_KEY
     assert bridge_module.COMMAND_PREFIX == wire.COMMAND_PREFIX
     assert bridge_module.DEFAULT_PORT_ACTIONS == wire.DEFAULT_PORT_ACTIONS
     assert bridge_module.DEFAULT_PORT_OBSERVATIONS == wire.DEFAULT_PORT_OBSERVATIONS
@@ -193,6 +206,47 @@ def test_passthrough_teleop_reads_the_commanded_target(bridge_module: ModuleType
     assert list(action) == list(ACTION_NAMES)
     assert [action[name] for name in STATE_NAMES] == pytest.approx(COMMANDED)
     assert (action["x.vel"], action["theta.vel"]) == pytest.approx(BASE)
+
+
+def test_head_is_set_at_connect_and_commanded_back_when_it_drifts(bridge_module: ModuleType) -> None:
+    with FakeRobot(bridge_module) as robot:
+        mars = Mars(
+            MarsConfig(
+                remote_ip="127.0.0.1",
+                port_actions=robot.port_actions,
+                port_observations=robot.port_observations,
+                head_reassert_s=0.2,
+            )
+        )
+        mars.connect()
+        try:
+            assert wait_until(lambda: robot.heads == [-20.0])
+            robot.head_deg = 15.0  # someone tilted the head from the app
+            assert wait_until(lambda: (mars.get_observation(), len(robot.heads) >= 2)[1])
+            assert robot.heads[-1] == -20.0
+        finally:
+            mars.disconnect()
+
+
+def test_head_is_left_alone_when_no_angle_is_configured(bridge_module: ModuleType) -> None:
+    with FakeRobot(bridge_module) as robot:
+        robot.head_deg = 15.0
+        mars = Mars(
+            MarsConfig(
+                remote_ip="127.0.0.1",
+                port_actions=robot.port_actions,
+                port_observations=robot.port_observations,
+                head_angle_deg=None,
+            )
+        )
+        mars.connect()
+        try:
+            for _ in range(5):
+                mars.get_observation()
+                time.sleep(0.05)
+            assert robot.heads == []
+        finally:
+            mars.disconnect()
 
 
 def test_bridge_idles_without_a_client(bridge_module: ModuleType) -> None:

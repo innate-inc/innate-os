@@ -12,12 +12,13 @@ import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from lerobot_robot_mars.convert import EXPORT_KEY, SkillRecording, convert_skill
+from lerobot_robot_mars.dataset_meta import read_sidecar
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_SHAPE, STATE_NAMES, dataset_features
 
 T = 8
 
 
-def write_episode(path: Path, episode_id: int, *, with_images: bool = True) -> None:
+def write_episode(path: Path, episode_id: int, *, with_images: bool = True, head_deg: float | None = None) -> None:
     rng = np.random.default_rng(episode_id)
     arm = rng.uniform(-1, 1, size=(T, 6))
     base = np.tile([[0.2 * episode_id, -0.1]], (T, 1))
@@ -29,6 +30,8 @@ def write_episode(path: Path, episode_id: int, *, with_images: bool = True) -> N
         h5["/observations/qpos"] = arm + 0.01
         h5["/observations/qvel"] = np.zeros((T, 6))
         h5["/timestamps/arm"] = np.arange(T) / 30
+        if head_deg is not None:
+            h5["/head_command"] = np.full(T, head_deg)
         if with_images:
             head = np.zeros((T, *CAMERA_SHAPE), dtype=np.uint8)
             head[..., 0] = 255  # pure blue in the recorder's BGR
@@ -94,6 +97,8 @@ def test_converted_dataset_matches_the_live_schema(skill_dir: Path, tmp_path: Pa
 
     export = json.loads((skill_dir / "data" / "dataset_metadata.json").read_text())[EXPORT_KEY]
     assert export["repo_id"] == "innate/mars-test" and export["episode_ids"] == [0, 2]
+    sidecar = read_sidecar(root)
+    assert sidecar is not None and sidecar["head_angle_deg"] == -20.0 and sidecar["head_angle_assumed"] is True
 
 
 def test_rerun_appends_only_new_episodes(skill_dir: Path, tmp_path: Path) -> None:
@@ -108,6 +113,17 @@ def test_rerun_appends_only_new_episodes(skill_dir: Path, tmp_path: Path) -> Non
     assert dataset.num_frames == 3 * T
     export = json.loads((skill_dir / "data" / "dataset_metadata.json").read_text())[EXPORT_KEY]
     assert export["episode_ids"] == [0, 1, 2]
+
+
+def test_recorded_head_angle_lands_in_the_sidecar(skill_dir: Path, tmp_path: Path) -> None:
+    for episode_id in (0, 2):
+        write_episode(skill_dir / "data" / f"episode_{episode_id}.h5", episode_id, head_deg=12.0)
+    root = tmp_path / "out"
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    sidecar = read_sidecar(root)
+    assert sidecar is not None
+    assert sidecar["head_angle_deg"] == 12.0 and sidecar["head_angle_assumed"] is False
+    assert sidecar["source"] == "mars2lerobot"
 
 
 def test_replay_skill_without_dataset_metadata(tmp_path: Path) -> None:

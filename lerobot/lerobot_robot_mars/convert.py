@@ -28,6 +28,7 @@ from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
 
+from .dataset_meta import DEFAULT_HEAD_ANGLE_DEG, read_sidecar, write_sidecar
 from .schema import CAMERA_ORDER, CAMERA_SHAPE, FPS, ROBOT_TYPE, dataset_features, image_key
 
 DATASET_METADATA = "dataset_metadata.json"
@@ -112,6 +113,15 @@ class SkillRecording:
             if path.is_file():
                 return path
         raise FileNotFoundError(f"episode {ref.episode_id}: none of {[str(c) for c in candidates]} exists")
+
+    def head_angle(self, ref: EpisodeRef) -> float | None:
+        """The head tilt the recorder logged for this episode, in degrees; None when it logged none."""
+        with h5py.File(self.episode_path(ref), "r") as h5:
+            if "/head_command" not in h5:
+                return None
+            angles = np.asarray(h5["/head_command"], dtype=np.float64)
+        angles = angles[np.isfinite(angles)]
+        return float(np.median(angles)) if angles.size else None
 
     def frames(self, ref: EpisodeRef) -> Iterator[Frame]:
         with h5py.File(self.episode_path(ref), "r") as h5:
@@ -298,7 +308,11 @@ def convert_skill(
         return out
 
     dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
+    head_angles: list[float] = []
     for ref in todo:
+        angle = recording.head_angle(ref)
+        if angle is not None:
+            head_angles.append(angle)
         count = 0
         for frame in recording.frames(ref):
             dataset.add_frame({**frame, "task": task_text})
@@ -307,6 +321,13 @@ def convert_skill(
         recording.mark_exported(repo_id, out, ref.episode_id)
         log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
     dataset.finalize()
+    if read_sidecar(out) is None:
+        write_sidecar(
+            out,
+            head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
+            head_angle_assumed=not head_angles,
+            source="mars2lerobot",
+        )
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
         dataset.push_to_hub(private=private)

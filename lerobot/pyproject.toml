@@ -6,15 +6,26 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
-    "lerobot[dataset,viz]>=0.6.1,<0.7",
+    "lerobot[core_scripts,training]>=0.6.1,<0.7",
     "pyzmq>=26",
     "h5py>=3.10",
     "numpy>=2.0",
     "opencv-python-headless>=4.9",
 ]
 
+[project.optional-dependencies]
+# Policies beyond ACT pull in large libraries; opt in with `uv sync --extra smolvla` etc.
+diffusion = ["lerobot[diffusion]>=0.6.1,<0.7"]
+smolvla = ["lerobot[smolvla]>=0.6.1,<0.7"]
+pi = ["lerobot[pi]>=0.6.1,<0.7"]
+
 [project.scripts]
 mars2lerobot = "lerobot_robot_mars.convert:main"
+
+[tool.uv]
+# torchcodec only loads against a Homebrew ffmpeg on macOS and otherwise prints a screenful of
+# dlopen errors on every run before lerobot falls back to PyAV; PyAV is what runs either way.
+override-dependencies = ["torchcodec ; sys_platform != 'darwin'"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
