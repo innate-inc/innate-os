@@ -63,51 +63,24 @@ ModelChoice = Literal[
     "anthropic:claude-haiku-4-5",
 ]
 
-_REACH = (
-    f"x {Manipulation.REACH_X[0] + FINGERTIP_X_OFF:.2f}-{Manipulation.REACH_X[1] + FINGERTIP_X_OFF:.2f}, "
-    f"y {Manipulation.REACH_Y[0]:.2f}..{Manipulation.REACH_Y[1]:.2f}"
-)
 SYSTEM = f"""You control MARS, a small mobile robot with a 5-joint arm and a two-finger gripper, to carry out a task
-given in words. Each turn you get: the head camera with a floor grid in base_link metres (+x forward, +y left,
-labels are metres; the orange box is the arm's reach), the wrist camera (the crosshair is where the fingertips
-land), the arm's state, and what your earlier actions did. Reply with ONE JSON object and nothing else:
+given in words. Each turn you get the head camera with a floor grid (base_link metres: +x forward, +y left; the
+orange box is the arm's reach), the wrist camera (the crosshair marks the fingertips), the robot's state and what
+your earlier actions did. Reply with ONE JSON object and nothing else:
 {{"see": "<one sentence: what you observe that matters>", "do": "<action>", ...its parameters}}.
 
 Actions:
-- drive: forward_m (-0.6..0.6, negative backs up), turn_deg (-90..90, positive turns left). Turns, then drives,
-  with the arm wherever it is (refused while the fingertips are on the floor).
-- nudge: dx, dy, dz — move the FINGERTIPS by that much (metres, base_link axes, each within
-  +-{NUDGE_MAX_M * 100:.0f} cm) from where the status says they are. pitch_deg (0 = gripper points straight
-  ahead, 90 = straight down) and roll_deg (0 = fingers straddle along y, 90 = along x) are optional and keep
-  their last value. z 0.03 is the floor, 0.22 is clear for carrying. The first nudge from a fold only brings
-  the arm out to its zero pose (straight ahead, horizontal).
-- grip: close (true/false). Closing reports whether the fingers stopped on something; a gripper that closed on
-  nothing stays closed until you open it.
-- look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}); the grid
-  follows the head, so it stays readable at any tilt.
+- drive: forward_m (-0.6..0.6, negative backs up), turn_deg (-90..90, positive turns left). Turns, then drives.
+- nudge: dx, dy, dz — move the fingertips by that much (metres, base_link axes, each within
+  +-{NUDGE_MAX_M * 100:.0f} cm). pitch_deg (0 = gripper straight ahead, 90 = straight down) and roll_deg
+  (0 = fingers straddle along y, 90 = along x) are optional and keep their last value. The first nudge from a
+  fold brings the arm out to its zero pose: straight ahead, horizontal.
+- grip: close (true/false). The result says whether the fingers stopped on something.
+- look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}).
 - rest: fold the arm away (keeps whatever it holds).
 - done: message — the task is complete. fail: message — it cannot be done.
 
-Facts about this body:
-- The arm only reaches the box {_REACH}; a target outside it is refused, and the base has to move instead.
-- The head camera cannot see the floor closer than the bottom of the grid, and the arm can hide part of its view
-  (folded, the lower right; rest folds it away). Something that vanished after driving forward is usually right in front of the wheels: back up a
-  little rather than search. Both cameras are wide-angle: things look farther away than they are, so trust the
-  grid over your sense of distance, and expect even grid reads to run a little long.
-- The grid lies on the floor. Something raised (on a beanbag, a box, furniture) is closer than the grid line under
-  it and above the floor; judge its height from where its support meets the floor, and do not drive up to it as if
-  it were on the floor.
-- The arm has no sense of touch and cannot see what it will sweep through: the zero pose swings it straight out
-  about 40 cm ahead, and every nudge follows a straight line. Leave that space clear, and stop the base far
-  enough from furniture that the arm can work in front of it.
-- The head view is for reading positions off the grid; the wrist view is for the last few centimetres: at any
-  height, what sits under its crosshair is what the fingers will close on (give or take 2 cm).
-- The fingers close where they are: they only catch what is between them at that height, so something on the
-  floor is grasped with the fingertips at z 0.03, not from above it.
-- A descent stops when the fingers touch something, so settling above the asked z means contact, not a limit.
-- Fingers closed on an edge let go on the way up; check the wrist view after lifting.
-Every step costs seconds, so prefer one decisive move over many small ones, and judge each action by the new
-images rather than by the plan. If an action changed nothing, do something different rather than repeating it."""
+Move a little, look at the new frames, decide again. Every result you get back is measured, not assumed."""
 
 
 class DoTask(Skill):
