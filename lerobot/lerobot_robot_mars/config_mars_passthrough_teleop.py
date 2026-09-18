@@ -2,11 +2,11 @@
 # Copyright (c) 2026 Innate Inc
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS
+from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host
 
 
 @TeleoperatorConfig.register_subclass("mars_passthrough")
@@ -18,7 +18,7 @@ class MarsPassthroughTeleopConfig(TeleoperatorConfig):
     command and the lerobot client never re-sends it.
     """
 
-    remote_ip: str = "mars.local"
+    remote_ip: str = field(default_factory=default_host)
     port_actions: int = DEFAULT_PORT_ACTIONS
     port_observations: int = DEFAULT_PORT_OBSERVATIONS
     connect_timeout_s: float = 5.0
