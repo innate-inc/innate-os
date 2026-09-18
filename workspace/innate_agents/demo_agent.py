@@ -3,10 +3,10 @@
 from innate_skills.arm.arm_move import ArmMove
 from innate_skills.arm.close_gripper import CloseGripper
 from innate_skills.arm.open_gripper import OpenGripper
+from innate_skills.do_task import DoTask
 from innate_skills.drop_in_box import DropInBox
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
-from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
 from innate_skills.system.change_volume import ChangeVolume
 from innate_skills.wave import Wave
@@ -34,7 +34,7 @@ class DemoAgent(Agent):
         return [
             NavigateToPosition,
             Wave,
-            PickAnyObject,
+            DoTask,
             ArmMove,
             OpenGripper,
             CloseGripper,
