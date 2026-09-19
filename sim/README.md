@@ -164,6 +164,7 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 - `config/settings.yaml` — optional ROS tunables
 - `sim/config.toml` — optional overrides, created from `config.toml.template`
 - `INNATE_SIM_RENDER_SCALE=N` — render cameras at 1/N (helps software rendering)
+- `INNATE_SIM_HARDWARE_CAMERA_RATES=1` — render the raw camera topics at the robot's capture rates (head 15 fps, wrist 30 fps) while something subscribes to them, for recording datasets; needs native GL. See [lerobot/README.md](../lerobot/README.md#using-the-simulator)
 
 ## Credits
 
