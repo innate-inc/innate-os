@@ -24,6 +24,7 @@ pi = ["lerobot[pi]>=0.6.1,<0.7"]
 
 [project.scripts]
 mars2lerobot = "lerobot_robot_mars.convert:main"
+mars-push = "lerobot_robot_mars.push:main"
 
 [tool.uv]
 # The platforms MARS users have: Apple Silicon, Linux PCs, the Jetson, Windows. Without this the lock
