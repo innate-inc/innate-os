@@ -882,6 +882,7 @@ class ManipulationServer(Node):
         self.declare_parameter("lerobot_bridge.port_observations", 5556)
         self.declare_parameter("lerobot_bridge.rate_hz", 30.0)
         self.declare_parameter("lerobot_bridge.jpeg_quality", 90)
+        self.declare_parameter("lerobot_bridge.bind_address", "*")
         if not self.get_parameter("lerobot_bridge.enabled").value:
             return None
         if LeRobotBridge is None:
@@ -897,6 +898,7 @@ class ManipulationServer(Node):
             port_actions=port_actions,
             port_observations=port_observations,
             jpeg_quality=int(self.get_parameter("lerobot_bridge.jpeg_quality").value),
+            bind_address=str(self.get_parameter("lerobot_bridge.bind_address").value),
             on_head=self._bridge_head,
             log=lambda message: self.get_logger().warn(message, throttle_duration_sec=2.0),
         )
