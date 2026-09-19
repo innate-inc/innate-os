@@ -126,6 +126,21 @@ def test_recorded_head_angle_lands_in_the_sidecar(skill_dir: Path, tmp_path: Pat
     assert sidecar["source"] == "mars2lerobot"
 
 
+def test_progress_events_drive_a_ui(skill_dir: Path, tmp_path: Path) -> None:
+    events: list[dict] = []
+    convert_skill(
+        skill_dir,
+        repo_id="innate/mars-test",
+        root=tmp_path / "out",
+        vcodec="h264",
+        log=lambda _m: None,
+        progress=events.append,
+    )
+    assert [e["event"] for e in events] == ["start", "episode", "episode", "done"]
+    assert events[0]["total"] == 2 and events[2] == {"event": "episode", "index": 2, "total": 2, "frames": T}
+    assert events[-1]["url"] == ""  # not pushed
+
+
 def test_replay_skill_without_dataset_metadata(tmp_path: Path) -> None:
     skill = tmp_path / "wave"
     skill.mkdir()

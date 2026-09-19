@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
-    "lerobot[core_scripts,training]>=0.6.1,<0.7",
+    "lerobot[dataset]>=0.6.1,<0.7",
     "pyzmq>=26",
     "h5py>=3.10",
     "numpy>=2.0",
@@ -14,6 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Everything the lerobot CLIs need (record, resume, viewer, training). uv installs it by default
+# through the `workstation` group below; with pip, ask for it: pip install lerobot_robot_mars[workstation]
+workstation = ["lerobot[core_scripts,training]>=0.6.1,<0.7"]
 # Policies beyond ACT pull in large libraries; opt in with `uv sync --extra smolvla` etc.
 diffusion = ["lerobot[diffusion]>=0.6.1,<0.7"]
 smolvla = ["lerobot[smolvla]>=0.6.1,<0.7"]
@@ -26,9 +29,12 @@ mars2lerobot = "lerobot_robot_mars.convert:main"
 # torchcodec only loads against a Homebrew ffmpeg on macOS and otherwise prints a screenful of
 # dlopen errors on every run before lerobot falls back to PyAV; PyAV is what runs either way.
 override-dependencies = ["torchcodec ; sys_platform != 'darwin'"]
+# The robot installs only the base (dataset conversion) with `uv sync --no-default-groups`.
+default-groups = ["dev", "workstation"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+workstation = ["lerobot[core_scripts,training]>=0.6.1,<0.7"]
 
 [build-system]
 requires = ["hatchling"]

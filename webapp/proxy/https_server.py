@@ -49,6 +49,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from hub_routes import publish_start, publish_status, setup_start, whoami
 from keys_routes import keys_apply, keys_get
 from media_routes import (
     episode_response,
@@ -519,7 +520,11 @@ def build_app() -> web.Application:
     app.router.add_get("/run/log", run_log_response)
     app.router.add_get("/settings.json", settings_get)
     app.router.add_get("/keys.json", keys_get)
+    app.router.add_get("/hub/publish", publish_status)
+    app.router.add_get("/hub/whoami", whoami)
     if not WEBAPP_READONLY:
+        app.router.add_post("/hub/publish", publish_start)
+        app.router.add_post("/hub/setup", setup_start)
         app.router.add_post("/settings.json", settings_apply)
         app.router.add_post("/keys.json", keys_apply)
         app.router.add_get("/restart", restart_handler)
