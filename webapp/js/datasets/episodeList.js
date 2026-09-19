@@ -91,8 +91,8 @@ export function createEpisodeList(parent, ros, opts) {
   const publishBtn = document.createElement("button");
   publishBtn.type = "button";
   publishBtn.className = "episodes-tool";
-  publishBtn.textContent = "Publish";
-  publishBtn.title = "Upload this dataset to Hugging Face";
+  publishBtn.textContent = "Publish to Hugging Face";
+  publishBtn.title = "Convert this dataset to a LeRobotDataset and upload it to the Hugging Face Hub";
   publishBtn.addEventListener("click", () => {
     if (current) openPublishModal(wrap, current);
   });

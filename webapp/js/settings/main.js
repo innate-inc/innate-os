@@ -639,7 +639,7 @@ const KEY_ROWS = [
   { env: "ANTHROPIC_API_KEY", label: "Anthropic key", doc: "Claude models. Needed even with an Innate service key — the proxy does not serve Anthropic yet." },
   { env: "ANTHROPIC_WORKSPACE_ID", label: "Anthropic workspace", secret: false, doc: "Only for a key created for the organization rather than inside a workspace: the workspace to bill. Without it Anthropic refuses every request with a 400; a workspace-scoped key needs nothing here. Not a secret, so it is shown in full." },
   { env: "LLM_API_KEY", label: "Local server key", doc: "Only if the OpenAI-compatible server under Custom model wants one; most on a home network do not." },
-  { env: "HF_TOKEN", label: "Hugging Face token", doc: "Publishes datasets from the Datasets page to the Hugging Face Hub. Needs write permission; create one at huggingface.co/settings/tokens. Not used by the models above." },
+  { env: "HF_TOKEN", label: "Access token", own: true, doc: "Needs write permission. Used only when you press Publish to Hugging Face on a dataset." },
 ];
 /**
  * The Keys section: set/not-set per key with a paste field that POSTs straight to
@@ -678,16 +678,22 @@ function buildKeysSection(pageSection, host) {
     return row;
   };
 
-  const serviceState = textEl("span", "set-status muted", "…");
-  addRow(
-    "Innate service key",
-    "Provisioned with the robot: reaches Gemini and OpenAI models through the Innate proxy and pays for the voice. Not editable here.",
-    [serviceState],
-  );
-  renderers.push(() => {
-    serviceState.textContent = status.failed ? "—" : status.service_key ? "Set" : "Not set";
-    serviceState.className = "set-status " + (status.service_key ? "ok" : "muted");
-  });
+  // `keys: true` is the model vendors' section; a list names a section's own keys (own: true rows).
+  const named = Array.isArray(pageSection.keys) ? pageSection.keys : null;
+  const specs = KEY_ROWS.filter((spec) => (named ? named.includes(spec.env) : !spec.own));
+
+  if (!named) {
+    const serviceState = textEl("span", "set-status muted", "…");
+    addRow(
+      "Innate service key",
+      "Provisioned with the robot: reaches Gemini and OpenAI models through the Innate proxy and pays for the voice. Not editable here.",
+      [serviceState],
+    );
+    renderers.push(() => {
+      serviceState.textContent = status.failed ? "—" : status.service_key ? "Set" : "Not set";
+      serviceState.className = "set-status " + (status.service_key ? "ok" : "muted");
+    });
+  }
 
   const load = async () => {
     try {
@@ -708,7 +714,7 @@ function buildKeysSection(pageSection, host) {
     renderReach();
   };
 
-  for (const spec of KEY_ROWS) {
+  for (const spec of specs) {
     const state = textEl("span", "set-status muted", "…");
     const line = textEl("div", "set-key-ctl");
     const input = inputEl(spec.secret === false ? "text" : "password", "set-text");
@@ -774,7 +780,7 @@ function buildKeysSection(pageSection, host) {
   const modelStatus = textEl("span", "set-status muted set-model-status", "");
   modelEntry?.row.querySelector(".set-ctl-main")?.appendChild(modelStatus);
   const renderReach = () => {
-    if (!modelEntry || !status.loaded || status.failed) return;
+    if (named || !modelEntry || !status.loaded || status.failed) return;
     const reach = modelReach(String(modelEntry.value || ""), String(urlEntry?.value || "").trim(), status);
     modelStatus.textContent = reach.text;
     modelStatus.className = "set-status set-model-status " + (reach.ok ? "muted" : "warn");
