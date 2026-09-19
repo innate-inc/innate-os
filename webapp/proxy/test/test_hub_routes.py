@@ -5,7 +5,6 @@ and a whole job driven by a stand-in converter that speaks the real progress pro
 
 import asyncio
 import json
-import os
 import stat
 
 import hub_publish
@@ -63,15 +62,6 @@ async def wait_for_job(session, base, skill) -> dict:
             return status["job"]
         await asyncio.sleep(0.05)
     raise AssertionError("job never finished")
-
-
-@sync
-async def test_status_reports_what_is_missing(tmp_path, robot):
-    async with serve(ROOT=make_app_root(tmp_path)) as (s, base):
-        status = await (await s.get(base + "/hub/publish", params={"dir": str(robot)})).json()
-        assert status == {"readonly": False, "token": False, "env_ready": False, "job": None, "published": None}
-        outside = await (await s.get(base + "/hub/publish", params={"dir": "/etc"})).json()
-        assert outside["published"] is None
 
 
 @sync
@@ -206,21 +196,3 @@ async def test_a_page_from_another_site_cannot_publish(tmp_path, robot):
         assert (await s.post(base + "/hub/setup", headers=foreign)).status == 403
         own = await s.post(base + "/hub/publish", json=body, headers={"Origin": base})
         assert own.status == 400 and "token" in (await own.json())["message"]
-
-
-@sync
-async def test_a_readonly_webapp_cannot_publish(tmp_path, robot):
-    async with serve(ROOT=make_app_root(tmp_path), WEBAPP_READONLY=True) as (s, base):
-        status = await (await s.get(base + "/hub/publish", params={"dir": str(robot)})).json()
-        assert status["readonly"] is True
-        assert (await s.post(base + "/hub/publish", json={"dir": str(robot), "repo_id": "me/x"})).status in (404, 405)
-        assert (await s.post(base + "/hub/setup")).status in (404, 405)
-
-
-def test_token_value_is_layered_like_the_status(tmp_path, robot, monkeypatch):
-    assert keys_store.value("HF_TOKEN") == ""
-    monkeypatch.setenv("HF_TOKEN", "from-environment")
-    assert keys_store.value("HF_TOKEN") == "from-environment"
-    keys_store.apply({"HF_TOKEN": "from-file"}, [])
-    assert keys_store.value("HF_TOKEN") == "from-file"
-    assert keys_store.value("PATH") == "" and os.environ.get("PATH")

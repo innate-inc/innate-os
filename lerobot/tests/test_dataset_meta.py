@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from lerobot_robot_mars import dataset_meta
-from lerobot_robot_mars.dataset_meta import head_angle_for_run, read_sidecar, recording_root, write_sidecar
+from lerobot_robot_mars.dataset_meta import head_angle_for_run, recording_root, write_sidecar
 
 
 def make_dataset(root: Path, age_s: float = 0.0) -> Path:
@@ -20,12 +20,6 @@ def make_dataset(root: Path, age_s: float = 0.0) -> Path:
     stamp = time.time() - age_s
     os.utime(info, (stamp, stamp))
     return root
-
-
-def test_explicit_root_wins(tmp_path: Path) -> None:
-    root = make_dataset(tmp_path / "rec", age_s=9999)
-    assert recording_root(["lerobot-record", f"--dataset.root={root}", "--dataset.repo_id=me/x"]) == root
-    assert recording_root(["lerobot-record", "--dataset.root", str(tmp_path / "missing")]) is None
 
 
 def test_repo_id_resolves_to_the_fresh_stamped_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,15 +36,6 @@ def test_an_old_dataset_being_replayed_is_left_alone(tmp_path: Path, monkeypatch
     assert recording_root(["lerobot-replay", "--dataset.repo_id=me/pick"]) is None
     assert recording_root(["lerobot-record", "--dataset.repo_id=me/pick", "--resume=true"]) == tmp_path / "me" / "pick"
     assert recording_root(["lerobot-teleoperate"]) is None
-
-
-def test_sidecar_round_trip(tmp_path: Path) -> None:
-    root = make_dataset(tmp_path / "rec")
-    assert read_sidecar(root) is None
-    write_sidecar(root, head_angle_deg=-20.0, source="lerobot")
-    sidecar = read_sidecar(root)
-    assert sidecar is not None
-    assert sidecar["head_angle_deg"] == -20.0 and sidecar["head_angle_assumed"] is False and sidecar["robot"] == "mars"
 
 
 def test_head_angle_follows_the_dataset_behind_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

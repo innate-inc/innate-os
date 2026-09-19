@@ -375,7 +375,6 @@ uv run pytest
 
 The tests run the real bridge module from `ros2_ws/src/brain/manipulation` against the client,
 so the wire protocol is pinned on both sides. The protocol itself is documented in
-`lerobot_robot_mars/wire.py`. [docs/test-run.html](docs/test-run.html) is a hardware checklist
-for the whole workflow.
+`lerobot_robot_mars/wire.py`.
 
 Licensed under Apache-2.0, like the rest of innate-os.
