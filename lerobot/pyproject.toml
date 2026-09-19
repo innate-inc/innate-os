@@ -26,6 +26,14 @@ pi = ["lerobot[pi]>=0.6.1,<0.7"]
 mars2lerobot = "lerobot_robot_mars.convert:main"
 
 [tool.uv]
+# The platforms MARS users have: Apple Silicon, Linux PCs, the Jetson, Windows. Without this the lock
+# also lists wheels for musl, 32-bit, PowerPC and Intel Macs, none of which torch ships for.
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 # torchcodec only loads against a Homebrew ffmpeg on macOS and otherwise prints a screenful of
 # dlopen errors on every run before lerobot falls back to PyAV; PyAV is what runs either way.
 override-dependencies = ["torchcodec ; sys_platform != 'darwin'"]
