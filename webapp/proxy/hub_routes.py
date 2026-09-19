@@ -12,6 +12,7 @@ POST /hub/setup          install the LeRobot environment, once.      (same)
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlsplit
 
 import aiohttp
 import hub_publish
@@ -66,6 +67,8 @@ async def whoami(_request: web.Request) -> web.Response:
 
 
 async def publish_start(request: web.Request) -> web.Response:
+    if _cross_site(request):
+        return _refuse(403, "cross-site request refused")
     try:
         body = await request.json()
         skill_dir = _resolve_under_root(str(body["dir"]))
@@ -90,7 +93,9 @@ async def publish_start(request: web.Request) -> web.Response:
     return web.json_response({"ok": True}, status=202)
 
 
-async def setup_start(_request: web.Request) -> web.Response:
+async def setup_start(request: web.Request) -> web.Response:
+    if _cross_site(request):
+        return _refuse(403, "cross-site request refused")
     if not hub_publish.LEROBOT_DIR.is_dir():
         return _refuse(404, "this innate-os checkout has no lerobot/ folder; update the robot first")
     try:
@@ -98,6 +103,13 @@ async def setup_start(_request: web.Request) -> web.Response:
     except hub_publish.Busy:
         return _refuse(409, "another job is still running")
     return web.json_response({"ok": True}, status=202)
+
+
+def _cross_site(request: web.Request) -> bool:
+    """True for a browser POST from another site's page: request.json() takes any content type,
+    so without this a page the operator merely visits could publish with the robot's token."""
+    origin = request.headers.get("Origin")
+    return origin is not None and urlsplit(origin).netloc != request.host
 
 
 def _refuse(status: int, message: str) -> web.Response:
