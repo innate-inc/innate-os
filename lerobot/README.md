@@ -267,6 +267,27 @@ MARS_HOST=localhost uv run lerobot-teleoperate --robot.type=mars \
 Drive the simulated robot from its web app. The simulator publishes the bridge on ports 5555 and
 5556, or on `INNATE_SIM_PORT_BASE + 7` and `+ 8` when you moved its port block.
 
+### Recording datasets in the simulator
+
+By default the simulator renders its cameras at the rates of the robot's compressed streams: 10 fps
+for the head and 6 fps for the wrist. A 30 fps dataset recorded that way repeats most frames. To
+render at the robot's capture rates instead, start the simulator with one flag:
+
+```bash
+./innate-sim down
+INNATE_SIM_HARDWARE_CAMERA_RATES=1 ./innate-sim up
+```
+
+| Camera | Default | With the flag | Real robot |
+|---|---|---|---|
+| Head | 10 fps | 15 fps | 15 fps |
+| Wrist | 6 fps | 30 fps | 30 fps |
+
+The higher rates apply only while something reads the raw camera topics, such as a connected
+LeRobot client, and skills see the same compressed streams either way. It is off by default
+because it triples the rendering work: it needs a GPU on the host, and on software rendering
+the simulator cannot keep up and lowers the rates by itself.
+
 ## Reference
 
 ### Dataset format

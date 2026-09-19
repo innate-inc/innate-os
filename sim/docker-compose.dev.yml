@@ -62,6 +62,9 @@ services:
       # webapp proxy relays /worldstate to it.
       - INNATE_WORLD_STATE_PORT=${SIM_WORLD_STATE_PORT:-8800}
       - INNATE_LEROBOT_VENV=/root/.cache/innate-lerobot/venv
+      # 1 renders the raw camera topics at the robot's capture rates (15/30 fps) while something
+      # subscribes to them; see lerobot/README.md. Needs native GL on the host to keep up.
+      - INNATE_SIM_HARDWARE_CAMERA_RATES=${INNATE_SIM_HARDWARE_CAMERA_RATES:-}
     ports:
       # The launcher fills every published side in from INNATE_SIM_PORT_BASE
       # (sim/README.md "Running two checkouts at once").
