@@ -177,7 +177,7 @@ class ManipulationServer(Node):
             cancel_callback=self.cancel_behavior_callback,
         )
 
-        # LeRobot bridge (lerobot_bridge.* params): a lerobot process on a laptop or on this Jetson
+        # LeRobot bridge (lerobot_bridge.* params): a lerobot process on another computer or on this Jetson
         # observes and drives the robot over ZMQ. Idle until a client heartbeats.
         self._bridge_active = False
         self._last_arm_command: list[float] | None = None

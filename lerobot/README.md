@@ -3,11 +3,11 @@
 `lerobot_robot_mars` makes the Innate MARS a [LeRobot](https://github.com/huggingface/lerobot)
 robot. Once installed next to lerobot, `--robot.type=mars` works in `lerobot-teleoperate`,
 `lerobot-record`, `lerobot-replay`, and `lerobot-rollout`, and `mars2lerobot` exports skills
-recorded by the Innate app to a LeRobotDataset v3.
+recorded with the Innate phone app or web app to a LeRobotDataset v3.
 
 The lerobot process never talks to ROS. It talks to a small bridge inside `manipulation_server`
 on the robot over two ZMQ sockets; the bridge is on by default and idles until a client
-connects. That process can run on a laptop (`--robot.remote_ip=mars.local`) or on the Jetson
+connects. That process can run on your computer (`--robot.remote_ip=mars.local`) or on the Jetson
 itself in this package's own Python 3.12 environment (`--robot.remote_ip=localhost`).
 
 ## On the robot
@@ -21,7 +21,7 @@ LeRobot bridge listening on :5555 (actions) and :5556 (observations)
 ```
 
 If it says `LeRobot bridge disabled: …` the line names the reason; `innate update reinstall`
-installs the missing Python dependency and rebuilds. Tell the laptop the robot's hostname
+installs the missing Python dependency and rebuilds. Tell your computer the robot's hostname
 once, the one you type into the browser for the web app:
 
 ```bash
@@ -33,7 +33,7 @@ which is how the same commands target the simulator with `localhost`.
 
 ## Install
 
-On the laptop. lerobot main needs Python 3.12; the robot's ROS stack is Python 3.10. Keep the two apart with
+On your computer. lerobot main needs Python 3.12; the robot's ROS stack is Python 3.10. Keep the two apart with
 [uv](https://docs.astral.sh/uv/), which downloads its own interpreter:
 
 ```bash
@@ -59,9 +59,10 @@ Drive the sim from the web app. `--display_data=true` opens Rerun with both came
 joint plots; without it the terminal only prints the loop rate. Every command below works
 against the sim the same way with `remote_ip=localhost`.
 
-## Record with the Innate app driving
+## Record while you teleoperate the usual way
 
-The passthrough teleoperator reads back whatever the app, the leader arm, or a skill last
+Drive the robot however you normally do: the phone app, the web app's Teleop page, or the
+leader arm. The passthrough teleoperator reads back whatever any of them, or a skill, last
 commanded, so recording needs no new teleop hardware. Pair it with `external_commands=true`
 so the client never re-sends that command behind the operator:
 
@@ -92,8 +93,8 @@ uv run lerobot-rollout --strategy.type=base --policy.path=outputs/train/act_mars
 ```
 
 Without `external_commands`, `send_action` forwards six absolute joint targets (rad) to
-`/mars/arm/commands` and the base twist to `/cmd_vel_skills`. Close the app's teleop view first:
-while the app is teleoperating it keeps publishing its own arm and base commands, the base mux
+`/mars/arm/commands` and the base twist to `/cmd_vel_skills`. Leave teleop first, in the phone app
+and in the web app alike: while either is teleoperating it keeps publishing its own arm and base commands, the base mux
 gives those priority, and the two arm streams fight. The bridge also ignores commands while an
 Innate behavior is executing, and stops the base if a commanding client goes silent for half a
 second.
@@ -154,11 +155,16 @@ client and the converter.
 
 **Head angle.** What the head camera sees depends on the head tilt, so it is fixed per dataset
 and written to `meta/mars.json` (`head_angle_deg`), next to lerobot's own metadata and uploaded
-with it. The client sets the head to `--robot.head_angle_deg` (default -20, the robot's "AI
-position") when it connects and commands it back if someone tilts it mid-session, for recording,
-replay, and rollout alike; `--robot.head_angle_deg=null` leaves the head alone. The converter
-takes the angle the recorder logged, or notes the default as assumed. Use the same angle for
-rollout as the dataset was recorded with; the client warns when they differ.
+with it. You normally never set it. When the client connects it works out the angle from the
+dataset behind the run and holds the head there, commanding it back if someone tilts it:
+
+- a new recording uses -20, the robot's "AI position", and writes that into the dataset;
+- resuming or replaying a dataset uses that dataset's angle;
+- running a policy uses the angle of the dataset it was trained on, which the checkpoint names
+  in its `train_config.json`; the sidecar is read from the local cache or fetched from the Hub.
+
+`--robot.head_angle_deg=<deg>` overrides all of that, and `--robot.hold_head=false` leaves the
+head alone. The converter takes the angle the robot's recorder logged, or notes -20 as assumed.
 
 ## Protocol
 
@@ -184,7 +190,7 @@ Python (it is in `ros2_ws/pip-requirements.txt`); `manipulation_server` logs
   read the angle brackets as redirection. Placeholders in these docs are spelled `YOUR_HF_NAME`.
 - The robot ignores `send_action` while an Innate skill or policy is executing (`busy` in the
   state header); wait for it to finish.
-- Replay or rollout moves the arm oddly and the base not at all: the app is still teleoperating.
-  Leave the teleop view in the app before replaying.
+- Replay or rollout moves the arm oddly and the base not at all: the phone app or the web app's Teleop
+  page is still teleoperating. Leave it before replaying.
 - The base stops half a second after the last action: that is the watchdog. Keep sending
   actions at the control rate, as `lerobot-record` and `lerobot-rollout` do.

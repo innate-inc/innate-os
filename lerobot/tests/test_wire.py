@@ -228,7 +228,7 @@ def test_head_is_set_at_connect_and_commanded_back_when_it_drifts(bridge_module:
             mars.disconnect()
 
 
-def test_head_is_left_alone_when_no_angle_is_configured(bridge_module: ModuleType) -> None:
+def test_head_is_left_alone_when_holding_is_off(bridge_module: ModuleType) -> None:
     with FakeRobot(bridge_module) as robot:
         robot.head_deg = 15.0
         mars = Mars(
@@ -236,7 +236,7 @@ def test_head_is_left_alone_when_no_angle_is_configured(bridge_module: ModuleTyp
                 remote_ip="127.0.0.1",
                 port_actions=robot.port_actions,
                 port_observations=robot.port_observations,
-                head_angle_deg=None,
+                hold_head=False,
             )
         )
         mars.connect()
