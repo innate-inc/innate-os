@@ -198,6 +198,17 @@ async def test_setup_installs_the_lean_environment_with_cpu_torch(tmp_path, robo
 
 
 @sync
+async def test_a_page_from_another_site_cannot_publish(tmp_path, robot):
+    body = {"dir": str(robot), "repo_id": "me/mars-s"}
+    async with serve(ROOT=make_app_root(tmp_path)) as (s, base):
+        foreign = {"Origin": "https://evil.example"}
+        assert (await s.post(base + "/hub/publish", json=body, headers=foreign)).status == 403
+        assert (await s.post(base + "/hub/setup", headers=foreign)).status == 403
+        own = await s.post(base + "/hub/publish", json=body, headers={"Origin": base})
+        assert own.status == 400 and "token" in (await own.json())["message"]
+
+
+@sync
 async def test_a_readonly_webapp_cannot_publish(tmp_path, robot):
     async with serve(ROOT=make_app_root(tmp_path), WEBAPP_READONLY=True) as (s, base):
         status = await (await s.get(base + "/hub/publish", params={"dir": str(robot)})).json()

@@ -135,6 +135,18 @@ def test_blocked_bridge_keeps_hands_off() -> None:
         h.send(dict(zip(JOINT_KEYS, JOINTS, strict=True)))
         h.bridge.poll(now=1.0)
         assert h.arm == [] and h.base == []
+        h.bridge.poll(now=5.0)
+        assert h.stops == 0  # a stop would land on the channel the running behavior drives through
+
+
+def test_a_behavior_starting_mid_drive_gets_one_stop_up_front() -> None:
+    with Harness(watchdog_s=0.5) as h:
+        h.send(dict(zip(JOINT_KEYS, JOINTS, strict=True)) | {"x.vel": 0.3})
+        h.bridge.poll(now=1.0)
+        h.bridge.commands_blocked = True
+        h.bridge.poll(now=1.1)
+        h.bridge.poll(now=5.0)
+        assert h.stops == 1
 
 
 def test_head_command_is_forwarded_unless_blocked_and_is_not_an_action() -> None:

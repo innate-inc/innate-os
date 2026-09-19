@@ -189,17 +189,19 @@ class LeRobotBridge:
         if joints is None or base is None:
             self._log(f"LeRobot bridge ignored a malformed action: {payload}")
             return
-        self._last_action = now
-        self._base_stopped = False
         if self.commands_blocked:
             return
+        self._last_action = now
+        self._base_stopped = False
         self._on_arm(joints)
         self._on_base(base[0], base[1])
 
     def _watchdog(self, now: float) -> None:
         if self._last_action is None or self._base_stopped:
             return
-        if now - self._last_action > self._watchdog_s:
+        # A behavior that starts mid-drive gets one stop now, before it moves, and none after:
+        # the stop goes out on the channel the behavior itself commands the base through.
+        if self.commands_blocked or now - self._last_action > self._watchdog_s:
             self._base_stopped = True
             self._on_stop_base()
 
