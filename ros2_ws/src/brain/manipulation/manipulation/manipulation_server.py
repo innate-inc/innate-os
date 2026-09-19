@@ -141,7 +141,7 @@ class ManipulationServer(Node):
         self.latest_image2_timestamp = None
         self.latest_joint_timestamp = None
 
-        # Sensor subscriptions are created once on the first behavior and then kept for
+        # Sensor subscriptions are created once on the first behavior or LeRobot client and then kept for
         # the node's lifetime. They are deliberately NEVER destroyed: under the
         # MultiThreadedExecutor, destroying a subscription that the executor has already
         # selected as "ready" races _take_subscription and crashes the process
@@ -909,7 +909,6 @@ class ManipulationServer(Node):
         )
         self._cmd_vel_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 1)
         self._head_sub = self.create_subscription(String, "/mars/head/current_position", self._head_callback, 1)
-        self._start_sensor_subscriptions()
         self.create_timer(1.0 / max(rate_hz, 1.0), self._lerobot_bridge_tick)
         self.get_logger().info(
             f"LeRobot bridge listening on :{port_actions} (actions) and :{port_observations} (observations)"
@@ -956,6 +955,8 @@ class ManipulationServer(Node):
         active = bridge.active(now)
         if active != self._bridge_active:
             self.get_logger().info("LeRobot client connected" if active else "LeRobot client idle")
+        if active:
+            self._start_sensor_subscriptions()
         self._bridge_active = active
         joint_state = self.latest_joint_state
         if not self._bridge_active or joint_state is None or len(joint_state.position) < 6:
