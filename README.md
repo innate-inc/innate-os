@@ -147,10 +147,12 @@ MARS is a [LeRobot](https://github.com/huggingface/lerobot) robot. Record datase
 ```bash
 cd lerobot && uv sync
 export MARS_HOST=192.168.1.42    # your robot's IP address
+uv run hf auth login             # datasets upload to your Hugging Face account
 
 uv run lerobot-record --robot.type=mars --robot.external_commands=true \
     --teleop.type=mars_passthrough --dataset.repo_id=YOUR_HF_NAME/mars-tidy-up \
-    --dataset.single_task="Put the ball in the box" --dataset.num_episodes=10
+    --dataset.single_task="Put the ball in the box" --dataset.num_episodes=10 \
+    --dataset.private=true
 ```
 
 Skills you already recorded convert to the same LeRobotDataset format: the web app's Datasets page has a **Publish to Hugging Face** button.

@@ -64,7 +64,7 @@ environment, with `MARS_HOST=localhost`.
 | **Computer** | macOS or Linux, on the same network as the robot |
 | **Tools** | [uv](https://docs.astral.sh/uv/getting-started/installation/) and git. uv downloads Python 3.12 for you |
 | **For training** | An NVIDIA GPU or Apple Silicon. Not needed for recording or replay |
-| **For sharing** | A free [Hugging Face](https://huggingface.co/join) account. Not needed to record, replay or train locally |
+| **Account** | A free [Hugging Face](https://huggingface.co/join) account, where your datasets are uploaded. Optional: everything also works offline |
 
 ## Setup
 
@@ -127,10 +127,12 @@ the robot from the phone app or the web app and watch them move. The robot's log
 
 ### 5. Log in to Hugging Face
 
-You can skip this until you want to upload something. Recording, replay, training and running a
-policy all work offline, and datasets are saved on your computer.
+The record command below uploads your dataset to your account when a session ends, as LeRobot
+does by default, so log in once now. You can also stay offline: recording, replay, training and
+running a policy all work without an account if you add `--dataset.push_to_hub=false` when you
+record.
 
-You need to be logged in to:
+Being logged in lets you:
 
 - upload a dataset or a trained policy to the Hub,
 - download a private dataset, for example to train on another machine,
@@ -162,7 +164,7 @@ uv run lerobot-record \
     --robot.type=mars --robot.external_commands=true --teleop.type=mars_passthrough \
     --dataset.repo_id=YOUR_HF_NAME/mars-tidy-up --dataset.no_stamp=true \
     --dataset.single_task="Put the ball in the box" \
-    --dataset.fps=30 --dataset.num_episodes=10 --dataset.push_to_hub=false
+    --dataset.fps=30 --dataset.num_episodes=10 --dataset.private=true
 ```
 
 | Key | During recording |
@@ -171,7 +173,10 @@ uv run lerobot-record \
 | Left arrow | Discard this episode and record it again |
 | Escape | Stop and save |
 
-The dataset is saved under `~/.cache/huggingface/lerobot/YOUR_HF_NAME/mars-tidy-up`.
+The dataset is saved under `~/.cache/huggingface/lerobot/YOUR_HF_NAME/mars-tidy-up`. When the
+session ends it is also uploaded to `huggingface.co/datasets/YOUR_HF_NAME/mars-tidy-up` as a
+private dataset. Leave out `--dataset.private=true` to publish it openly, or add
+`--dataset.push_to_hub=false` to keep it on your computer only.
 
 **Add more episodes later** by repeating the command with two extra flags. LeRobot needs the
 dataset's folder spelled out to resume, and `num_episodes` then counts this session only:
@@ -241,15 +246,16 @@ training dataset was recorded at.
 
 ### 5. Publish to the Hub
 
-[Log in](#5-log-in-to-hugging-face) first, then push the dataset you recorded:
+Recording already uploads the dataset at the end of each session. For a dataset you recorded
+offline, or when an upload failed halfway, push it by hand:
 
 ```bash
 uv run mars-push YOUR_HF_NAME/mars-tidy-up --private
 ```
 
-Leave out `--private` for a public dataset. Private datasets do not open in the online dataset
-visualizer. To upload at the end of a recording session instead, add
-`--dataset.push_to_hub=true --dataset.private=true` to the `lerobot-record` command.
+Leave out `--private` for a public dataset. To open up a private one later, change its visibility
+in the dataset's settings on the Hub. Public datasets also open in LeRobot's online
+[dataset visualizer](https://huggingface.co/spaces/lerobot/visualize_dataset); private ones do not.
 
 ## Datasets recorded with innate-os
 
