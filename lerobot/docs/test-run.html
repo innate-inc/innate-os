@@ -83,26 +83,26 @@
     <p class="where">on the robot</p>
 <pre><code>innate update --dev apply feat/lerobot-integration     # or: git pull && innate build</code></pre>
     <p class="expect"><b>Pass:</b> <code>innate view</code>, manipulation server window shows <code>LeRobot bridge listening on :5555 (actions) and :5556 (observations)</code>. The same line appears on the webapp Logging page.</p></div></div>
-  <div class="step"><input type="checkbox" id="c0b"><div><label for="c0b">Laptop environment installed</label>
-    <p class="where">on the laptop, same Wi-Fi as the robot</p>
+  <div class="step"><input type="checkbox" id="c0b"><div><label for="c0b">Environment installed on your computer</label>
+    <p class="where">on your computer, same network as the robot</p>
 <pre><code>cd innate-os/lerobot && uv sync
 export MARS_HOST=mars-the-2nd.local     # the hostname you use for the web app
 uv run lerobot-record --help</code></pre>
     <p class="expect"><b>Pass:</b> help text prints. All later commands run from this folder in this shell; <code>MARS_HOST</code> is where they find the robot.</p></div></div>
   <div class="step"><input type="checkbox" id="c0c"><div><label for="c0c">Scene fixed</label>
-    <p>One task, one object, one placement area. lerobot tilts the head to -20° when it connects and holds it there for every stage, so recording and inference see the same view; the angle is saved in the dataset's <code>meta/mars.json</code>. Optional: <code>uv run hf auth login</code> if you want to push a private dataset later.</p></div></div>
+    <p>One task, one object, one placement area. lerobot tilts the head when it connects and holds it there: -20° for a new recording, saved in the dataset's <code>meta/mars.json</code>, and afterwards whatever the dataset behind the run says, so replay and inference see the view the data was recorded with. Optional: <code>uv run hf auth login</code> if you want to push a private dataset later.</p></div></div>
 
   <h2 id="s1"><span class="n">1</span>Teleop passthrough</h2>
-  <div class="step"><input type="checkbox" id="c1a"><div><label for="c1a">lerobot observes the robot while the app drives</label>
-    <p class="where">laptop</p>
+  <div class="step"><input type="checkbox" id="c1a"><div><label for="c1a">lerobot observes the robot while you teleoperate</label>
+    <p class="where">your computer</p>
 <pre><code>uv run lerobot-teleoperate --robot.type=mars \
     --robot.external_commands=true --teleop.type=mars_passthrough --display_data=true</code></pre>
-    <p>Drive the arm and base from the phone app for a minute. Ctrl+C to stop.</p>
+    <p>Drive the arm and base for a minute from the phone app or the web app's Teleop page. Ctrl+C to stop.</p>
     <p class="expect"><b>Pass:</b> the terminal reports <code>Teleop loop time: ~34ms (29 Hz)</code>; a Rerun window shows both cameras live and joint plots that follow your input; the webapp log shows <code>LeRobot client connected</code>, then <code>LeRobot client idle</code> after Ctrl+C. <b>Note:</b> how long connect took, any warnings.</p></div></div>
 
   <h2 id="s2"><span class="n">2</span>Collect a dataset</h2>
   <div class="step"><input type="checkbox" id="c2a"><div><label for="c2a">Record 30 episodes of one task</label>
-    <p class="where">laptop</p>
+    <p class="where">your computer</p>
 <pre><code>uv run lerobot-record \
     --robot.type=mars --robot.external_commands=true --teleop.type=mars_passthrough \
     --dataset.repo_id=YOUR_HF_NAME/mars-pick-cube --dataset.no_stamp=true \
@@ -116,21 +116,21 @@ uv run lerobot-record --help</code></pre>
     </tbody></table>
     <p class="expect"><b>Pass:</b> the session ends with 30 episodes saved under <code>~/.cache/huggingface/lerobot/YOUR_HF_NAME/mars-pick-cube</code>. <b>Note:</b> whether the loop reported slow ticks.</p></div></div>
   <div class="step"><input type="checkbox" id="c2b"><div><label for="c2b">Look at what was recorded</label>
-    <p class="where">laptop</p>
+    <p class="where">your computer</p>
 <pre><code>uv run lerobot-dataset-viz --repo-id YOUR_HF_NAME/mars-pick-cube --episode-index 0</code></pre>
     <p class="expect"><b>Pass:</b> both camera streams play in Rerun, in colour (not blue-tinted), with joint plots that match what you did. Gripper is <code>joint6.pos</code>.</p></div></div>
 
   <h2 id="s3"><span class="n">3</span>Replay</h2>
-  <div class="callout"><div class="t">First time lerobot moves the robot</div>Leave the teleop view in the phone app first; while it is open the app keeps publishing its own commands and wins over lerobot. Clear the arm's workspace and give the base room: recorded base motion replays too. Keep the app's stop button at hand. Ctrl+C stops the arm commands and the base halts by itself half a second later.</div>
+  <div class="callout"><div class="t">First time lerobot moves the robot</div>Leave teleop first, in the phone app and on the web app's Teleop page; while either is open it keeps publishing its own commands and wins over lerobot. Clear the arm's workspace and give the base room: recorded base motion replays too. Keep the app's stop button at hand. Ctrl+C stops the arm commands and the base halts by itself half a second later.</div>
   <div class="step"><input type="checkbox" id="c3a"><div><label for="c3a">Replay episode 0</label>
-    <p class="where">laptop</p>
+    <p class="where">your computer</p>
 <pre><code>uv run lerobot-replay --robot.type=mars \
     --dataset.repo_id=YOUR_HF_NAME/mars-pick-cube --dataset.episode=0</code></pre>
     <p class="expect"><b>Pass:</b> the arm and base repeat the recorded motion at the recorded speed. <b>Note:</b> any jerkiness or lag between command and motion compared with the app.</p></div></div>
 
   <h2 id="s4"><span class="n">4</span>Train ACT</h2>
-  <div class="step"><input type="checkbox" id="c4a"><div><label for="c4a">Train on the laptop</label>
-    <p class="where">laptop (Apple Silicon GPU), or a CUDA box with <code>--policy.device=cuda</code></p>
+  <div class="step"><input type="checkbox" id="c4a"><div><label for="c4a">Train a policy</label>
+    <p class="where">your computer: <code>--policy.device=mps</code> on Apple Silicon, <code>--policy.device=cuda</code> with an NVIDIA GPU</p>
 <pre><code>uv run lerobot-train \
     --dataset.repo_id=YOUR_HF_NAME/mars-pick-cube \
     --policy.type=act --policy.device=mps \
@@ -141,7 +141,7 @@ uv run lerobot-record --help</code></pre>
 
   <h2 id="s5"><span class="n">5</span>Inference on the robot</h2>
   <div class="step"><input type="checkbox" id="c5a"><div><label for="c5a">Run the policy</label>
-    <p class="where">laptop, same scene and head angle as in stage 2</p>
+    <p class="where">your computer, same scene as in stage 2</p>
 <pre><code>uv run lerobot-rollout --strategy.type=base \
     --policy.path=outputs/train/act_mars/checkpoints/last/pretrained_model \
     --policy.device=mps \
@@ -151,13 +151,13 @@ uv run lerobot-record --help</code></pre>
 
   <h2 id="s6"><span class="n">6</span>Optional</h2>
   <div class="step"><input type="checkbox" id="c6a"><div><label for="c6a">Convert an existing app recording</label>
-    <p class="where">laptop, with the skill folder copied over</p>
+    <p class="where">your computer, with the skill folder copied over</p>
 <pre><code>scp -r $MARS_HOST:~/innate-os/workspace/custom_skills/SKILL_NAME /tmp/skill
 uv run mars2lerobot /tmp/skill --repo-id YOUR_HF_NAME/mars-SKILL_NAME
 uv run lerobot-dataset-viz --repo-id YOUR_HF_NAME/mars-SKILL_NAME --episode-index 0</code></pre>
-    <p class="expect"><b>Pass:</b> the episode count matches the successful episodes in the app, and the video plays in colour.</p></div></div>
+    <p class="expect"><b>Pass:</b> the episode count matches the successful episodes on the Datasets page, and the video plays in colour.</p></div></div>
   <div class="step"><input type="checkbox" id="c6b"><div><label for="c6b">Push a private dataset</label>
-    <p class="where">laptop, after <code>uv run hf auth login</code></p>
+    <p class="where">your computer, after <code>uv run hf auth login</code></p>
 <pre><code>uv run python -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset as D; D('YOUR_HF_NAME/mars-pick-cube').push_to_hub(private=True)"</code></pre>
     <p class="expect"><b>Pass:</b> the dataset page on the Hub renders the viewer.</p></div></div>
 
@@ -170,7 +170,7 @@ uv run lerobot-dataset-viz --repo-id YOUR_HF_NAME/mars-SKILL_NAME --episode-inde
     <tr><td><code>torchcodec ... cannot be loaded</code></td><td>harmless on macOS, PyAV is used instead</td></tr>
   </tbody></table>
 
-  <footer>Companion to the MARS on LeRobot guide. Commands assume the <code>innate-os/lerobot</code> folder on the laptop and <code>MARS_HOST</code> exported in that shell.</footer>
+  <footer>Companion to the MARS on LeRobot guide. Commands assume the <code>innate-os/lerobot</code> folder on your computer and <code>MARS_HOST</code> exported in that shell.</footer>
 </div>
 
 <script>

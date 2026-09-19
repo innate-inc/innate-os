@@ -22,11 +22,13 @@ class MarsConfig(RobotConfig):
     # record loop paces itself at fps; waiting here on top of that halves the rate over Wi-Fi.
     poll_timeout_ms: int = 5
     # Head tilt the client sets at connect and holds for the session, so every frame of a dataset
-    # sees the scene from the same angle; recorded in the dataset's meta/mars.json. -20 is the
-    # robot's own "AI position". None leaves the head wherever it is.
-    head_angle_deg: float | None = -20.0
+    # sees the scene from the same angle; recorded in the dataset's meta/mars.json. None picks it
+    # from the dataset behind the run (the one resumed or replayed, or the policy's training set)
+    # and falls back to -20, the robot's own "AI position". hold_head=false leaves the head alone.
+    head_angle_deg: float | None = None
+    hold_head: bool = True
     head_tolerance_deg: float = 3.0
     head_reassert_s: float = 3.0
-    # True while the Innate app or leader arm drives the robot: send_action() is recorded but
+    # True while the phone app, the web app's teleop, or the leader arm drives the robot: send_action() is recorded but
     # not forwarded, so the client never echoes a stale command behind the operator.
     external_commands: bool = False

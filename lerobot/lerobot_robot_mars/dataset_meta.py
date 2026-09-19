@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import HfHubHTTPError
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 SIDECAR = Path("meta") / "mars.json"
@@ -75,6 +77,63 @@ def recording_root(argv: Sequence[str], now: float | None = None) -> Path | None
         and now - info.stat().st_mtime <= RECENT_S
     ]
     return max(fresh, key=lambda d: (d / "meta" / "info.json").stat().st_mtime, default=None)
+
+
+def head_angle_for_run(argv: Sequence[str]) -> tuple[float, str] | None:
+    """The head tilt of the dataset behind this run, with where it was found; None if unknown.
+
+    A run relates to a dataset in one of two ways: it names one (resuming a recording, replaying an
+    episode), or it runs a policy, whose checkpoint records the dataset it was trained on. Either
+    way that dataset's ``meta/mars.json`` says how the head was tilted when the frames were taken,
+    which is how it must be tilted now.
+    """
+    for repo_id, root in (_named_dataset(argv), _policy_dataset(argv)):
+        sidecar = _sidecar(repo_id, root)
+        angle = sidecar.get("head_angle_deg") if sidecar else None
+        if isinstance(angle, int | float):
+            return float(angle), repo_id or str(root)
+    return None
+
+
+def _named_dataset(argv: Sequence[str]) -> tuple[str | None, Path | None]:
+    root = _flag(argv, "--dataset.root")
+    return _flag(argv, "--dataset.repo_id"), Path(root).expanduser() if root else None
+
+
+def _policy_dataset(argv: Sequence[str]) -> tuple[str | None, Path | None]:
+    policy = _flag(argv, "--policy.path")
+    if not policy:
+        return None, None
+    local = Path(policy).expanduser() / "train_config.json"
+    config_path = local if local.is_file() else _from_hub(policy, "train_config.json", "model")
+    if config_path is None:
+        return None, None
+    try:
+        dataset = json.loads(config_path.read_text()).get("dataset", {})
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    root = dataset.get("root")
+    return dataset.get("repo_id"), Path(root).expanduser() if root else None
+
+
+def _sidecar(repo_id: str | None, root: Path | None) -> dict | None:
+    for local in (root, HF_LEROBOT_HOME / repo_id if repo_id else None):
+        if local is not None and (found := read_sidecar(local)) is not None:
+            return found
+    if not repo_id:
+        return None
+    path = _from_hub(repo_id, str(SIDECAR), "dataset")
+    try:
+        return json.loads(path.read_text()) if path else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _from_hub(repo_id: str, filename: str, repo_type: str) -> Path | None:
+    try:
+        return Path(hf_hub_download(repo_id, filename, repo_type=repo_type))
+    except (HfHubHTTPError, OSError, ValueError):  # not on the Hub, no such file, offline, or not a repo id
+        return None
 
 
 def _flag(argv: Sequence[str], name: str) -> str | None:

@@ -14,7 +14,13 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 from lerobot.utils.errors import DeviceNotConnectedError
 
 from .config_mars import MarsConfig
-from .dataset_meta import read_sidecar, recording_root, write_sidecar
+from .dataset_meta import (
+    DEFAULT_HEAD_ANGLE_DEG,
+    head_angle_for_run,
+    read_sidecar,
+    recording_root,
+    write_sidecar,
+)
 from .schema import (
     ACTION_NAMES,
     BASE_NAMES,
@@ -48,6 +54,7 @@ class Mars(Robot):
         self._state: dict[str, float] = {}
         self._frames: dict[str, np.ndarray] = {}
         self._head_deg: float | None = None
+        self._head_target: float | None = None
         self._last_head_command = 0.0
 
     @cached_property
@@ -85,6 +92,7 @@ class Mars(Robot):
                 "MARS bridge is not sending %s frames yet; recording blank frames until it does",
                 self._missing_cameras(),
             )
+        self._head_target = self._resolve_head_target()
         self._set_head()
         self._note_head_in_dataset()
 
@@ -120,14 +128,26 @@ class Mars(Robot):
             self._link.send(payload)
         return {name: payload[name] for name in ACTION_NAMES}
 
+    def _resolve_head_target(self) -> float | None:
+        if not self.config.hold_head:
+            return None
+        if self.config.head_angle_deg is not None:
+            return self.config.head_angle_deg
+        found = head_angle_for_run(sys.argv)
+        if found is None:
+            return DEFAULT_HEAD_ANGLE_DEG
+        angle, source = found
+        logger.info("MARS head: %.0f deg, as recorded in %s", angle, source)
+        return angle
+
     def _set_head(self) -> None:
-        if self.config.head_angle_deg is None:
+        if self._head_target is None:
             return
-        self._link.set_head(self.config.head_angle_deg)
+        self._link.set_head(self._head_target)
         self._last_head_command = time.monotonic()
 
     def _hold_head(self) -> None:
-        target = self.config.head_angle_deg
+        target = self._head_target
         if target is None or self._head_deg is None:
             return
         if abs(self._head_deg - target) <= self.config.head_tolerance_deg:
@@ -141,18 +161,17 @@ class Mars(Robot):
 
     def _note_head_in_dataset(self) -> None:
         root = recording_root(sys.argv)
-        if root is None:
+        if root is None or self._head_target is None:
             return
         existing = read_sidecar(root)
         if existing is None:
-            write_sidecar(root, head_angle_deg=self.config.head_angle_deg, source="lerobot")
-            return
-        if existing.get("head_angle_deg") != self.config.head_angle_deg:
+            write_sidecar(root, head_angle_deg=self._head_target, source="lerobot")
+        elif existing.get("head_angle_deg") != self._head_target:
             logger.warning(
-                "%s was recorded with the head at %s deg; this session uses %s deg",
+                "%s was recorded with the head at %s deg; this session holds %s deg",
                 root,
                 existing.get("head_angle_deg"),
-                self.config.head_angle_deg,
+                self._head_target,
             )
 
     def _absorb(self, message: Message) -> None:

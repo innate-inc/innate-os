@@ -12,7 +12,7 @@ from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host
 @TeleoperatorConfig.register_subclass("mars_passthrough")
 @dataclass
 class MarsPassthroughTeleopConfig(TeleoperatorConfig):
-    """Reads back what the Innate app, leader arm, or a skill last commanded on the robot.
+    """Reads back what the phone app, the web app's teleop, the leader arm, or a skill last commanded.
 
     Pair it with ``--robot.external_commands=true`` so the recorded action is the operator's
     command and the lerobot client never re-sends it.
