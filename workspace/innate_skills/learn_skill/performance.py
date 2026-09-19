@@ -66,6 +66,7 @@ class LearningMode:
         self._skill = skill
         self._drafted = 0
         self._drafting = threading.Event()
+        self._beeping = threading.Lock()  # held while a beep plays: drafting() ends only once it has
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="learning-mode", daemon=True)
 
@@ -87,6 +88,8 @@ class LearningMode:
             yield self._advance
         finally:
             self._drafting.clear()
+            with self._beeping:
+                pass  # a beep queued at the last moment would otherwise play into the trial
 
     def _advance(self, chars: int) -> None:
         self._drafted += chars
@@ -112,7 +115,9 @@ class LearningMode:
                 next_beep = time.monotonic() + random.uniform(*BEEP_GAP_S)
                 continue
             if time.monotonic() >= next_beep:
-                self._skill.play_clip(_synth([(self._rung(), 1.0)]))
+                with self._beeping:
+                    if self._drafting.is_set():
+                        self._skill.play_clip(_synth([(self._rung(), 1.0)]), wait=True)
                 next_beep = time.monotonic() + random.uniform(*BEEP_GAP_S)
             self._stop.wait(0.2)
 
