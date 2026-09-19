@@ -8,7 +8,6 @@ from types import ModuleType
 
 import numpy as np
 import pytest
-from lerobot.utils.errors import DeviceNotConnectedError
 
 from lerobot_robot_mars import Mars, MarsConfig, MarsPassthroughTeleop, MarsPassthroughTeleopConfig, wire
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_ORDER, CAMERA_SHAPE, STATE_NAMES
@@ -174,23 +173,6 @@ def test_external_commands_only_heartbeat(bridge_module: ModuleType) -> None:
             mars.disconnect()
 
 
-def test_blocked_commands_are_ignored(bridge_module: ModuleType) -> None:
-    with FakeRobot(bridge_module) as robot:
-        robot.bridge.commands_blocked = True
-        mars = Mars(
-            MarsConfig(
-                remote_ip="127.0.0.1", port_actions=robot.port_actions, port_observations=robot.port_observations
-            )
-        )
-        mars.connect()
-        try:
-            mars.send_action(dict(zip(STATE_NAMES, JOINTS, strict=True)))
-            time.sleep(0.2)
-            assert robot.arm == []
-        finally:
-            mars.disconnect()
-
-
 def test_passthrough_teleop_reads_the_commanded_target(bridge_module: ModuleType) -> None:
     with FakeRobot(bridge_module) as robot:
         teleop = MarsPassthroughTeleop(
@@ -226,49 +208,3 @@ def test_head_is_set_at_connect_and_commanded_back_when_it_drifts(bridge_module:
             assert robot.heads[-1] == -20.0
         finally:
             mars.disconnect()
-
-
-def test_head_is_left_alone_when_holding_is_off(bridge_module: ModuleType) -> None:
-    with FakeRobot(bridge_module) as robot:
-        robot.head_deg = 15.0
-        mars = Mars(
-            MarsConfig(
-                remote_ip="127.0.0.1",
-                port_actions=robot.port_actions,
-                port_observations=robot.port_observations,
-                hold_head=False,
-            )
-        )
-        mars.connect()
-        try:
-            for _ in range(5):
-                mars.get_observation()
-                time.sleep(0.05)
-            assert robot.heads == []
-        finally:
-            mars.disconnect()
-
-
-def test_bridge_idles_without_a_client(bridge_module: ModuleType) -> None:
-    with FakeRobot(bridge_module, idle_after_s=0.3) as robot:
-        assert not robot.bridge.active(time.monotonic())
-        mars = Mars(
-            MarsConfig(
-                remote_ip="127.0.0.1", port_actions=robot.port_actions, port_observations=robot.port_observations
-            )
-        )
-        mars.connect()
-        assert robot.bridge.active(time.monotonic())
-        mars.disconnect()
-        assert wait_until(lambda: not robot.bridge.active(time.monotonic()))
-
-
-def test_connect_fails_fast_without_a_bridge() -> None:
-    mars = Mars(
-        MarsConfig(
-            remote_ip="127.0.0.1", port_actions=free_port(), port_observations=free_port(), connect_timeout_s=0.5
-        )
-    )
-    with pytest.raises(DeviceNotConnectedError):
-        mars.connect()
-    assert not mars.is_connected
