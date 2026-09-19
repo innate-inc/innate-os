@@ -108,6 +108,15 @@ def test_action_is_applied_and_the_watchdog_stops_the_base_once() -> None:
         assert h.stops == 1
 
 
+def test_gripper_target_is_held_to_the_safe_range() -> None:
+    with Harness() as h:
+        h.send(dict(zip(JOINT_KEYS, [*JOINTS[:5], -2.0], strict=True)))
+        h.bridge.poll(now=1.0)
+        h.send(dict(zip(JOINT_KEYS, [*JOINTS[:5], 1.5], strict=True)))
+        h.bridge.poll(now=1.1)
+        assert [arm[5] for arm in h.arm] == [-0.6, 0.85]  # below -0.6 the servo overcurrent-trips on a held object
+
+
 def test_malformed_actions_are_ignored() -> None:
     with Harness() as h:
         h.send({"joint1.pos": 0.1})

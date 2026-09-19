@@ -43,6 +43,9 @@ COMMAND_PREFIX = "cmd."
 JOINTS: tuple[str, ...] = ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
 JOINT_KEYS: tuple[str, ...] = tuple(f"{joint}.pos" for joint in JOINTS)
 BASE_KEYS: tuple[str, ...] = ("x.vel", "theta.vel")
+# joint6 is the gripper: 0 closed, 0.85 open, and a target below -0.6 overcurrent-trips the servo on
+# a held object. Mirrors Manipulation.GRIPPER_OPEN / GRIPPER_MAX_STRENGTH in brain_client.
+GRIPPER_RANGE = (-0.6, 0.85)
 CAMERAS: tuple[str, ...] = ("head", "wrist")
 
 ArmCallback = Callable[[Sequence[float]], None]
@@ -193,6 +196,7 @@ class LeRobotBridge:
             return
         self._last_action = now
         self._base_stopped = False
+        joints[5] = min(max(joints[5], GRIPPER_RANGE[0]), GRIPPER_RANGE[1])
         self._on_arm(joints)
         self._on_base(base[0], base[1])
 

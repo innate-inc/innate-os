@@ -384,6 +384,7 @@ picks the angle and holds the head there:
 
 - Commands are ignored while an Innate skill or policy is executing on the robot.
 - The base stops if a commanding client goes silent for half a second.
+- Gripper targets are held to the safe range: a policy cannot squeeze hard enough to trip the servo.
 - Speed and joint limits are enforced by the robot's own drivers, as for every other command source.
 - The bridge has no login, like the rest of the robot's local network interfaces. Settings live
   under `lerobot_bridge:` in `manipulation_server.yaml`: `bind_address: "127.0.0.1"` keeps it to
