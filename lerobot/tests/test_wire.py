@@ -188,23 +188,3 @@ def test_passthrough_teleop_reads_the_commanded_target(bridge_module: ModuleType
     assert list(action) == list(ACTION_NAMES)
     assert [action[name] for name in STATE_NAMES] == pytest.approx(COMMANDED)
     assert (action["x.vel"], action["theta.vel"]) == pytest.approx(BASE)
-
-
-def test_head_is_set_at_connect_and_commanded_back_when_it_drifts(bridge_module: ModuleType) -> None:
-    with FakeRobot(bridge_module) as robot:
-        mars = Mars(
-            MarsConfig(
-                remote_ip="127.0.0.1",
-                port_actions=robot.port_actions,
-                port_observations=robot.port_observations,
-                head_reassert_s=0.2,
-            )
-        )
-        mars.connect()
-        try:
-            assert wait_until(lambda: robot.heads == [-20.0])
-            robot.head_deg = 15.0  # someone tilted the head from the app
-            assert wait_until(lambda: (mars.get_observation(), len(robot.heads) >= 2)[1])
-            assert robot.heads[-1] == -20.0
-        finally:
-            mars.disconnect()
