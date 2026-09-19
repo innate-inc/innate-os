@@ -40,6 +40,8 @@ from config import (
     LEGACY_CLOUD_AGENT_CONTAINER,
     LEGACY_SHARED_CONTAINER,
     LEGACY_SHARED_PROJECT,
+    LEROBOT_ACTIONS_PORT,
+    LEROBOT_OBSERVATIONS_PORT,
     NO_BACKEND,
     OS_BUILD_LOG_PATH,
     OS_CONTAINER_NAME,
@@ -830,6 +832,8 @@ _STACK_PORTS = (
     ("foxglove bridge", SIM_FOXGLOVE_PORT, "8765/tcp"),
     ("world server", WORLD_SERVER_PORT, None),
     ("world state stream", WORLD_STATE_PORT, None),
+    ("lerobot bridge actions", LEROBOT_ACTIONS_PORT, "5555/tcp"),
+    ("lerobot bridge observations", LEROBOT_OBSERVATIONS_PORT, "5556/tcp"),
 )
 
 
@@ -1349,7 +1353,7 @@ def refuse_if_ports_taken() -> None:
     move = (
         f"move this checkout to a block that is free:\n  {PORT_BASE_ENV}={suggestion} {CLI_SIM} up"
         if suggestion is not None
-        else f"set {PORT_BASE_ENV} to the start of seven free ports"
+        else f"set {PORT_BASE_ENV} to the start of nine free ports"
     )
     other = _other_checkout_holding({port for _, port in taken})
     if other is None:

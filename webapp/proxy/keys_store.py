@@ -21,7 +21,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-KEYS = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "LLM_API_KEY")
+KEYS = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "LLM_API_KEY", "HF_TOKEN")
 SECRETS = frozenset(KEYS) - {"ANTHROPIC_WORKSPACE_ID"}
 SERVICE_KEY = "INNATE_SERVICE_KEY"
 SYSTEM_ENV_PATH = Path("/etc/innate.env")  # the provisioned service key lives here, read-only to this page
@@ -62,6 +62,15 @@ def read_status() -> dict:
         source = "environment" if value and not filed.get(name) else "file"  # a value only the environment holds
         keys[name] = {"set": bool(value), "hint": _hint(value) if name in SECRETS else value, "source": source}
     return {"keys": keys, "service_key": bool(values.get(SERVICE_KEY))}
+
+
+def value(name: str) -> str:
+    """A managed key's value, layered as read_status layers it. For this server's own use
+    (the Hugging Face upload); no route returns it."""
+    if name not in KEYS:
+        return ""
+    filed = {**_values(SYSTEM_ENV_PATH), **_values(env_path())}
+    return filed.get(name) or os.environ.get(name, "")
 
 
 def _from_environment_only(name: str) -> bool:

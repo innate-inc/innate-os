@@ -82,6 +82,9 @@ SIM_UDP_PORT = _resolve_port("SIM_UDP_PORT", 3, 9999)
 SIM_FOXGLOVE_PORT = _resolve_port("SIM_FOXGLOVE_PORT", 4, 8765)
 WORLD_SERVER_PORT = _resolve_port("SIM_WORLD_PORT", 5, 8799)
 WORLD_STATE_PORT = _resolve_port("SIM_WORLD_STATE_PORT", 6, 8800)
+# LeRobot bridge inside manipulation_server (lerobot/README.md): actions in, observations out.
+LEROBOT_ACTIONS_PORT = _resolve_port("SIM_LEROBOT_ACTIONS_PORT", 7, 5555)
+LEROBOT_OBSERVATIONS_PORT = _resolve_port("SIM_LEROBOT_OBSERVATIONS_PORT", 8, 5556)
 # Injected into compose's environment, so a base-only override reaches the
 # compose file without it knowing the base exists.
 PUBLISHED_PORT_ENV = {
@@ -90,6 +93,8 @@ PUBLISHED_PORT_ENV = {
     "SIM_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
+    "SIM_LEROBOT_ACTIONS_PORT": str(LEROBOT_ACTIONS_PORT),
+    "SIM_LEROBOT_OBSERVATIONS_PORT": str(LEROBOT_OBSERVATIONS_PORT),
 }
 # How brain_client reaches its model: through the Innate proxy with a service key,
 # straight at the vendor with its key, an LLM_BASE_URL server, or not at all.

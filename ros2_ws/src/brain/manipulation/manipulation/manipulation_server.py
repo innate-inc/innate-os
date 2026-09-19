@@ -38,6 +38,12 @@ from manipulation.act_config import (  # noqa: E402
 # Pure (ROS-free) auto-stop logic, kept in its own module.
 from manipulation.auto_stop import LearnedStopDetector, StepSignals  # noqa: E402
 
+try:
+    from manipulation.lerobot_bridge import LeRobotBridge  # noqa: E402
+except ImportError as e:  # pyzmq missing, or an install predating the module: the bridge is unavailable
+    LeRobotBridge = None
+    LEROBOT_BRIDGE_IMPORT_ERROR = e
+
 # NOTE: manipulation.act_trt is imported lazily inside _load_policy_for_behavior, not here.
 # It imports `tensorrt` at module load, which is only installed on hardware units. Importing
 # it at module top would crash the whole behavior server (respawn loop) on a sim/dev box and
@@ -135,7 +141,7 @@ class ManipulationServer(Node):
         self.latest_image2_timestamp = None
         self.latest_joint_timestamp = None
 
-        # Sensor subscriptions are created once on the first behavior and then kept for
+        # Sensor subscriptions are created once on the first behavior or LeRobot client and then kept for
         # the node's lifetime. They are deliberately NEVER destroyed: under the
         # MultiThreadedExecutor, destroying a subscription that the executor has already
         # selected as "ready" races _take_subscription and crashes the process
@@ -170,6 +176,14 @@ class ManipulationServer(Node):
             execute_callback=self.execute_behavior_callback,
             cancel_callback=self.cancel_behavior_callback,
         )
+
+        # LeRobot bridge (lerobot_bridge.* params): a lerobot process on another computer or on this Jetson
+        # observes and drives the robot over ZMQ. Idle until a client heartbeats.
+        self._bridge_active = False
+        self._last_arm_command: list[float] | None = None
+        self._last_cmd_vel: tuple[float, float] = (0.0, 0.0)
+        self._head_deg: float | None = None
+        self.lerobot_bridge = self._start_lerobot_bridge()
 
         self.get_logger().info("Behavior server ready - pure execution engine using absolute skill directories")
 
@@ -839,7 +853,7 @@ class ManipulationServer(Node):
         self.latest_joint_timestamp = None
 
     def image1_callback(self, msg: Image):
-        if not self.execution_running:
+        if not (self.execution_running or self._bridge_active):
             return
         try:
             self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -848,7 +862,7 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
-        if not self.execution_running:
+        if not (self.execution_running or self._bridge_active):
             return
         try:
             self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -857,10 +871,106 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error converting image2: {e}")
 
     def joint_state_callback(self, msg: JointState):
-        if not self.execution_running:
+        if not (self.execution_running or self._bridge_active):
             return
         self.latest_joint_state = msg
         self.latest_joint_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
+
+    def _start_lerobot_bridge(self) -> "LeRobotBridge | None":
+        self.declare_parameter("lerobot_bridge.enabled", True)
+        self.declare_parameter("lerobot_bridge.port_actions", 5555)
+        self.declare_parameter("lerobot_bridge.port_observations", 5556)
+        self.declare_parameter("lerobot_bridge.rate_hz", 30.0)
+        self.declare_parameter("lerobot_bridge.jpeg_quality", 90)
+        self.declare_parameter("lerobot_bridge.bind_address", "*")
+        if not self.get_parameter("lerobot_bridge.enabled").value:
+            return None
+        if LeRobotBridge is None:
+            self.get_logger().warn(f"LeRobot bridge disabled: {LEROBOT_BRIDGE_IMPORT_ERROR}")
+            return None
+        port_actions = int(self.get_parameter("lerobot_bridge.port_actions").value)
+        port_observations = int(self.get_parameter("lerobot_bridge.port_observations").value)
+        rate_hz = float(self.get_parameter("lerobot_bridge.rate_hz").value)
+        bridge = LeRobotBridge(
+            self._bridge_arm,
+            self._bridge_base,
+            self._stop_robot,
+            port_actions=port_actions,
+            port_observations=port_observations,
+            jpeg_quality=int(self.get_parameter("lerobot_bridge.jpeg_quality").value),
+            bind_address=str(self.get_parameter("lerobot_bridge.bind_address").value),
+            on_head=self._bridge_head,
+            log=lambda message: self.get_logger().warn(message, throttle_duration_sec=2.0),
+        )
+        bridge.bind()
+        cmd_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
+        self._arm_command_sub = self.create_subscription(
+            Float64MultiArray, "/mars/arm/commands", self._arm_command_callback, cmd_qos
+        )
+        self._cmd_vel_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 1)
+        self._head_sub = self.create_subscription(String, "/mars/head/current_position", self._head_callback, 1)
+        self.create_timer(1.0 / max(rate_hz, 1.0), self._lerobot_bridge_tick)
+        self.get_logger().info(
+            f"LeRobot bridge listening on :{port_actions} (actions) and :{port_observations} (observations)"
+        )
+        return bridge
+
+    def close_lerobot_bridge(self) -> None:
+        if self.lerobot_bridge is not None:
+            self.lerobot_bridge.close()
+
+    def _bridge_arm(self, joints: list[float]) -> None:
+        # Remembered here as well as via the /mars/arm/commands subscription: the echo of our own
+        # publication is not guaranteed to come back through the middleware.
+        self._last_arm_command = list(joints)
+        self._publish_arm(joints)
+
+    def _bridge_base(self, vx: float, wz: float) -> None:
+        self._last_cmd_vel = (vx, wz)
+        self._publish_base(vx, wz, 1.0)
+
+    def _bridge_head(self, deg: float) -> None:
+        self.head_set_position_pub.publish(Int32(data=int(round(deg))))
+
+    def _head_callback(self, msg: String) -> None:
+        try:
+            self._head_deg = float(json.loads(msg.data)["current_position"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return
+
+    def _arm_command_callback(self, msg: Float64MultiArray) -> None:
+        if len(msg.data) >= 6:
+            self._last_arm_command = [float(v) for v in msg.data[:6]]
+
+    def _cmd_vel_callback(self, msg: Twist) -> None:
+        self._last_cmd_vel = (float(msg.linear.x), float(msg.angular.z))
+
+    def _lerobot_bridge_tick(self) -> None:
+        bridge = self.lerobot_bridge
+        if bridge is None:
+            return
+        now = time.monotonic()
+        bridge.commands_blocked = self.execution_running
+        bridge.poll(now)
+        active = bridge.active(now)
+        if active != self._bridge_active:
+            self.get_logger().info("LeRobot client connected" if active else "LeRobot client idle")
+        if active:
+            self._start_sensor_subscriptions()
+        self._bridge_active = active
+        joint_state = self.latest_joint_state
+        if not self._bridge_active or joint_state is None or len(joint_state.position) < 6:
+            return
+        joints = [float(v) for v in joint_state.position[:6]]
+        bridge.publish(
+            now,
+            joints=joints,
+            commanded=self._last_arm_command or joints,
+            base=self._last_cmd_vel,
+            images={"head": self.latest_image1, "wrist": self.latest_image2},
+            busy=self.execution_running,
+            head_deg=self._head_deg,
+        )
 
     def _resize_matrices(self, h, w):
         """Cached (row, col) GPU matrices replicating cv2.INTER_AREA for an (h, w) ->
@@ -1200,6 +1310,7 @@ def main(args=None):
         node.get_logger().info("Behavior server shutting down.")
     finally:
         executor.shutdown()
+        node.close_lerobot_bridge()
         node.destroy_node()
         rclpy.shutdown()
 

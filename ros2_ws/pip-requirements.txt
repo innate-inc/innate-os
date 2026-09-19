@@ -74,3 +74,4 @@ ros-mcp
 
 # Benchmarking / profiling (recorder_benchmark.py)
 psutil
+pyzmq  # LeRobot bridge in manipulation_server
