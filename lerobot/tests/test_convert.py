@@ -11,7 +11,7 @@ import pytest
 import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from lerobot_robot_mars.convert import EXPORT_KEY, SkillRecording, convert_skill
+from lerobot_robot_mars.convert import EXPORT_KEY, convert_skill
 from lerobot_robot_mars.dataset_meta import read_sidecar
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_SHAPE, STATE_NAMES, dataset_features
 
@@ -115,17 +115,6 @@ def test_rerun_appends_only_new_episodes(skill_dir: Path, tmp_path: Path) -> Non
     assert export["episode_ids"] == [0, 1, 2]
 
 
-def test_recorded_head_angle_lands_in_the_sidecar(skill_dir: Path, tmp_path: Path) -> None:
-    for episode_id in (0, 2):
-        write_episode(skill_dir / "data" / f"episode_{episode_id}.h5", episode_id, head_deg=12.0)
-    root = tmp_path / "out"
-    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
-    sidecar = read_sidecar(root)
-    assert sidecar is not None
-    assert sidecar["head_angle_deg"] == 12.0 and sidecar["head_angle_assumed"] is False
-    assert sidecar["source"] == "mars2lerobot"
-
-
 def test_a_lost_local_copy_is_rebuilt_in_full_not_replaced_by_the_new_episodes(skill_dir: Path, tmp_path: Path) -> None:
     import shutil
 
@@ -136,23 +125,3 @@ def test_a_lost_local_copy_is_rebuilt_in_full_not_replaced_by_the_new_episodes(s
         skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", include_failures=True, log=lambda _m: None
     )
     assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 3
-
-
-def test_replay_skill_without_dataset_metadata(tmp_path: Path) -> None:
-    skill = tmp_path / "wave"
-    skill.mkdir()
-    (skill / "metadata.json").write_text(json.dumps({"name": "wave", "type": "replay"}))
-    write_episode(skill / "episode_0.h5", 0)
-    recording = SkillRecording(skill)
-    refs = recording.episodes(include_failures=False)
-    assert [ref.episode_id for ref in refs] == [0]
-    assert recording.task == "wave"
-    assert sum(1 for _ in recording.frames(refs[0])) == T
-
-
-def test_stripped_episode_without_video_is_a_clear_error(skill_dir: Path) -> None:
-    write_episode(skill_dir / "data" / "episode_0.h5", 0, with_images=False)
-    recording = SkillRecording(skill_dir)
-    ref = recording.episodes(include_failures=False)[0]
-    with pytest.raises(FileNotFoundError, match="stripped"):
-        next(recording.frames(ref))

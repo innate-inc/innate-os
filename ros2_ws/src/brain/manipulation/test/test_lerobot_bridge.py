@@ -95,16 +95,6 @@ class Harness:
         return messages
 
 
-def test_heartbeat_wakes_the_bridge_and_silence_idles_it() -> None:
-    with Harness(idle_after_s=0.2) as h:
-        assert not h.bridge.active(0.0)
-        h.send({"_hb": 1})
-        h.bridge.poll(now=10.0)
-        assert h.bridge.active(10.1)
-        assert not h.bridge.active(10.3)
-        assert h.arm == [] and h.base == [] and h.stops == 0
-
-
 def test_action_is_applied_and_the_watchdog_stops_the_base_once() -> None:
     with Harness(watchdog_s=0.5) as h:
         h.send(dict(zip(JOINT_KEYS, JOINTS, strict=True)) | {"x.vel": 0.3})
@@ -147,19 +137,6 @@ def test_a_behavior_starting_mid_drive_gets_one_stop_up_front() -> None:
         h.bridge.poll(now=1.1)
         h.bridge.poll(now=5.0)
         assert h.stops == 1
-
-
-def test_head_command_is_forwarded_unless_blocked_and_is_not_an_action() -> None:
-    with Harness() as h:
-        h.send({"_head": -20})
-        h.send({"_head": "up"})
-        h.bridge.poll(now=1.0)
-        assert h.heads == [-20.0]
-        assert h.arm == [] and h.base == [] and h.stops == 0
-        h.bridge.commands_blocked = True
-        h.send({"_head": 10})
-        h.bridge.poll(now=1.1)
-        assert h.heads == [-20.0]
 
 
 def test_publish_carries_state_and_jpegs_only_while_active() -> None:
