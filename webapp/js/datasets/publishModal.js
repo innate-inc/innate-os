@@ -121,7 +121,7 @@ export function openPublishModal(host, skill) {
     link.href = "/settings";
     link.addEventListener("click", close);
     body.replaceChildren(
-      el("p", "modal-hint", "Publishing needs a Hugging Face access token with write permission. Create one at huggingface.co/settings/tokens and save it under Settings, in the keys section."),
+      el("p", "modal-hint", "Publishing needs a Hugging Face access token with write permission. Create one at huggingface.co/settings/tokens and save it under Settings, Keys."),
       link,
     );
   }

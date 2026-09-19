@@ -114,11 +114,11 @@ you need a reproducible run. `uv sync` puts the environment back on the released
 
 ## Publish from the web app
 
-On the robot's Datasets page, a training dataset has a **Publish** button. It converts the
+On the robot's Datasets page, a training dataset has a **Publish to Hugging Face** button. It converts the
 skill's episodes to a LeRobotDataset on the robot and uploads them to the Hugging Face Hub:
 
-1. Save a Hugging Face token with write permission under Settings, in the keys section.
-2. Press Publish on the dataset. The first time, the dialog offers to install the LeRobot
+1. Save a Hugging Face token with write permission under Settings, Keys.
+2. Press Publish to Hugging Face on the dataset. The first time, the dialog offers to install the LeRobot
    environment on the robot, a one-time download of about 1.5 GB into `lerobot/.venv`
    (`uv sync --no-default-groups`, the lean set without training or viewer packages).
 3. Pick the account or organization, a repository name, and whether it is private.

@@ -65,7 +65,7 @@
  * @property {string} title  Section h2.
  * @property {string} [note]  Text above the section card.
  * @property {Knob[]} knobs
- * @property {boolean} [keys]  Render the API-keys control (backed by /keys.json, no knobs) in place of a knob card.
+ * @property {boolean | string[]} [keys]  Render the API-keys control (backed by /keys.json, no knobs) in place of a knob card: `true` for the model vendors' keys, or the env names of the keys this section holds.
  */
 
 /**
@@ -150,12 +150,6 @@ export const SETTINGS_PAGES = [
         ],
       },
       {
-        title: "Keys",
-        note: "Each vendor's API key — and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills — written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters. A saved key is used by the next model switch or skill call, no restart needed. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it.",
-        keys: true,
-        knobs: [],
-      },
-      {
         title: "Hearing",
         note: "Which service turns the microphone into text. The backend picks which model knob applies.",
         knobs: [
@@ -212,6 +206,26 @@ export const SETTINGS_PAGES = [
         knobs: [
           { path: ["brain_client_node", P, "log_everything"], label: "Verbose logging", default: true, type: "bool", doc: "Log every turn's full input" },
         ],
+      },
+    ],
+  },
+  {
+    icon: "key.svg",
+    title: "Keys",
+    summary: "API keys for the models, and the Hugging Face token",
+    note: "Secrets the robot uses to reach outside services. Each is written to the robot's .env — never to settings.yaml, whose values every node and this page can read — and never shown again beyond its last characters.",
+    sections: [
+      {
+        title: "Model providers",
+        note: "Each vendor's API key, and, for an Anthropic key made for the organization rather than inside a workspace, the workspace it bills. A saved key is used by the next model switch or skill call, no restart needed. With an Innate service key, Gemini and OpenAI models need no key of their own; Claude does, until the Innate proxy serves it. The model itself is picked under Agent.",
+        keys: true,
+        knobs: [],
+      },
+      {
+        title: "Hugging Face",
+        note: "The token the Datasets page uses to publish a dataset to the Hugging Face Hub. Create one with write permission at huggingface.co/settings/tokens; to publish into an organization, the token's account must be a member that can write there.",
+        keys: ["HF_TOKEN"],
+        knobs: [],
       },
     ],
   },
