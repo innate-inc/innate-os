@@ -146,3 +146,4 @@ config/sounds/motor_voices/*.wav
 
 # LeRobot plugin (own uv environment)
 lerobot/.venv/
+lerobot/outputs/

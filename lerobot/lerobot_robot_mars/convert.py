@@ -24,6 +24,7 @@ from pathlib import Path
 import cv2
 import h5py
 import numpy as np
+from huggingface_hub.errors import HfHubHTTPError
 from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
@@ -39,6 +40,7 @@ RECORDER_CAMERAS: tuple[str, ...] = ("camera_1", "camera_2")
 Frame = dict[str, np.ndarray]
 ImageSource = Callable[[int], dict[str, np.ndarray]]
 Log = Callable[[str], None]
+Progress = Callable[[dict], None]
 
 
 @dataclass(frozen=True)
@@ -99,8 +101,20 @@ class SkillRecording:
             export = meta.get(EXPORT_KEY, {})
             ids = set(export.get("episode_ids", [])) if export.get("repo_id") == repo_id else set()
             ids.add(episode_id)
-            meta[EXPORT_KEY] = {"repo_id": repo_id, "root": str(root), "episode_ids": sorted(ids)}
+            meta[EXPORT_KEY] = {"repo_id": repo_id, "root": str(root), "episode_ids": sorted(ids), "pushed": False}
             _write_json_atomic(self.meta_path, meta)
+        self.dataset_meta = meta
+
+    def mark_pushed(self, repo_id: str) -> None:
+        if not self.meta_path.is_file():
+            return
+        with _locked(self.meta_path):
+            meta = _read_json(self.meta_path)
+            export = meta.get(EXPORT_KEY, {})
+            if export.get("repo_id") == repo_id:
+                export["pushed"] = True
+                meta[EXPORT_KEY] = export
+                _write_json_atomic(self.meta_path, meta)
         self.dataset_meta = meta
 
     def episode_path(self, ref: EpisodeRef) -> Path:
@@ -291,6 +305,7 @@ def convert_skill(
     private: bool = False,
     image_writer_threads: int = 8,
     log: Log = print,
+    progress: Progress = lambda _event: None,
 ) -> Path:
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
@@ -304,12 +319,18 @@ def convert_skill(
     if not todo:
         log(f"{recording.name}: nothing new to export to {repo_id}")
         if push and (out / "meta" / "info.json").is_file():
+            progress({"event": "push"})
             LeRobotDataset(repo_id, root=out).push_to_hub(private=private)
+            recording.mark_pushed(repo_id)
+            progress({"event": "done", "url": _hub_url(repo_id), "message": "Already converted; uploaded again"})
+        else:
+            progress({"event": "done", "url": "", "message": "Nothing new to publish"})
         return out
 
     dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
     head_angles: list[float] = []
-    for ref in todo:
+    progress({"event": "start", "total": len(todo)})
+    for done, ref in enumerate(todo, start=1):
         angle = recording.head_angle(ref)
         if angle is not None:
             head_angles.append(angle)
@@ -320,6 +341,7 @@ def convert_skill(
         dataset.save_episode()
         recording.mark_exported(repo_id, out, ref.episode_id)
         log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
+        progress({"event": "episode", "index": done, "total": len(todo), "frames": count})
     dataset.finalize()
     if read_sidecar(out) is None:
         write_sidecar(
@@ -330,9 +352,21 @@ def convert_skill(
         )
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
+        progress({"event": "push"})
         dataset.push_to_hub(private=private)
-        log(f"pushed to https://huggingface.co/datasets/{repo_id}")
+        recording.mark_pushed(repo_id)
+        log(f"pushed to {_hub_url(repo_id)}")
+    episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
+    progress({"event": "done", "url": _hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
     return out
+
+
+def _hub_url(repo_id: str) -> str:
+    return f"https://huggingface.co/datasets/{repo_id}"
+
+
+def _print_event(event: dict) -> None:
+    print(json.dumps(event), flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -349,12 +383,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image-writer-threads", type=int, default=8)
     parser.add_argument("--push", action="store_true", help="push to the Hugging Face Hub when done")
     parser.add_argument("--private", action="store_true", help="create the Hub repo as private")
+    parser.add_argument("--progress-json", action="store_true", help="print one JSON event per line for a UI")
     args = parser.parse_args(argv)
 
     skill_dir = Path(args.skill_dir).expanduser()
     if not skill_dir.is_dir():
         parser.error(f"{skill_dir} is not a directory")
     repo_id = args.repo_id or f"innate/mars-{SkillRecording(skill_dir).name}"
+    report = _print_event if args.progress_json else (lambda _event: None)
+    try:
+        _convert(args, skill_dir, repo_id, report)
+    except HfHubHTTPError as e:
+        message = _hub_refusal(e, repo_id)
+        report({"event": "error", "message": message})
+        print(message, file=sys.stderr)
+        return 1
+    return 0
+
+
+def _hub_refusal(error: HfHubHTTPError, repo_id: str) -> str:
+    status = error.response.status_code if error.response is not None else None
+    owner = repo_id.split("/", 1)[0]
+    if status == 401:
+        return "Hugging Face rejected the token. Save a valid one in Settings."
+    if status == 403:
+        return f"The token may not write to {owner}. It needs write permission, and membership if {owner} is an organization."
+    return f"Hugging Face refused the upload ({status}): {error}"
+
+
+def _convert(args: argparse.Namespace, skill_dir: Path, repo_id: str, report: Progress) -> None:
     convert_skill(
         skill_dir,
         repo_id=repo_id,
@@ -366,8 +423,9 @@ def main(argv: list[str] | None = None) -> int:
         push=args.push,
         private=args.private,
         image_writer_threads=args.image_writer_threads,
+        log=(lambda _message: None) if args.progress_json else print,
+        progress=report,
     )
-    return 0
 
 
 if __name__ == "__main__":

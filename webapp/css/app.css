@@ -5809,6 +5809,57 @@ select.episodes-tool {
   cursor: default;
 }
 
+/* Publish-to-Hugging-Face dialog (datasets/publishModal.js): covers the page, not a pane. */
+.modal-backdrop--page {
+  position: fixed;
+  z-index: 60;
+}
+
+.hub-modal {
+  width: min(460px, 100%);
+}
+
+.hub-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-repo .modal-select {
+  flex: 0 1 45%;
+  min-width: 0;
+}
+
+.hub-repo .modal-input {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.hub-repo-slash {
+  color: var(--muted);
+}
+
+.hub-heading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.hub-bar {
+  height: 8px;
+}
+
+.hub-error {
+  overflow-wrap: anywhere;
+}
+
+a.hub-action {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+
 /* training empty state (no local runs) */
 .training-empty {
   min-height: 100%;

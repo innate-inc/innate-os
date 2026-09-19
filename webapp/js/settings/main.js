@@ -639,6 +639,7 @@ const KEY_ROWS = [
   { env: "ANTHROPIC_API_KEY", label: "Anthropic key", doc: "Claude models. Needed even with an Innate service key — the proxy does not serve Anthropic yet." },
   { env: "ANTHROPIC_WORKSPACE_ID", label: "Anthropic workspace", secret: false, doc: "Only for a key created for the organization rather than inside a workspace: the workspace to bill. Without it Anthropic refuses every request with a 400; a workspace-scoped key needs nothing here. Not a secret, so it is shown in full." },
   { env: "LLM_API_KEY", label: "Local server key", doc: "Only if the OpenAI-compatible server under Custom model wants one; most on a home network do not." },
+  { env: "HF_TOKEN", label: "Hugging Face token", doc: "Publishes datasets from the Datasets page to the Hugging Face Hub. Needs write permission; create one at huggingface.co/settings/tokens. Not used by the models above." },
 ];
 /**
  * The Keys section: set/not-set per key with a paste field that POSTs straight to

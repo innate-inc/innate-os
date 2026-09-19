@@ -1075,6 +1075,14 @@ core-scripts = [
     { name = "rerun-sdk" },
     { name = "torchcodec", marker = "sys_platform != 'darwin'" },
 ]
+dataset = [
+    { name = "av" },
+    { name = "datasets" },
+    { name = "jsonlines" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "torchcodec", marker = "sys_platform != 'darwin'" },
+]
 diffusion = [
     { name = "diffusers" },
 ]
@@ -1104,7 +1112,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "h5py" },
-    { name = "lerobot", extra = ["core-scripts", "training"] },
+    { name = "lerobot", extra = ["dataset"] },
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pyzmq" },
@@ -1120,16 +1128,23 @@ pi = [
 smolvla = [
     { name = "lerobot", extra = ["smolvla"] },
 ]
+workstation = [
+    { name = "lerobot", extra = ["core-scripts", "training"] },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
+workstation = [
+    { name = "lerobot", extra = ["core-scripts", "training"] },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "h5py", specifier = ">=3.10" },
-    { name = "lerobot", extras = ["core-scripts", "training"], specifier = ">=0.6.1,<0.7" },
+    { name = "lerobot", extras = ["core-scripts", "training"], marker = "extra == 'workstation'", specifier = ">=0.6.1,<0.7" },
+    { name = "lerobot", extras = ["dataset"], specifier = ">=0.6.1,<0.7" },
     { name = "lerobot", extras = ["diffusion"], marker = "extra == 'diffusion'", specifier = ">=0.6.1,<0.7" },
     { name = "lerobot", extras = ["pi"], marker = "extra == 'pi'", specifier = ">=0.6.1,<0.7" },
     { name = "lerobot", extras = ["smolvla"], marker = "extra == 'smolvla'", specifier = ">=0.6.1,<0.7" },
@@ -1137,10 +1152,11 @@ requires-dist = [
     { name = "opencv-python-headless", specifier = ">=4.9" },
     { name = "pyzmq", specifier = ">=26" },
 ]
-provides-extras = ["diffusion", "smolvla", "pi"]
+provides-extras = ["workstation", "diffusion", "smolvla", "pi"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
+workstation = [{ name = "lerobot", extras = ["core-scripts", "training"], specifier = ">=0.6.1,<0.7" }]
 
 [[package]]
 name = "markdown-it-py"
