@@ -27,3 +27,6 @@ manipulation_server:
       port_observations: 5556   # PUB: 'state' (JSON) and 'obs' (JSON + one JPEG per camera)
       rate_hz: 30.0
       jpeg_quality: 90
+      # No login, like the rosbridge websocket: anyone on the robot's network can connect.
+      # "127.0.0.1" keeps the bridge to lerobot processes on this Jetson; enabled: false closes it.
+      bind_address: "*"
