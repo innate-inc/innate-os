@@ -64,6 +64,7 @@ environment, with `MARS_HOST=localhost`.
 | **Computer** | macOS or Linux, on the same network as the robot |
 | **Tools** | [uv](https://docs.astral.sh/uv/getting-started/installation/) and git. uv downloads Python 3.12 for you |
 | **For training** | An NVIDIA GPU or Apple Silicon. Not needed for recording or replay |
+| **For sharing** | A free [Hugging Face](https://huggingface.co/join) account. Not needed to record, replay or train locally |
 
 ## Setup
 
@@ -123,6 +124,31 @@ uv run lerobot-teleoperate --robot.type=mars --robot.external_commands=true \
 A [Rerun](https://rerun.io/) window opens with both camera streams and live joint plots. Drive
 the robot from the phone app or the web app and watch them move. The robot's log says
 `LeRobot client connected`. Stop with Ctrl+C.
+
+### 5. Log in to Hugging Face
+
+You can skip this until you want to upload something. Recording, replay, training and running a
+policy all work offline, and datasets are saved on your computer.
+
+You need to be logged in to:
+
+- upload a dataset or a trained policy to the Hub,
+- download a private dataset, for example to train on another machine,
+- use pretrained models that sit behind a license, such as the PaliGemma weights behind π0. Accept
+  the license on the model's Hub page first.
+
+Log in from the terminal. The command offers your browser, or takes a token with **write**
+permission from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens):
+
+```bash
+uv run hf auth login
+uv run hf auth whoami     # prints your account name
+```
+
+That account name is what `YOUR_HF_NAME` stands for in the commands below. A dataset is named
+`account/dataset`, like a GitHub repository. Before you log in it is only a folder name, so any
+name works, but using your real one now means the dataset uploads later without renaming. An
+organization you belong to works too, such as `innate-inc/mars-pick-tv`.
 
 ## The workflow
 
@@ -215,10 +241,9 @@ training dataset was recorded at.
 
 ### 5. Publish to the Hub
 
-Log in once, then push the dataset you recorded:
+[Log in](#5-log-in-to-hugging-face) first, then push the dataset you recorded:
 
 ```bash
-uv run hf auth login
 uv run python -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset; \
 LeRobotDataset('YOUR_HF_NAME/mars-tidy-up').push_to_hub(private=True)"
 ```
@@ -244,6 +269,9 @@ The job runs in the background and survives closing the dialog; reopen it to see
 Publishing again after recording more episodes converts only the new ones.
 
 ### From the command line
+
+Run it where the skill folder is: on your computer after copying the folder over, or on the
+robot. `--push` needs the [login](#5-log-in-to-hugging-face) from Setup.
 
 ```bash
 uv run mars2lerobot ~/innate-os/workspace/custom_skills/pick_cube \
@@ -360,6 +388,7 @@ Swap `lawam` for the extra of the policy you want. `uv sync` puts the released v
 | The robot ignores actions | An Innate skill is running. Wait for it to finish. |
 | The base stops half a second after the last action | That is the watchdog. Send actions continuously, as the LeRobot commands do. |
 | `lerobot-train` asks for a `repo_id` | Add `--policy.push_to_hub=false`. |
+| `401 Unauthorized` or `403 Forbidden` from the Hub | Not logged in, a read-only token, or a name you cannot write to. See [Log in to Hugging Face](#5-log-in-to-hugging-face). |
 | `zsh: no such file or directory: you` | A placeholder was pasted literally. Replace `YOUR_HF_NAME` with your Hugging Face name. |
 | `torchcodec is installed but cannot be loaded`, `AVFFrameReceiver is implemented in both` on macOS | Harmless. LeRobot falls back to PyAV. |
 
