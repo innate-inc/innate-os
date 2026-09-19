@@ -1,7 +1,7 @@
 # MARS on LeRobot
 
 <p align="center">
-  <img src="../docs/assets/readme/mars-lerobot.webp" alt="MARS holding a LeRobot sign in front of a whiteboard that reads: Start training MARS now" width="80%">
+  <img src="../docs/assets/readme/mars-lerobot.webp" alt="MARS holding a LeRobot sign in front of a whiteboard that reads: Start training MARS now" width="480">
 </p>
 
 `lerobot_robot_mars` makes the [Innate MARS](https://www.innate.bot/) a first-class
