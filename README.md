@@ -155,7 +155,7 @@ uv run lerobot-record --robot.type=mars --robot.external_commands=true \
     --dataset.private=true
 ```
 
-Skills you already recorded convert to the same LeRobotDataset format: the web app's Datasets page has a **Publish to Hugging Face** button.
+You can also record in the web app or the phone app: the web app's Datasets page has a **Publish to Hugging Face** button that converts a recording to the same LeRobotDataset format.
 
 **[MARS on LeRobot →](lerobot/README.md)**
 

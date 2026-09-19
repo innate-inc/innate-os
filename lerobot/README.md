@@ -16,8 +16,8 @@ What you get:
 - **Replay** recorded episodes on the robot.
 - **Train** ACT, Diffusion Policy, SmolVLA, π0 and the rest of the LeRobot policy zoo on your data.
 - **Run** a trained policy on the robot with `lerobot-rollout`.
-- **Publish** to the Hugging Face Hub, including the datasets you already recorded with innate-os,
-  from a button in the web app.
+- **Publish** to the Hugging Face Hub. Datasets recorded in the web app or the phone app publish
+  too, from a button in the web app.
 
 An example dataset recorded this way:
 [innate-inc/mars-pick-tv](https://huggingface.co/datasets/innate-inc/mars-pick-tv).
@@ -29,7 +29,7 @@ An example dataset recorded this way:
 - [Setup](#setup)
 - [The workflow](#the-workflow): [record](#1-record-a-dataset), [replay](#2-replay-an-episode),
   [train](#3-train-a-policy), [run](#4-run-the-policy-on-the-robot), [publish](#5-publish-to-the-hub)
-- [Datasets recorded with innate-os](#datasets-recorded-with-innate-os)
+- [Recording with the web app instead](#recording-with-the-web-app-instead)
 - [Using the simulator](#using-the-simulator)
 - [Reference](#reference)
 - [Troubleshooting](#troubleshooting)
@@ -157,7 +157,9 @@ organization you belong to works too, such as `innate-inc/mars-pick-tv`.
 ### 1. Record a dataset
 
 Drive the robot however you normally do: the phone app, the web app's Teleop page, or the leader
-arm. LeRobot records what you command, so there is no new teleop hardware to set up.
+arm. LeRobot records what you command, so there is no new teleop hardware to set up. Prefer to
+record on the robot itself, with no terminal? See
+[Recording with the web app instead](#recording-with-the-web-app-instead).
 
 ```bash
 uv run lerobot-record \
@@ -257,12 +259,27 @@ Leave out `--private` for a public dataset. To open up a private one later, chan
 in the dataset's settings on the Hub. Public datasets also open in LeRobot's online
 [dataset visualizer](https://huggingface.co/spaces/lerobot/visualize_dataset); private ones do not.
 
-## Datasets recorded with innate-os
+## Recording with the web app instead
 
-Skills you recorded with the phone app or the web app convert to the same format, so nothing
-you already collected is lost.
+You can also use the web app, or the phone app, to record datasets, the way the
+[training docs](https://docs.innate.bot/training/overview) describe. No computer or terminal is
+involved, and publishing converts the recording to the same LeRobotDataset format, so training and
+running a policy work exactly as above. Everything you recorded before this integration existed
+converts too.
 
-### From the web app
+| | `lerobot-record` | Web app or phone app |
+|---|---|---|
+| Runs on | Your computer | The robot |
+| Setup | The steps above | None |
+| Camera frames | Travel over Wi-Fi; a weak link shows up as repeated frames | Recorded on board at 30 fps |
+| Reviewing episodes | Re-record on the spot with the left arrow | Watch and delete episodes on the Datasets page |
+| Upload | Automatic when a session ends | **Publish to Hugging Face** button |
+| Simulator | Yes | No |
+
+For a recording session on a real robot, the web app is usually the easier and more robust choice.
+`lerobot-record` fits when the rest of your work already lives in LeRobot, or in the simulator.
+
+### Publish from the web app
 
 On the Datasets page, a training dataset has a **Publish to Hugging Face** button.
 
@@ -274,7 +291,7 @@ On the Datasets page, a training dataset has a **Publish to Hugging Face** butto
 The job runs in the background and survives closing the dialog; reopen it to see progress.
 Publishing again after recording more episodes converts only the new ones.
 
-### From the command line
+### Publish from the command line
 
 Run it where the skill folder is: on your computer after copying the folder over, or on the
 robot. `--push` needs the [login](#5-log-in-to-hugging-face) from Setup.
