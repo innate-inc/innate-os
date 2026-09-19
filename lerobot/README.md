@@ -244,12 +244,12 @@ training dataset was recorded at.
 [Log in](#5-log-in-to-hugging-face) first, then push the dataset you recorded:
 
 ```bash
-uv run python -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset; \
-LeRobotDataset('YOUR_HF_NAME/mars-tidy-up').push_to_hub(private=True)"
+uv run mars-push YOUR_HF_NAME/mars-tidy-up --private
 ```
 
-Or let `lerobot-record` push at the end of a session with `--dataset.push_to_hub=true
---dataset.private=true`. Private datasets do not open in the online dataset visualizer.
+Leave out `--private` for a public dataset. Private datasets do not open in the online dataset
+visualizer. To upload at the end of a recording session instead, add
+`--dataset.push_to_hub=true --dataset.private=true` to the `lerobot-record` command.
 
 ## Datasets recorded with innate-os
 

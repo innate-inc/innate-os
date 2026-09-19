@@ -27,9 +27,10 @@ import numpy as np
 from huggingface_hub.errors import HfHubHTTPError
 from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
+from lerobot.utils.constants import ACTION, OBS_STATE
 
 from .dataset_meta import DEFAULT_HEAD_ANGLE_DEG, read_sidecar, write_sidecar
+from .hub import dataset_root, hub_refusal, hub_url
 from .schema import CAMERA_ORDER, CAMERA_SHAPE, FPS, ROBOT_TYPE, dataset_features, image_key
 
 DATASET_METADATA = "dataset_metadata.json"
@@ -265,10 +266,6 @@ def _locked(path: Path) -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def dataset_root(repo_id: str, root: str | Path | None) -> Path:
-    return Path(root).expanduser() if root else HF_LEROBOT_HOME / repo_id
-
-
 def open_dataset(
     repo_id: str, root: Path, fps: int, *, vcodec: str | None, image_writer_threads: int
 ) -> LeRobotDataset:
@@ -326,7 +323,7 @@ def convert_skill(
             progress({"event": "push"})
             LeRobotDataset(repo_id, root=out).push_to_hub(private=private)
             recording.mark_pushed(repo_id)
-            progress({"event": "done", "url": _hub_url(repo_id), "message": "Already converted; uploaded again"})
+            progress({"event": "done", "url": hub_url(repo_id), "message": "Already converted; uploaded again"})
         else:
             progress({"event": "done", "url": "", "message": "Nothing new to publish"})
         return out
@@ -359,14 +356,10 @@ def convert_skill(
         progress({"event": "push"})
         dataset.push_to_hub(private=private)
         recording.mark_pushed(repo_id)
-        log(f"pushed to {_hub_url(repo_id)}")
+        log(f"pushed to {hub_url(repo_id)}")
     episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
-    progress({"event": "done", "url": _hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
+    progress({"event": "done", "url": hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
     return out
-
-
-def _hub_url(repo_id: str) -> str:
-    return f"https://huggingface.co/datasets/{repo_id}"
 
 
 def _print_event(event: dict) -> None:
@@ -398,21 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _convert(args, skill_dir, repo_id, report)
     except HfHubHTTPError as e:
-        message = _hub_refusal(e, repo_id)
+        message = hub_refusal(e, repo_id)
         report({"event": "error", "message": message})
         print(message, file=sys.stderr)
         return 1
     return 0
-
-
-def _hub_refusal(error: HfHubHTTPError, repo_id: str) -> str:
-    status = error.response.status_code if error.response is not None else None
-    owner = repo_id.split("/", 1)[0]
-    if status == 401:
-        return "Hugging Face rejected the token. Save a valid one in Settings."
-    if status == 403:
-        return f"The token may not write to {owner}. It needs write permission, and membership if {owner} is an organization."
-    return f"Hugging Face refused the upload ({status}): {error}"
 
 
 def _convert(args: argparse.Namespace, skill_dir: Path, repo_id: str, report: Progress) -> None:
