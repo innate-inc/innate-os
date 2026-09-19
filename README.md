@@ -140,6 +140,23 @@ def get_inputs(self) -> list[InputRef]:
 
 **[Input devices →](https://docs.innate.bot/software/inputs)**
 
+## LeRobot
+
+MARS is a [LeRobot](https://github.com/huggingface/lerobot) robot. Record datasets while you teleoperate from the phone app or the web app, train any LeRobot policy on them, and run it back on the robot, with the standard commands and `--robot.type=mars`:
+
+```bash
+cd lerobot && uv sync
+export MARS_HOST=192.168.1.42    # your robot's IP address
+
+uv run lerobot-record --robot.type=mars --robot.external_commands=true \
+    --teleop.type=mars_passthrough --dataset.repo_id=YOUR_HF_NAME/mars-tidy-up \
+    --dataset.single_task="Put the ball in the box" --dataset.num_episodes=10
+```
+
+Skills you already recorded convert to the same LeRobotDataset format: the web app's Datasets page has a **Publish to Hugging Face** button.
+
+**[MARS on LeRobot →](lerobot/README.md)**
+
 ## Documentation
 
 This README is an introduction. The rest lives in the docs:
@@ -152,6 +169,7 @@ This README is an introduction. The rest lives in the docs:
 - [Agents](https://docs.innate.bot/software/agents)
 - [Input devices](https://docs.innate.bot/software/inputs)
 - [Training](https://docs.innate.bot/training/overview)
+- [MARS on LeRobot](lerobot/README.md)
 - [Web app](https://docs.innate.bot/robots/web-app) and [controller app](https://docs.innate.bot/robots/innate-controller-app)
 - [CLI](https://docs.innate.bot/software/innate-cli)
 - [ROS 2 core and system overview](https://docs.innate.bot/software/ros2-core)
