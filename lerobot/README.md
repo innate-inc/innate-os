@@ -377,4 +377,16 @@ The tests run the real bridge module from `ros2_ws/src/brain/manipulation` again
 so the wire protocol is pinned on both sides. The protocol itself is documented in
 `lerobot_robot_mars/wire.py`.
 
+### Why `uv.lock` is about 2,500 lines
+
+`pyproject.toml` names five dependencies, but installing them pulls in about 130 packages, mostly
+through LeRobot, torch and the Hugging Face libraries. `uv.lock` records the exact version of every
+one, with a download link and checksum for each supported platform: Apple Silicon, Linux on x86,
+Linux on ARM for the Jetson, and Windows. That is what makes the file long, and it is generated, never
+edited by hand.
+
+It is committed so that `uv sync` gives everyone, and every robot, exactly the set of packages
+this plugin was tested with, instead of whatever is newest on the day they install. After changing
+the dependencies in `pyproject.toml`, run `uv lock` and commit the result.
+
 Licensed under Apache-2.0, like the rest of innate-os.
