@@ -126,6 +126,18 @@ def test_recorded_head_angle_lands_in_the_sidecar(skill_dir: Path, tmp_path: Pat
     assert sidecar["source"] == "mars2lerobot"
 
 
+def test_a_lost_local_copy_is_rebuilt_in_full_not_replaced_by_the_new_episodes(skill_dir: Path, tmp_path: Path) -> None:
+    import shutil
+
+    root = tmp_path / "out"
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    shutil.rmtree(root)  # someone cleared the robot's cache; dataset_metadata.json still lists 0 and 2 as exported
+    convert_skill(
+        skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", include_failures=True, log=lambda _m: None
+    )
+    assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 3
+
+
 def test_progress_events_drive_a_ui(skill_dir: Path, tmp_path: Path) -> None:
     events: list[dict] = []
     convert_skill(

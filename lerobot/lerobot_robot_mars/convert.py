@@ -310,7 +310,11 @@ def convert_skill(
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
     task_text = task or recording.task
-    exported = recording.exported_ids(repo_id)
+    # The record of what was exported is only as good as the converted copy it describes. If that
+    # copy is gone, appending "only the new episodes" would build a dataset of just those and
+    # upload it over the full one, so start again from every episode instead.
+    has_copy = (out / "meta" / "info.json").is_file()
+    exported = recording.exported_ids(repo_id) if has_copy else set()
     todo = [
         ref
         for ref in recording.episodes(include_failures)
