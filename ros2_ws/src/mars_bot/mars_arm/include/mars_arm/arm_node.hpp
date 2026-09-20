@@ -179,9 +179,6 @@ class MarsArmNode : public rclcpp::Node {
     std::unique_ptr<GravityModel> gravity_;
     std::atomic<bool> gravity_active_{false};
     std::atomic<double> gravity_max_offset_rad_{0.0};
-    // Whether BOOT zeroed ki and flattened the gains. Not switchable: those
-    // gains are written once, and joints 5-7 are outside the scheduler's reach.
-    bool gravity_gain_policy_ = false;
     // The head is commanded in encoder counts, but the gravity model speaks the
     // URDF convention, so its latest target is kept here in radians.
     std::atomic<double> head_target_rad_{0.0};

@@ -7,7 +7,6 @@ namespace mars_arm {
 
 void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) {
     RCLCPP_INFO(this->get_logger(), "Loading %zu joint configurations...", joint_names.size());
-    gravity_gain_policy_ = this->get_parameter("gravity_compensation.enabled").as_bool();
 
     for (size_t i = 0; i < joint_names.size(); ++i) {
         const std::string& jn = joint_names[i];  // e.g. "joint_1"
@@ -119,18 +118,6 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
         } catch (...) {
         }
 
-        // Gravity compensation replaces both halves of the old anti-sag
-        // machinery: the integral term that crept a loaded joint back onto its
-        // target, and the near/far interpolation that stiffened an extended arm
-        // out of its own sag. The offset already scales with 1/kp, so it holds
-        // at whatever gains are loaded — and far == near makes the scheduler's
-        // interpolation a no-op without touching the control loop.
-        if (gravity_gain_policy_) {
-            near_gains.ki = 0;
-            teleop_gains.ki = 0;
-            far_gains = near_gains;
-        }
-
         // Set joint config gains from near (initial operating gains)
         config.kp = near_gains.kp;
         config.ki = near_gains.ki;
@@ -212,12 +199,6 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             }
             gravity_active_ = on;
             RCLCPP_INFO(this->get_logger(), "Hot-reload: gravity compensation %s", on ? "ON" : "OFF");
-            if (on != gravity_gain_policy_) {
-                RCLCPP_WARN(this->get_logger(),
-                            "Gains still follow the boot setting (ki %s, gain scheduling %s) — restart to change it",
-                            gravity_gain_policy_ ? "forced to 0" : "as configured",
-                            gravity_gain_policy_ ? "collapsed" : "active");
-            }
             continue;
         }
         if (name == "gravity_compensation.max_offset_rad") {
@@ -249,10 +230,6 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             if (suffix == "gains_near") {
                 auto arr = param.as_integer_array();
                 GainProfile g = parseGainsArray(arr);
-                if (gravity_gain_policy_) {
-                    g.ki = 0;  // see loadJointConfigs: compensation replaces the integral term
-                    gs_far_[ji] = g;
-                }
                 gs_near_[ji] = g;
                 joint_configs_[ji].kp = g.kp;
                 joint_configs_[ji].ki = g.ki;
@@ -269,9 +246,6 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                 } catch (...) {
                     gs_far_[ji] = gs_near_[ji];
                 }
-                if (gravity_gain_policy_) {
-                    gs_far_[ji] = gs_near_[ji];
-                }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_far = [%d, %d, %d, %d, %d]", joint_num,
                             gs_far_[ji].kp, gs_far_[ji].ki, gs_far_[ji].kd, gs_far_[ji].ff1, gs_far_[ji].ff2);
             } else if (suffix == "gains_teleop") {
@@ -280,9 +254,6 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                     gs_teleop_[ji] = arr.empty() ? gs_near_[ji] : parseGainsArray(arr);
                 } catch (...) {
                     gs_teleop_[ji] = gs_near_[ji];
-                }
-                if (gravity_gain_policy_) {
-                    gs_teleop_[ji].ki = 0;
                 }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_teleop = [%d, %d, %d, %d, %d]", joint_num,
                             gs_teleop_[ji].kp, gs_teleop_[ji].ki, gs_teleop_[ji].kd, gs_teleop_[ji].ff1,
