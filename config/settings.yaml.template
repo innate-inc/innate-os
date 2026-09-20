@@ -132,9 +132,15 @@
 #       max_angular_speed: 2.5      # rad/s, hard /cmd_vel angular ceiling at the motors
 
 # ── Arm ───────────────────────────────────────────────────────────────
+# Gravity compensation commands each joint past its target by the position error its own
+# P term needs to carry the arm's weight, so the link lands where it was asked to. Toggling
+# it here (or from Settings) moves only that offset and takes effect immediately; the gains
+# it replaces -- ki forced to 0, gain scheduling collapsed -- are set at launch.
 # mars_arm:
 #   ros__parameters:
 #     max_jerk: 150.0               # rad/s^3 trajectory jerk limit (0 disables)
+#     gravity_compensation:
+#       enabled: true               # false = the old scheduled-gain behaviour
 
 # ── Camera: main (stereo; hardware only) ──────────────────────────────
 # Resolution is staged: the sensor captures the full side-by-side stereo frame at
