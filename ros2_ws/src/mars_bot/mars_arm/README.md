@@ -48,9 +48,14 @@ stiction as well as its nominal meaning.
    logs its full-PWM torque, its `kp`, and the resulting stiffness in N·m/rad.
 2. Watch the offsets the model is actually applying: raise the node's log level to debug and
    read the throttled `GravComp (deg)` line, one entry per second.
-3. Command a pose, let it settle, and compare `/mars/arm/command_state` (what the arm was
-   asked to hold) against `/mars/arm/state` (what the encoders read). Residual error per
-   joint is what compensation missed.
+3. Measure it: open `/debug/arm-tracking.html` on the robot, record a teleop session with
+   compensation on and another with it off, and read the table. It pairs
+   `/mars/arm/command_state` (what the arm was asked to hold) with `/mars/arm/state` (what
+   the encoders read), and reports RMS error per joint plus the distance the gripper
+   actually missed by, in mm. The figure to read is the **held** one — a moving arm trails
+   its setpoint by a lag compensation does not address, and averaging that in buries the
+   effect. The page can also flip compensation itself, so an A/B is two recordings without
+   touching a terminal.
 4. A joint that still sags wants a **smaller** `full_pwm_torque_nm`; one that overshoots its
    target wants a **larger** one. The relationship is linear, so one correction converges.
 5. Whatever is left after that is deflection *past* the encoder — gear play and link flex,
@@ -60,7 +65,8 @@ stiction as well as its nominal meaning.
 
 ### Turning it on and off against a held pose
 
-`gravity_compensation.enabled` is live. Put the arm somewhere loaded, then flip it:
+`gravity_compensation.enabled` is live, and `/debug/arm-tracking.html` has a button for it.
+By hand, put the arm somewhere loaded, then flip it:
 
 ```
 ros2 param set /mars_arm gravity_compensation.enabled false

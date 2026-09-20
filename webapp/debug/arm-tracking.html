@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arm tracking error — gravity compensation A/B</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11, 11, 11, 0.10);
+    --commanded: #898781;
+    --actual: #2a78d6;
+    --run-a: #2a78d6;
+    --run-b: #eb6834;
+    --good: #006300;
+    --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --ring: rgba(255, 255, 255, 0.10);
+      --commanded: #6f6d67;
+      --actual: #3987e5;
+      --run-a: #3987e5;
+      --run-b: #d95926;
+      --good: #0ca30c;
+      --bad: #e8594d;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --commanded: #6f6d67; --actual: #3987e5; --run-a: #3987e5; --run-b: #d95926;
+    --good: #0ca30c; --bad: #e8594d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px; background: var(--page); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: -0.01em; }
+  .lede { color: var(--ink-2); margin: 0 0 20px; max-width: 70ch; }
+  .card {
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .spacer { flex: 1 1 auto; }
+  button {
+    font: inherit; font-weight: 500; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--axis); border-radius: 8px; padding: 7px 14px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--ink-2); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: var(--actual); border-color: var(--actual); color: #fff; }
+  button.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border: 1px solid var(--ring); border-radius: 999px; font-size: 13px; color: var(--ink-2);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--good); }
+  .dot.off { background: var(--bad); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--ring); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tbody tr:last-child td { border-bottom: none; }
+  tr.total td { font-weight: 600; border-top: 1px solid var(--axis); }
+  .delta-good { color: var(--good); }
+  .delta-bad { color: var(--bad); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin-bottom: 10px; }
+  .swatch { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
+  .note { color: var(--muted); font-size: 12px; margin: 10px 0 0; max-width: 78ch; }
+  .empty { color: var(--muted); padding: 22px 0; text-align: center; }
+  label.inline { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+  input[type="number"] {
+    font: inherit; width: 72px; padding: 5px 8px; border-radius: 6px;
+    border: 1px solid var(--axis); background: var(--page); color: var(--ink);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Arm tracking error</h1>
+  <p class="lede">
+    Records what the arm was told to hold against where its encoders actually landed, so gravity
+    compensation can be judged by a number instead of by eye. Record one session with it on and one
+    with it off, doing roughly the same motions. The figure that matters is the <b>held</b> error:
+    a moving arm trails its setpoint by a lag compensation does not address, and averaging that in
+    buries the effect.
+  </p>
+
+  <div class="card">
+    <div class="row">
+      <span class="pill"><span class="dot" id="link-dot"></span><span id="link-text">connecting…</span></span>
+      <span class="pill"><span class="dot" id="comp-dot"></span>compensation <b id="comp-text">?</b></span>
+      <button id="comp-toggle" disabled>Toggle compensation</button>
+      <span class="spacer"></span>
+      <label class="inline">rate <input type="number" id="rate" value="50" min="5" max="200" step="5"> Hz</label>
+    </div>
+    <p class="note" id="comp-note">
+      Toggling here moves only the goal offsets; the gains compensation replaced are set at launch,
+      so an "off" recorded this way means "these gains, no compensation".
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="record" class="primary" disabled>Record</button>
+      <span class="pill mono" id="rec-status">idle</span>
+      <span class="spacer"></span>
+      <button id="clear" disabled>Clear runs</button>
+      <button id="download" disabled>Download JSON</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="pill"><span class="swatch" style="background:var(--run-a)"></span><span id="run-a-label">A — empty</span></span>
+      <span class="pill"><span class="swatch" style="background:var(--run-b)"></span><span id="run-b-label">B — empty</span></span>
+    </div>
+    <p class="note">A new recording fills A, then B, then replaces the older of the two. Each run
+      remembers the compensation state it was recorded under.</p>
+  </div>
+
+  <div class="card">
+    <h2>Result</h2>
+    <div id="result"><p class="empty">Record a run to see the numbers.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Error over time</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--run-a)"></span><span id="legend-a">run A</span></span>
+      <span><span class="swatch" style="background:var(--run-b)"></span><span id="legend-b">run B</span></span>
+      <span>actual minus commanded, degrees · flat line at zero is perfect</span>
+    </div>
+    <div class="charts" id="run-charts"><p class="empty">Record a run to see the traces.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Live</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--commanded)"></span>commanded</span>
+      <span><span class="swatch" style="background:var(--actual)"></span>actual</span>
+      <span>last 20 s, degrees</span>
+    </div>
+    <div class="charts" id="live-charts"></div>
+  </div>
+</div>
+
+<script type="module">
+  // Standalone like the other debug pages: no imports, no build step, paste-and-serve.
+
+  const ARM_JOINTS = 6;
+  const STATE_TOPIC = "/mars/arm/state";
+  const COMMAND_TOPIC = "/mars/arm/command_state";
+  const ARM_NODE = "/mars_arm";
+  const COMP_PARAM = "gravity_compensation.enabled";
+  // A joint is HELD once its command has been still this long and nothing is moving:
+  // gravity sag is a steady-state error and only exists there.
+  const SETTLE_S = 0.25;
+  const CMD_STILL_RAD = 0.002;
+  const VEL_STILL_RAD_S = 0.05;
+  const LIVE_WINDOW_S = 20;
+  const PLOT_POINTS = 900;  // one point per pixel is already more than an SVG needs
+  const DEG = 180 / Math.PI;
+
+  // ── rosbridge ────────────────────────────────────────────────────────
+  class Rws {
+    constructor() { this.ws = null; this.subs = new Map(); this.pending = new Map(); this.n = 0; this.onState = () => {}; }
+    get connected() { return this.ws && this.ws.readyState === WebSocket.OPEN; }
+    connect(url) {
+      this.onState("connecting");
+      let ws;
+      try { ws = new WebSocket(url); } catch { this.onState("disconnected"); return; }
+      this.ws = ws;
+      ws.onopen = () => { this.onState("connected"); for (const [topic, s] of this.subs) this.#subscribe(topic, s); };
+      ws.onclose = () => { if (this.ws === ws) { this.ws = null; this.onState("disconnected"); setTimeout(() => this.connect(url), 2000); } };
+      ws.onerror = () => {};
+      ws.onmessage = (ev) => this.#frame(ev.data);
+    }
+    #send(o) { if (this.connected) this.ws.send(JSON.stringify(o)); }
+    #subscribe(topic, s) {
+      this.#send({ op: "subscribe", topic, type: s.type, throttle_rate: s.throttle, queue_length: 1 });
+    }
+    subscribe(topic, type, throttle, cb) {
+      const s = { type, throttle, cb };
+      this.subs.set(topic, s);
+      if (this.connected) this.#subscribe(topic, s);
+    }
+    retune(throttle) {
+      for (const [topic, s] of this.subs) { s.throttle = throttle; this.#subscribe(topic, s); }
+    }
+    call(service, type, args) {
+      return new Promise((resolve, reject) => {
+        if (!this.connected) return reject(new Error("not connected"));
+        const id = `c${++this.n}`;
+        this.pending.set(id, { resolve, reject });
+        this.#send({ op: "call_service", id, service, type, args });
+        setTimeout(() => { if (this.pending.delete(id)) reject(new Error("timeout")); }, 5000);
+      });
+    }
+    #frame(data) {
+      let m; try { m = JSON.parse(data); } catch { return; }
+      if (m.op === "publish") this.subs.get(m.topic)?.cb(m.msg);
+      else if (m.op === "service_response") {
+        const p = this.pending.get(m.id);
+        if (!p) return;
+        this.pending.delete(m.id);
+        m.result === false ? p.reject(new Error(m.values || "service failed")) : p.resolve(m.values);
+      }
+    }
+  }
+
+  function bridgeUrl() {
+    // ?ws=... points the page at a robot from a laptop, or at a stand-in.
+    const override = new URLSearchParams(location.search).get("ws");
+    if (override) return override;
+    const host = location.hostname || "localhost";
+    if (location.protocol === "https:") return `wss://${location.host}/ws`;
+    return `ws://${host}:9090`;
+  }
+
+  // ── forward kinematics, straight off the URDF the robot runs ─────────
+  // Hardcoding the chain here would drift the moment a link moves; this is the
+  // same installed mars.urdf the arm node builds its gravity model from.
+  const vec3 = (s, fallback) => (s ? s.trim().split(/\s+/).map(Number) : fallback);
+
+  function rpyMat([r, p, y]) {
+    const [cr, sr, cp, sp, cy, sy] = [Math.cos(r), Math.sin(r), Math.cos(p), Math.sin(p), Math.cos(y), Math.sin(y)];
+    return [
+      [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+      [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+      [-sp, cp * sr, cp * cr],
+    ];
+  }
+  function axisMat([x, y, z], angle) {
+    const n = Math.hypot(x, y, z) || 1;
+    const [ax, ay, az] = [x / n, y / n, z / n];
+    const [c, s, t] = [Math.cos(angle), Math.sin(angle), 1 - Math.cos(angle)];
+    return [
+      [t * ax * ax + c, t * ax * ay - s * az, t * ax * az + s * ay],
+      [t * ax * ay + s * az, t * ay * ay + c, t * ay * az - s * ax],
+      [t * ax * az - s * ay, t * ay * az + s * ax, t * az * az + c],
+    ];
+  }
+  const mul3 = (a, b) => a.map((row) => b[0].map((_, j) => row[0] * b[0][j] + row[1] * b[1][j] + row[2] * b[2][j]));
+  const apply3 = (m, v) => m.map((row) => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+
+  async function loadGripperFk() {
+    const text = await fetch("/armsdk/model/urdf/mars.urdf").then((r) => {
+      if (!r.ok) throw new Error(`mars.urdf: HTTP ${r.status}`);
+      return r.text();
+    });
+    const doc = new DOMParser().parseFromString(text, "text/xml");
+    const byChild = new Map();
+    for (const el of doc.querySelectorAll("robot > joint")) {
+      const origin = el.querySelector("origin");
+      byChild.set(el.querySelector("child")?.getAttribute("link"), {
+        name: el.getAttribute("name"),
+        parent: el.querySelector("parent")?.getAttribute("link"),
+        type: el.getAttribute("type"),
+        xyz: vec3(origin?.getAttribute("xyz"), [0, 0, 0]),
+        rpy: rpyMat(vec3(origin?.getAttribute("rpy"), [0, 0, 0])),
+        axis: vec3(el.querySelector("axis")?.getAttribute("xyz"), [0, 0, 1]),
+      });
+    }
+    const chain = [];
+    for (let link = "ee_link"; byChild.has(link); ) {
+      const joint = byChild.get(link);
+      chain.unshift(joint);
+      link = joint.parent;
+    }
+    if (!chain.length) throw new Error("no base_link -> ee_link chain in mars.urdf");
+
+    /** @param {(name: string) => number} angleOf -> gripper position in base_link, metres */
+    return (angleOf) => {
+      let rot = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      let pos = [0, 0, 0];
+      for (const joint of chain) {
+        const offset = apply3(rot, joint.xyz);
+        pos = [pos[0] + offset[0], pos[1] + offset[1], pos[2] + offset[2]];
+        const local = joint.type === "revolute" || joint.type === "continuous"
+          ? mul3(joint.rpy, axisMat(joint.axis, angleOf(joint.name) || 0))
+          : joint.rpy;
+        rot = mul3(rot, local);
+      }
+      return pos;
+    };
+  }
+
+  // ── recording ────────────────────────────────────────────────────────
+  /** @type {{names: string[], t: number[], cmd: number[][], pos: number[][], vel: number[][]}} */
+  let live = { names: [], t: [], cmd: [], pos: [], vel: [] };
+  let latest = null;          // newest /mars/arm/state sample
+  let recording = null;       // the run being filled, or null
+  const runs = [null, null];  // slots A and B
+
+  const ros = new Rws();
+  let gripperFk = null;
+  let compensated = null;
+
+  function onState(msg) {
+    latest = {
+      pos: msg.position.slice(0, ARM_JOINTS),
+      vel: msg.velocity?.length ? msg.velocity.slice(0, ARM_JOINTS) : new Array(ARM_JOINTS).fill(0),
+    };
+  }
+
+  function onCommand(msg) {
+    if (!latest) return;
+    // The control loop publishes state then command in the same cycle, so the
+    // newest state belongs to this command. Throttled independently, the two can
+    // sit a sample apart -- which matters only while moving, and the held figure
+    // is what the page is for.
+    const t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9;
+    const cmd = msg.position.slice(0, ARM_JOINTS);
+    if (!live.names.length) live.names = msg.name.slice(0, ARM_JOINTS);
+    push(live, t, cmd, latest.pos, latest.vel);
+    while (live.t.length > 2 && live.t[live.t.length - 1] - live.t[0] > LIVE_WINDOW_S) shift(live);
+    if (recording) push(recording, t, cmd, latest.pos, latest.vel);
+  }
+
+  function push(run, t, cmd, pos, vel) { run.t.push(t); run.cmd.push(cmd); run.pos.push(pos); run.vel.push(vel); }
+  function shift(run) { run.t.shift(); run.cmd.shift(); run.pos.shift(); run.vel.shift(); }
+
+  /** Samples where the command has been still for SETTLE_S and the arm has stopped. */
+  function heldMask(run) {
+    const out = new Array(run.t.length).fill(false);
+    let lastChange = run.t[0] ?? 0;
+    for (let i = 0; i < run.t.length; i++) {
+      if (i > 0) {
+        let moved = 0;
+        for (let j = 0; j < ARM_JOINTS; j++) moved = Math.max(moved, Math.abs(run.cmd[i][j] - run.cmd[i - 1][j]));
+        if (moved > CMD_STILL_RAD) lastChange = run.t[i];
+      }
+      let speed = 0;
+      for (let j = 0; j < ARM_JOINTS; j++) speed = Math.max(speed, Math.abs(run.vel[i][j]));
+      out[i] = run.t[i] - lastChange >= SETTLE_S && speed <= VEL_STILL_RAD_S;
+    }
+    return out;
+  }
+
+  const rms = (values) => (values.length ? Math.sqrt(values.reduce((a, v) => a + v * v, 0) / values.length) : NaN);
+
+  function jointErrors(run, joint, mask) {
+    const out = [];
+    for (let i = 0; i < run.t.length; i++) if (!mask || mask[i]) out.push((run.pos[i][joint] - run.cmd[i][joint]) * DEG);
+    return out;
+  }
+
+  /** Gripper error in mm: [distance, vertical], actual minus commanded. */
+  function gripperErrors(run, mask) {
+    if (!gripperFk) return null;
+    const index = new Map(run.names.map((name, i) => [name, i]));
+    const at = (row) => gripperFk((name) => row[index.get(name)] ?? 0);
+    const distance = [];
+    const vertical = [];
+    for (let i = 0; i < run.t.length; i++) {
+      if (mask && !mask[i]) continue;
+      const p = at(run.pos[i]);
+      const c = at(run.cmd[i]);
+      distance.push(Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]) * 1000);
+      vertical.push((p[2] - c[2]) * 1000);
+    }
+    return { distance, vertical };
+  }
+
+  function summarise(run) {
+    const mask = heldMask(run);
+    const heldCount = mask.reduce((a, v) => a + (v ? 1 : 0), 0);
+    const joints = run.names.map((name, j) => ({
+      name,
+      all: rms(jointErrors(run, j, null)),
+      held: rms(jointErrors(run, j, mask)),
+    }));
+    const gripAll = gripperErrors(run, null);
+    const gripHeld = gripperErrors(run, mask);
+    return {
+      joints,
+      heldCount,
+      total: run.t.length,
+      seconds: run.t.length > 1 ? run.t[run.t.length - 1] - run.t[0] : 0,
+      gripper: gripAll && gripHeld ? {
+        all: rms(gripAll.distance),
+        held: rms(gripHeld.distance),
+        droop: gripHeld.vertical.length
+          ? gripHeld.vertical.reduce((a, v) => a + v, 0) / gripHeld.vertical.length
+          : NaN,
+      } : null,
+    };
+  }
+
+  // ── charts ───────────────────────────────────────────────────────────
+  const W = 360, H = 120, PAD_L = 38, PAD_R = 6, PAD_T = 8, PAD_B = 18;
+
+  /** Even stride down to PLOT_POINTS; statistics always use every sample. */
+  function decimate(count) {
+    const step = Math.max(1, Math.ceil(count / PLOT_POINTS));
+    const idx = [];
+    for (let i = 0; i < count; i += step) idx.push(i);
+    if (count && idx[idx.length - 1] !== count - 1) idx.push(count - 1);
+    return idx;
+  }
+
+  function polyline(points, xlim, ylim, colour, dash) {
+    if (points.length < 2) return "";
+    const sx = (x) => PAD_L + ((x - xlim[0]) / (xlim[1] - xlim[0] || 1)) * (W - PAD_L - PAD_R);
+    const sy = (y) => PAD_T + (1 - (y - ylim[0]) / (ylim[1] - ylim[0] || 1)) * (H - PAD_T - PAD_B);
+    const d = points.map(([x, y]) => `${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(" ");
+    return `<polyline points="${d}" fill="none" stroke="${colour}" stroke-width="1.5"
+      stroke-linejoin="round" ${dash ? `stroke-dasharray="3 3"` : ""}/>`;
+  }
+
+  function frame(xlim, ylim, unit) {
+    const sy = (y) => PAD_T + (1 - (y - ylim[0]) / (ylim[1] - ylim[0] || 1)) * (H - PAD_T - PAD_B);
+    const ticks = [ylim[0], (ylim[0] + ylim[1]) / 2, ylim[1]];
+    const lines = ticks.map((v) => `
+      <line x1="${PAD_L}" y1="${sy(v).toFixed(1)}" x2="${W - PAD_R}" y2="${sy(v).toFixed(1)}"
+            stroke="var(--grid)" stroke-width="1"/>
+      <text x="${PAD_L - 6}" y="${(sy(v) + 3.5).toFixed(1)}" text-anchor="end"
+            font-size="9" fill="var(--muted)">${v.toFixed(v === 0 ? 0 : 2)}</text>`).join("");
+    const zero = ylim[0] < 0 && ylim[1] > 0
+      ? `<line x1="${PAD_L}" y1="${sy(0).toFixed(1)}" x2="${W - PAD_R}" y2="${sy(0).toFixed(1)}"
+               stroke="var(--axis)" stroke-width="1"/>` : "";
+    const span = `<text x="${W - PAD_R}" y="${H - 4}" text-anchor="end" font-size="9"
+                        fill="var(--muted)">${(xlim[1] - xlim[0]).toFixed(1)}s · ${unit}</text>`;
+    return lines + zero + span;
+  }
+
+  function chart(title, series, xlim, unit) {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of series) for (const [, y] of s.points) { lo = Math.min(lo, y); hi = Math.max(hi, y); }
+    if (!isFinite(lo)) { lo = -1; hi = 1; }
+    const pad = Math.max((hi - lo) * 0.12, 0.05);
+    const ylim = [lo - pad, hi + pad];
+    const body = series.map((s) => polyline(s.points, xlim, ylim, s.colour, s.dash)).join("");
+    return `<div><div class="chart-title">${title}</div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">${frame(xlim, ylim, unit)}${body}</svg></div>`;
+  }
+
+  function renderLive() {
+    const host = document.getElementById("live-charts");
+    if (live.t.length < 2) { host.innerHTML = `<p class="empty">Waiting for ${COMMAND_TOPIC}…</p>`; return; }
+    const idx = decimate(live.t.length);
+    const t0 = live.t[0];
+    const xlim = [0, live.t[live.t.length - 1] - t0];
+    host.innerHTML = live.names.map((name, j) => chart(name, [
+      { points: idx.map((i) => [live.t[i] - t0, live.cmd[i][j] * DEG]), colour: "var(--commanded)", dash: true },
+      { points: idx.map((i) => [live.t[i] - t0, live.pos[i][j] * DEG]), colour: "var(--actual)" },
+    ], xlim, "deg")).join("");
+  }
+
+  function renderRunCharts() {
+    const host = document.getElementById("run-charts");
+    const present = runs.filter(Boolean);
+    if (!present.length) { host.innerHTML = `<p class="empty">Record a run to see the traces.</p>`; return; }
+    const span = Math.max(...present.map((r) => (r.t.length > 1 ? r.t[r.t.length - 1] - r.t[0] : 1)));
+    const colours = ["var(--run-a)", "var(--run-b)"];
+    host.innerHTML = present[0].names.map((name, j) => {
+      const series = runs.map((run, slot) => {
+        if (!run) return null;
+        const idx = decimate(run.t.length);
+        const t0 = run.t[0];
+        return {
+          points: idx.map((i) => [run.t[i] - t0, (run.pos[i][j] - run.cmd[i][j]) * DEG]),
+          colour: colours[slot],
+        };
+      }).filter(Boolean);
+      return chart(name, series, [0, span], "deg error");
+    }).join("");
+  }
+
+  const fmt = (v, digits = 3) => (Number.isFinite(v) ? v.toFixed(digits) : "—");
+
+  function deltaCell(a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return "<td>—</td>";
+    const change = (a - b) / b;
+    const cls = a < b ? "delta-good" : "delta-bad";
+    return `<td class="${cls}">${change > 0 ? "+" : ""}${(change * 100).toFixed(0)}%</td>`;
+  }
+
+  function renderResult() {
+    const host = document.getElementById("result");
+    const [a, b] = runs;
+    if (!a && !b) { host.innerHTML = `<p class="empty">Record a run to see the numbers.</p>`; return; }
+    const sa = a && summarise(a);
+    const sb = b && summarise(b);
+    const head = (s, letter) => (s ? `${letter} (${s.heldCount} held / ${s.total} samples)` : `${letter} —`);
+
+    const rows = (sa || sb).joints.map((_, j) => `
+      <tr>
+        <td>${(sa || sb).joints[j].name}</td>
+        <td>${sa ? fmt(sa.joints[j].held) : "—"}</td>
+        <td>${sb ? fmt(sb.joints[j].held) : "—"}</td>
+        ${sa && sb ? deltaCell(sa.joints[j].held, sb.joints[j].held) : "<td>—</td>"}
+        <td>${sa ? fmt(sa.joints[j].all) : "—"}</td>
+        <td>${sb ? fmt(sb.joints[j].all) : "—"}</td>
+      </tr>`).join("");
+
+    const grip = (sa?.gripper || sb?.gripper) ? `
+      <tr class="total">
+        <td>gripper, mm</td>
+        <td>${sa?.gripper ? fmt(sa.gripper.held, 1) : "—"}</td>
+        <td>${sb?.gripper ? fmt(sb.gripper.held, 1) : "—"}</td>
+        ${sa?.gripper && sb?.gripper ? deltaCell(sa.gripper.held, sb.gripper.held) : "<td>—</td>"}
+        <td>${sa?.gripper ? fmt(sa.gripper.all, 1) : "—"}</td>
+        <td>${sb?.gripper ? fmt(sb.gripper.all, 1) : "—"}</td>
+      </tr>
+      <tr>
+        <td>gripper droop, mm</td>
+        <td>${sa?.gripper ? fmt(sa.gripper.droop, 1) : "—"}</td>
+        <td>${sb?.gripper ? fmt(sb.gripper.droop, 1) : "—"}</td>
+        <td>—</td><td>—</td><td>—</td>
+      </tr>` : "";
+
+    host.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2">joint</th>
+            <th colspan="3">RMS error held (deg)</th>
+            <th colspan="2">RMS error all samples (deg)</th>
+          </tr>
+          <tr><th>${head(sa, "A")}</th><th>${head(sb, "B")}</th><th>Δ</th><th>A</th><th>B</th></tr>
+        </thead>
+        <tbody>${rows}${grip}</tbody>
+      </table>
+      <p class="note">Held = command still for ${SETTLE_S}s and every joint under
+        ${VEL_STILL_RAD_S} rad/s. Δ is A against B on the held figure; green means A is closer to
+        its target. Gripper error is forward kinematics on the same mars.urdf the arm node uses,
+        so it is the distance the hand actually missed by. Droop is the mean of its vertical
+        component while held — negative is hanging below the target.</p>`;
+  }
+
+  // ── compensation state ───────────────────────────────────────────────
+  const PARAM_BOOL = 1;
+
+  async function readCompensation() {
+    try {
+      const res = await ros.call(`${ARM_NODE}/get_parameters`, "rcl_interfaces/srv/GetParameters",
+        { names: [COMP_PARAM] });
+      const value = res?.values?.[0];
+      compensated = value && value.type === PARAM_BOOL ? Boolean(value.bool_value) : null;
+    } catch {
+      compensated = null;
+    }
+    paintCompensation();
+  }
+
+  async function toggleCompensation() {
+    const target = !compensated;
+    const button = document.getElementById("comp-toggle");
+    button.disabled = true;
+    try {
+      const res = await ros.call(`${ARM_NODE}/set_parameters`, "rcl_interfaces/srv/SetParameters", {
+        parameters: [{
+          name: COMP_PARAM,
+          value: { type: PARAM_BOOL, bool_value: target, integer_value: 0, double_value: 0, string_value: "" },
+        }],
+      });
+      const result = res?.results?.[0];
+      if (result && result.successful === false) {
+        document.getElementById("comp-note").textContent = `Robot refused: ${result.reason || "no reason given"}`;
+      }
+    } catch (e) {
+      document.getElementById("comp-note").textContent = `Could not reach ${ARM_NODE}: ${e.message}`;
+    }
+    await readCompensation();
+    button.disabled = !ros.connected;
+  }
+
+  function paintCompensation() {
+    const dot = document.getElementById("comp-dot");
+    const text = document.getElementById("comp-text");
+    text.textContent = compensated === null ? "unknown" : compensated ? "ON" : "OFF";
+    dot.className = `dot ${compensated === null ? "" : compensated ? "on" : "off"}`;
+  }
+
+  // ── wiring ───────────────────────────────────────────────────────────
+  const recordButton = document.getElementById("record");
+  const status = document.getElementById("rec-status");
+
+  function slotLabel(slot) {
+    const run = runs[slot];
+    const letter = "AB"[slot];
+    if (!run) return `${letter} — empty`;
+    const state = run.compensated === null ? "compensation unknown" : `compensation ${run.compensated ? "ON" : "OFF"}`;
+    const seconds = run.t.length > 1 ? run.t[run.t.length - 1] - run.t[0] : 0;
+    return `${letter} — ${state}, ${seconds.toFixed(0)}s`;
+  }
+
+  function paintSlots() {
+    document.getElementById("run-a-label").textContent = slotLabel(0);
+    document.getElementById("run-b-label").textContent = slotLabel(1);
+    document.getElementById("legend-a").textContent = slotLabel(0);
+    document.getElementById("legend-b").textContent = slotLabel(1);
+    const any = runs.some(Boolean);
+    document.getElementById("clear").disabled = !any;
+    document.getElementById("download").disabled = !any;
+  }
+
+  function startRecording() {
+    recording = { names: live.names.slice(), compensated, t: [], cmd: [], pos: [], vel: [] };
+    recordButton.textContent = "Stop";
+    recordButton.classList.add("recording");
+  }
+
+  function stopRecording() {
+    const run = recording;
+    recording = null;
+    recordButton.textContent = "Record";
+    recordButton.classList.remove("recording");
+    if (!run || run.t.length < 2) { status.textContent = "nothing recorded"; return; }
+    if (!run.names.length) run.names = live.names.slice();
+    // A, then B, then replace whichever is older -- so a third take refines the
+    // pair rather than silently going nowhere.
+    const slot = !runs[0] ? 0 : !runs[1] ? 1 : (runs[0].recordedAt <= runs[1].recordedAt ? 0 : 1);
+    run.recordedAt = Date.now();
+    runs[slot] = run;
+    paintSlots();
+    renderResult();
+    renderRunCharts();
+    status.textContent = `saved to ${"AB"[slot]}`;
+  }
+
+  recordButton.addEventListener("click", () => (recording ? stopRecording() : startRecording()));
+  document.getElementById("comp-toggle").addEventListener("click", toggleCompensation);
+  document.getElementById("clear").addEventListener("click", () => {
+    runs[0] = runs[1] = null;
+    paintSlots();
+    renderResult();
+    renderRunCharts();
+    status.textContent = "idle";
+  });
+  document.getElementById("download").addEventListener("click", () => {
+    const payload = runs.filter(Boolean).map((run) => ({
+      compensated: run.compensated,
+      names: run.names,
+      t: run.t.map((v) => +(v - run.t[0]).toFixed(4)),
+      cmd: run.cmd,
+      pos: run.pos,
+      vel: run.vel,
+      summary: summarise(run),
+    }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `arm-tracking-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+  document.getElementById("rate").addEventListener("change", (e) => {
+    const hz = Math.min(200, Math.max(5, Number(e.target.value) || 50));
+    e.target.value = String(hz);
+    ros.retune(Math.round(1000 / hz));
+  });
+
+  ros.onState = (state) => {
+    const dot = document.getElementById("link-dot");
+    dot.className = `dot ${state === "connected" ? "on" : state === "connecting" ? "" : "off"}`;
+    document.getElementById("link-text").textContent = state;
+    const up = state === "connected";
+    recordButton.disabled = !up;
+    document.getElementById("comp-toggle").disabled = !up;
+    if (up) readCompensation();
+    else if (recording) stopRecording();
+  };
+
+  const throttle = Math.round(1000 / Number(document.getElementById("rate").value));
+  ros.subscribe(STATE_TOPIC, "sensor_msgs/msg/JointState", throttle, onState);
+  ros.subscribe(COMMAND_TOPIC, "sensor_msgs/msg/JointState", throttle, onCommand);
+  ros.connect(bridgeUrl());
+
+  loadGripperFk()
+    .then((fk) => { gripperFk = fk; renderResult(); })
+    .catch((e) => { document.getElementById("comp-note").textContent += ` (gripper distance unavailable: ${e.message})`; });
+
+  setInterval(() => {
+    renderLive();
+    if (recording) {
+      const seconds = recording.t.length > 1 ? recording.t[recording.t.length - 1] - recording.t[0] : 0;
+      status.textContent = `recording · ${recording.t.length} samples · ${seconds.toFixed(0)}s`;
+    }
+  }, 250);
+
+  paintSlots();
+  paintCompensation();
+</script>
+</body>
+</html>
