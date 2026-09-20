@@ -110,7 +110,7 @@
   </joint>
   <link name="link1">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="-0.007084 -0.000000 0.034553" rpy="0 0 0"/>
       <mass value="0.065"/>
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
@@ -153,7 +153,7 @@
   </joint>
   <link name="link2">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.009409 -0.000016 0.091050" rpy="0 0 0"/>
       <mass value="0.080"/>
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
@@ -198,7 +198,7 @@
   </joint>
   <link name="link3">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.076052 -0.000118 0.002719" rpy="0 0 0"/>
       <mass value="0.055"/>
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
@@ -243,7 +243,7 @@
   </joint>
   <link name="link4">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.009828 -0.000000 -0.000000" rpy="0 0 0"/>
       <mass value="0.022"/>
       <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
     </inertial>
@@ -274,7 +274,7 @@
   </joint>
   <link name="link5">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.028166 0.000426 0.016082" rpy="0 0 0"/>
       <mass value="0.050"/>
       <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
     </inertial>
@@ -310,7 +310,7 @@
   </joint>
   <link name="link61">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.020009 0.001271 0.000002" rpy="0 0 0"/>
       <mass value="0.012"/>
       <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
     </inertial>
@@ -437,7 +437,7 @@
   </joint>
   <link name="link62">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.020421 -0.001269 0.000046" rpy="0 0 0"/>
       <mass value="0.012"/>
       <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
     </inertial>
@@ -576,7 +576,7 @@
   </joint>
   <link name="head">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.011142 -0.000064 0.000158" rpy="0 0 0"/>
       <mass value="0.148"/>
       <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0002"/>
     </inertial>
