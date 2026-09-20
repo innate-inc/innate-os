@@ -49,8 +49,12 @@ stiction as well as its nominal meaning.
 2. Watch the offsets the model is actually applying: raise the node's log level to debug and
    read the throttled `GravComp (deg)` line, one entry per second.
 3. Measure it: open `/debug/arm-tracking.html` on the robot and hit **Run sweep**. It drives
-   the arm through eight poses around where it is parked, pausing at each, then repeats the
-   *identical* poses after you flip compensation — so the two runs differ in one thing. It
+   the arm to its zero pose and through eight more, pausing at each, then repeats the
+   *identical* poses after you flip compensation — so the two runs differ in one thing. The
+   poses load the shoulder, elbow and wrist over the widest range the joint limits allow
+   (0.50 / 0.25 / 0.06 N·m, each swinging through zero) while keeping the gripper clear of
+   the floor; offsets around a parked, folded arm span barely a tenth of that and never
+   change sign, which is not enough for a fit to bite on. It
    pairs `/mars/arm/command_state` (what the arm was asked to hold) with `/mars/arm/state`
    (what the encoders read) and reports RMS error per joint plus the distance the gripper
    actually missed by, in mm.

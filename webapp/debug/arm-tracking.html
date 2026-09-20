@@ -148,7 +148,10 @@
       Sag is a steady-state error, so it only shows up while the arm is <b>holding</b>. Hand teleop
       never stops moving, which measures tracking lag instead. This drives the arm through a fixed
       set of poses, pausing at each one, and records only that — then repeats the identical poses
-      for the second run, so the two are comparable. Stop any other teleop source first; whoever
+      for the second run, so the two are comparable. It starts at the <b>zero pose</b>, arm straight
+      out, and works through poses that load the shoulder, elbow and wrist over the widest range the
+      joint limits allow, each one keeping the gripper clear of the floor. The gripper itself is left
+      alone. Clear the space in front of the robot, and stop any other teleop source first: whoever
       publishes last wins.
     </p>
     <div class="row">
@@ -201,14 +204,26 @@
   const VEL_STILL_RAD_S = 0.05;
   const LIVE_WINDOW_S = 20;
   const COMMANDS_TOPIC = "/mars/arm/commands";
-  // Shoulder/elbow/wrist only: joint 1 is vertical and joint 5 rolls about its own
-  // mass, so neither changes what gravity asks of the arm. Offsets from wherever the
-  // arm is parked, so a sweep cannot fling it somewhere unexpected.
-  const SWEEP_DELTAS = [
-    [0, 0, 0], [0.35, 0, 0], [-0.35, 0, 0], [0, 0.35, 0],
-    [0, -0.35, 0], [0, 0, 0.35], [0.3, 0.3, 0], [-0.3, -0.3, 0],
+  // Absolute joint1..joint5, starting from the URDF zero pose (arm straight out,
+  // where gravity pulls hardest). Offsets around a parked, folded arm span barely
+  // 0.06 N*m at the shoulder against 0.50 N*m here, and never change sign -- a fit
+  // over that has nothing to bite on. Every pose keeps the gripper at least 80mm
+  // above the floor, and joints 2-4 each swing through zero torque so the fit is
+  // pinned rather than extrapolated. joint6 is left wherever it is, so a sweep
+  // never drops what the claw is holding.
+  const SWEEP_POSES = [
+    [0, 0.0, 0.0, 0.0, 0],      // zero: straight out, heaviest
+    [0, 0.35, 0.0, 0.0, 0],     // shoulder down
+    [0, 0.5, -0.4, 0.0, 0],     // reach low -- peak shoulder torque
+    [0, 0.0, 0.0, 1.5, 0],      // wrist down
+    [0, 0.0, 0.0, -1.5, 0],     // wrist up -- flips joint 4
+    [0, -0.45, 0.0, 0.0, 0],    // shoulder up
+    [0, -0.45, -0.6, 0.0, 0],   // forearm up
+    [0, -0.48, -1.05, 0.0, 0],  // forearm vertical -- flips joints 2 and 3
+    [0, -0.45, 1.5, -1.0, 0],   // elbow folded over
   ];
-  const SWEEP_RAMP_S = 1.2;
+  const SWEEP_MAX_RATE = 0.6;   // rad/s ceiling on every glide
+  const SWEEP_RAMP_S = 1.2;     // floor on a glide, so short hops are not instant
   const SWEEP_HOLD_S = 2.0;
   const SWEEP_RATE_HZ = 20;
   const MIN_HELD_SAMPLES = 60;  // below this the held figures are anecdotes, not statistics
@@ -525,11 +540,14 @@
 
   const fmt = (v, digits = 3) => (Number.isFinite(v) ? v.toFixed(digits) : "—");
 
-  function deltaCell(a, b) {
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return "<td>—</td>";
-    const change = (a - b) / b;
+  /** A minus B in the row's own units. A ratio is useless here: the whole point is that one
+   *  side approaches zero, and 10.2mm against 0.03mm reads as "+33911%". `floor` is the
+   *  smallest error worth comparing at all. */
+  function deltaCell(a, b, floor, digits) {
+    if (!Number.isFinite(a) || !Number.isFinite(b) || Math.max(a, b) < floor) return "<td>—</td>";
+    const change = a - b;
     const cls = a < b ? "delta-good" : "delta-bad";
-    return `<td class="${cls}">${change > 0 ? "+" : ""}${(change * 100).toFixed(0)}%</td>`;
+    return `<td class="${cls}">${change > 0 ? "+" : "−"}${Math.abs(change).toFixed(digits)}</td>`;
   }
 
   function renderResult() {
@@ -548,7 +566,7 @@
         <td>${(sa || sb).joints[j].name}</td>
         <td>${sa ? fmt(sa.joints[j].held) : "—"}</td>
         <td>${sb ? fmt(sb.joints[j].held) : "—"}</td>
-        ${sa && sb ? deltaCell(sa.joints[j].held, sb.joints[j].held) : "<td>—</td>"}
+        ${sa && sb ? deltaCell(sa.joints[j].held, sb.joints[j].held, 0.02, 3) : "<td>—</td>"}
         <td>${sa ? fmt(sa.joints[j].all) : "—"}</td>
         <td>${sb ? fmt(sb.joints[j].all) : "—"}</td>
       </tr>`).join("");
@@ -558,7 +576,7 @@
         <td>gripper, mm</td>
         <td>${sa?.gripper ? fmt(sa.gripper.held, 1) : "—"}</td>
         <td>${sb?.gripper ? fmt(sb.gripper.held, 1) : "—"}</td>
-        ${sa?.gripper && sb?.gripper ? deltaCell(sa.gripper.held, sb.gripper.held) : "<td>—</td>"}
+        ${sa?.gripper && sb?.gripper ? deltaCell(sa.gripper.held, sb.gripper.held, 0.2, 1) : "<td>—</td>"}
         <td>${sa?.gripper ? fmt(sa.gripper.all, 1) : "—"}</td>
         <td>${sb?.gripper ? fmt(sb.gripper.all, 1) : "—"}</td>
       </tr>
@@ -577,7 +595,7 @@
             <th colspan="3">RMS error held (deg)</th>
             <th colspan="2">RMS error all samples (deg)</th>
           </tr>
-          <tr><th>${head(sa, "A")}</th><th>${head(sb, "B")}</th><th>Δ</th><th>A</th><th>B</th></tr>
+          <tr><th>${head(sa, "A")}</th><th>${head(sb, "B")}</th><th>Δ A−B</th><th>A</th><th>B</th></tr>
         </thead>
         <tbody>${rows}${grip}</tbody>
       </table>
@@ -586,8 +604,8 @@
         a handful of moments at whatever poses they happened to be. Use the pose sweep above, which
         pauses at each pose and repeats the same ones for both runs.</p>` : ""}
       <p class="note">Held = command still for ${SETTLE_S}s and every joint under
-        ${VEL_STILL_RAD_S} rad/s. Δ is A against B on the held figure; green means A is closer to
-        its target. Gripper error is forward kinematics on the same mars.urdf the arm node uses,
+        ${VEL_STILL_RAD_S} rad/s. Δ is A minus B on the held figure, in that row's units; green
+        means A is closer to its target. Gripper error is forward kinematics on the same mars.urdf the arm node uses,
         so it is the distance the hand actually missed by. Droop is the mean of its vertical
         component while held — negative is hanging below the target.</p>`;
   }
@@ -696,8 +714,10 @@
     ros.publish(COMMANDS_TOPIC, { layout: { dim: [], data_offset: 0 }, data: pose });
   }
 
-  /** Ease from `from` to `to` over `seconds`, publishing at SWEEP_RATE_HZ. */
-  async function glide(from, to, seconds) {
+  /** Ease from `from` to `to`, rate-limited so a long traverse is not a lunge. */
+  async function glide(from, to) {
+    const reach = Math.max(...to.map((v, j) => Math.abs(v - from[j])));
+    const seconds = Math.max(SWEEP_RAMP_S, reach / SWEEP_MAX_RATE);
     const steps = Math.max(1, Math.round(seconds * SWEEP_RATE_HZ));
     for (let i = 1; i <= steps && !abortSweep; i++) {
       const alpha = i / steps;
@@ -720,15 +740,13 @@
   async function runSweep() {
     if (!latest) { sweepStatus.textContent = "no arm state yet"; return; }
     if (!sweepPoses) {
-      if (!confirm("This moves the arm through 8 poses around where it is now. Clear the area and "
-        + "stop any other teleop source. Continue?")) return;
-      const base = latest.pos.slice();
-      sweepPoses = SWEEP_DELTAS.map((delta) => {
-        const pose = base.slice();
-        for (let k = 0; k < 3; k++) pose[k + 1] = base[k + 1] + delta[k];
-        return pose;
-      });
+      if (!confirm(`This drives the arm to its zero pose (straight out in front) and through `
+        + `${SWEEP_POSES.length - 1} more, then back. Clear the space in front of the robot and stop `
+        + `any other teleop source. Continue?`)) return;
+      // joint6 rides along at whatever it is now: the sweep must not open the claw.
+      sweepPoses = SWEEP_POSES.map((pose) => [...pose, latest.pos[5]]);
     }
+    const startedAt = latest.pos.slice();
 
     sweeping = true;
     abortSweep = false;
@@ -741,7 +759,7 @@
     let from = latest.pos.slice();
     for (let i = 0; i < sweepPoses.length && !abortSweep; i++) {
       sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · moving`;
-      await glide(from, sweepPoses[i], SWEEP_RAMP_S);
+      await glide(from, sweepPoses[i]);
       if (abortSweep) break;
       sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · holding`;
       await dwell(sweepPoses[i], SWEEP_HOLD_S);
@@ -749,8 +767,8 @@
     }
     if (!abortSweep) {
       sweepStatus.textContent = "returning";
-      await glide(from, sweepPoses[0], SWEEP_RAMP_S);
-      await dwell(sweepPoses[0], 0.5);
+      await glide(from, startedAt);
+      await dwell(startedAt, 0.5);
     }
 
     stopRecording();
@@ -768,7 +786,7 @@
     if (!sweeping) {
       sweepStatus.textContent = sweepPoses
         ? `${sweepPoses.length} poses held — repeat them for the other setting`
-        : "no poses yet";
+        : `${SWEEP_POSES.length} poses, from the zero pose`;
     }
   }
 
