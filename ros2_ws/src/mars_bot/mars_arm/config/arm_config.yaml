@@ -11,6 +11,23 @@
     # =============================================================
     # List of joints, then each joint's parameters as a sub-map.
     #
+    # ── Gravity compensation ──────────────────────────────────────
+    # The arm's holding torque is computed from mars.urdf and turned into a
+    # goal-position offset — each joint is commanded exactly as far past its
+    # target as its own P term needs to carry the load (see arm_types.hpp).
+    # With it on, ki is forced to 0 and gains_far is ignored (far := near):
+    # sag no longer depends on the gains, so it no longer needs scheduling or
+    # an integral term. Turn it off to get the old behaviour back.
+    #
+    # full_pwm_torque_nm per joint is the only knob: the datasheet stall
+    # torque is the starting point, and trimming it up/down trims that joint's
+    # compensation. See README.md for the on-robot procedure.
+    gravity_compensation:
+      enabled: true
+      # Blowup guard, not a working limit: the softest gains at full reach
+      # legitimately need ~0.11 rad, so anything past this is a broken model.
+      max_offset_rad: 0.25
+
     # Gains arrays: [kp, ki, kd, ff1, ff2]  (range 0–16383 each)
     #   gains_near = PID+FF gains when arm is retracted (low gravity torque)
     #   gains_far  = PID+FF gains when arm is extended  (high gravity torque)
@@ -18,6 +35,7 @@
     #
     # Gain scheduling always runs. It interpolates between near and far
     # based on end-effector extension. If near == far, no servo writes occur.
+    # gravity_compensation.enabled collapses near/far — see above.
     #
     # Profile (0 = unlimited):
     #   profile_velocity     = max velocity (rev/min units)
@@ -40,6 +58,7 @@
     joint_1:
       servo_id: 1
       motor_type: "XL430-W250"
+      full_pwm_torque_nm: 1.5   # XL430-W250 @ 12V, datasheet stall torque
       position_limits: [-1.5708, 1.5708]
       pwm_limit: 885
       control_mode: 3
@@ -52,6 +71,7 @@
     joint_2:
       servo_id: 2
       motor_type: "XC430-W150"
+      full_pwm_torque_nm: 1.5   # XC430-W150 @ 12V, datasheet stall torque
       position_limits: [-1.5708, 1.22]
       pwm_limit: 885
       control_mode: 3
@@ -64,6 +84,7 @@
     joint_3:
       servo_id: 3
       motor_type: "XL430-W250"
+      full_pwm_torque_nm: 1.5   # XL430-W250 @ 12V, datasheet stall torque
       position_limits: [-1.5708, 1.7453]
       pwm_limit: 885
       control_mode: 3
@@ -76,6 +97,7 @@
     joint_4:
       servo_id: 4
       motor_type: "XC330-M288"
+      full_pwm_torque_nm: 0.93   # XC330-M288 @ 5V, datasheet stall torque
       position_limits: [-1.9199, 1.7453]
       pwm_limit: 885
       control_mode: 3
@@ -88,6 +110,7 @@
     joint_5:
       servo_id: 5
       motor_type: "XC330-M288"
+      full_pwm_torque_nm: 0.93   # XC330-M288 @ 5V, datasheet stall torque
       position_limits: [-1.5708, 1.5708]
       pwm_limit: 885
       control_mode: 3
@@ -129,6 +152,7 @@
     joint_7:
       servo_id: 7
       motor_type: "XC330-M288"
+      full_pwm_torque_nm: 0.93   # XC330-M288 @ 5V, datasheet stall torque
       position_limits: [-0.4363, 0.4363]
       pwm_limit: 885
       current_limit: 500

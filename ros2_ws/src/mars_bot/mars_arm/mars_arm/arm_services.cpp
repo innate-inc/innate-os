@@ -469,8 +469,16 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
 
 int MarsArmNode::logicalAngleToEncoder(double logical_angle_deg) {
     const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-    double angle_deg = head_config.head_direction_reversed ? -logical_angle_deg : logical_angle_deg;
-    double angle_rad = angle_deg * M_PI / 180.0;
+    const double logical_rad = logical_angle_deg * M_PI / 180.0;
+    head_target_rad_ = logical_rad;
+
+    // The head hangs off base_link, not off the arm, so its holding torque
+    // depends on nothing but its own angle — hence the zeroed arm joints.
+    std::vector<double> pose(joint_configs_.size(), 0.0);
+    pose.back() = logical_rad;
+    const double goal_rad = logical_rad + gravityOffsets(pose).back();
+
+    double angle_rad = head_config.head_direction_reversed ? -goal_rad : goal_rad;
     int encoder_value = static_cast<int>((angle_rad / (2 * M_PI)) * 4096 + 2048);
     return encoder_value;
 }

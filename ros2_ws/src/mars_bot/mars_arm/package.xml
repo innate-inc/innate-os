@@ -36,6 +36,7 @@
   <depend>dynamixel_sdk</depend>
   <depend>libfcl-dev</depend>
   <depend>eigen</depend>
+  <depend>urdf</depend>
   <depend>visualization_msgs</depend>
 
   <!-- Python package dependencies (installed via pip-requirements.txt) -->

@@ -290,17 +290,11 @@ void MarsArmNode::controlTimerCallback() {
 
                 robot_->setGoalPos(full_command);
 
-                // Publish command (in radians, external convention)
+                // Publish the limit-clamped command (radians, external convention).
                 sensor_msgs::msg::JointState cmd_msg;
                 cmd_msg.header.stamp = this->now();
                 cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-                cmd_msg.position.resize(6);
-                for (int i = 0; i < 6; ++i) {
-                    double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
-                    if (i == 1 || i == 2 || i == 3 || i == 5)
-                        rad = -rad;
-                    cmd_msg.position[i] = rad;
-                }
+                cmd_msg.position = cmd_vec;
                 arm_command_state_pub_->publish(cmd_msg);
             } else if (has_head_command_.load()) {
                 std::lock_guard<std::mutex> head_lock(head_command_mutex_);
@@ -357,6 +351,20 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
                           robot_->last_write_txrx_us);
 }
 
+std::vector<double> MarsArmNode::gravityOffsets(const std::vector<double>& target) const {
+    std::vector<double> offsets(target.size(), 0.0);
+    if (!gravity_) {
+        return offsets;
+    }
+    const std::vector<double> torques = gravity_->holdingTorques(target);
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        const auto& c = joint_configs_[i];
+        const double offset = gravityGoalOffsetRad(torques[i], c.full_pwm_torque_nm, c.kp);
+        offsets[i] = std::clamp(offset, -gravity_max_offset_rad_, gravity_max_offset_rad_);
+    }
+    return offsets;
+}
+
 std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
     // ===== INTELLIGENT JOINT LIMITS =====
     if (command_data.size() >= 2) {
@@ -396,17 +404,36 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
         command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
     }
 
+    // Gravity compensation: hold the arm a little ABOVE where it is asked to
+    // be, by exactly the position error each servo's P term needs to carry its
+    // own load. command_data stays the asked-for pose (see the header).
+    std::vector<double> pose(command_data);
+    pose.push_back(head_target_rad_.load());
+    const std::vector<double> offsets = gravityOffsets(pose);
+
+    std::vector<double> goals(command_data);
+    for (size_t i = 0; i < goals.size(); ++i) {
+        goals[i] += offsets[i];
+    }
+    if (gravity_) {
+        constexpr double kRadToDeg = 180.0 / M_PI;
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                              "GravComp (deg): J1=%+.2f J2=%+.2f J3=%+.2f J4=%+.2f J5=%+.2f J7=%+.2f",
+                              offsets[0] * kRadToDeg, offsets[1] * kRadToDeg, offsets[2] * kRadToDeg,
+                              offsets[3] * kRadToDeg, offsets[4] * kRadToDeg, offsets[6] * kRadToDeg);
+    }
+
     // Direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
     std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
     for (size_t idx : flip_indices) {
-        if (idx < command_data.size()) {
-            command_data[idx] = -command_data[idx];
+        if (idx < goals.size()) {
+            goals[idx] = -goals[idx];
         }
     }
 
     // Convert to encoder counts
     std::vector<int> command_encoder;
-    for (double pos : command_data) {
+    for (double pos : goals) {
         command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
     }
     return command_encoder;

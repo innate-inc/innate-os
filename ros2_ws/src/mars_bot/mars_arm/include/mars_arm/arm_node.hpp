@@ -13,6 +13,7 @@
 #include "mars_arm/dynamixel.hpp"
 #include "mars_arm/robot.hpp"
 #include "mars_arm/arm_types.hpp"
+#include "mars_arm/gravity.hpp"
 #include "mars_msgs/srv/goto_js.hpp"
 #include "mars_msgs/srv/goto_js_trajectory.hpp"
 #include "mars_msgs/msg/arm_status.hpp"
@@ -39,6 +40,9 @@ class MarsArmNode : public rclcpp::Node {
 
     // ── Configuration (arm_config.cpp) ──────────────────────────────────
     void loadJointConfigs(const std::vector<std::string>& joint_names);
+    // Builds the gravity model, or leaves it null when compensation is off.
+    // Runs before the servos are touched so a bad URDF fails the boot.
+    void setupGravityCompensation();
     rcl_interfaces::msg::SetParametersResult onParameterChange(const std::vector<rclcpp::Parameter>& parameters);
 
     // ── Servo init & helpers (arm_services.cpp) ─────────────────────────
@@ -55,7 +59,15 @@ class MarsArmNode : public rclcpp::Node {
     // ── Control loop (arm_control.cpp) ──────────────────────────────────
     void controlTimerCallback();
     void recordLoopTiming(std::array<std::chrono::steady_clock::time_point, 9>& ts);
+    // Clamps `command_data` (6 joints, external convention) to the joint limits
+    // in place and returns the encoder goals to write. The gravity offset goes
+    // into the goals only, so the clamped command stays what the arm was ASKED
+    // to hold — that is what /mars/arm/command_state reports.
     std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data);
+    // Per-joint goal offsets (rad, external convention) that cancel gravity sag
+    // at `target` under the gains currently in the servos. All zeros when
+    // compensation is off. `target` and the result are 7 long (arm + head).
+    std::vector<double> gravityOffsets(const std::vector<double>& target) const;
 
     // ── Service & topic callbacks (arm_services.cpp) ────────────────────
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
@@ -160,6 +172,13 @@ class MarsArmNode : public rclcpp::Node {
 
     // PID hot-reload
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+
+    // Gravity compensation. Null = off, and then nothing below it is read.
+    std::unique_ptr<GravityModel> gravity_;
+    double gravity_max_offset_rad_ = 0.0;
+    // The head is commanded in encoder counts, but the gravity model speaks the
+    // URDF convention, so its latest target is kept here in radians.
+    std::atomic<double> head_target_rad_{0.0};
 
     // Gain scheduling
     std::array<GainProfile, 7> gs_near_;

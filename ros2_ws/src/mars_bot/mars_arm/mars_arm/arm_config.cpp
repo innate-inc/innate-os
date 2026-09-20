@@ -7,6 +7,7 @@ namespace mars_arm {
 
 void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) {
     RCLCPP_INFO(this->get_logger(), "Loading %zu joint configurations...", joint_names.size());
+    const bool compensated = this->get_parameter("gravity_compensation.enabled").as_bool();
 
     for (size_t i = 0; i < joint_names.size(); ++i) {
         const std::string& jn = joint_names[i];  // e.g. "joint_1"
@@ -21,6 +22,7 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
         this->declare_parameter(jn + ".current_limit", 0);
         this->declare_parameter(jn + ".goal_current", 0);
         this->declare_parameter(jn + ".homing_offset", 0);
+        this->declare_parameter(jn + ".full_pwm_torque_nm", 0.0);
         this->declare_parameter(jn + ".profile_velocity", 0);
         this->declare_parameter(jn + ".profile_acceleration", 0);
         this->declare_parameter(jn + ".gains_near", std::vector<int64_t>{});
@@ -78,6 +80,10 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
         }
 
         config.homing_offset = static_cast<int>(this->get_parameter(jn + ".homing_offset").as_int());
+        config.full_pwm_torque_nm = this->get_parameter(jn + ".full_pwm_torque_nm").as_double();
+        if (config.full_pwm_torque_nm < 0.0) {
+            throw std::runtime_error(jn + ": full_pwm_torque_nm must be positive (or 0 to skip compensation)");
+        }
         config.profile_velocity = static_cast<int>(this->get_parameter(jn + ".profile_velocity").as_int());
         config.profile_acceleration = static_cast<int>(this->get_parameter(jn + ".profile_acceleration").as_int());
 
@@ -111,6 +117,18 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
                 has_teleop_gains = true;
             }
         } catch (...) {
+        }
+
+        // Gravity compensation replaces both halves of the old anti-sag
+        // machinery: the integral term that crept a loaded joint back onto its
+        // target, and the near/far interpolation that stiffened an extended arm
+        // out of its own sag. The offset already scales with 1/kp, so it holds
+        // at whatever gains are loaded — and far == near makes the scheduler's
+        // interpolation a no-op without touching the control loop.
+        if (compensated) {
+            near_gains.ki = 0;
+            teleop_gains.ki = 0;
+            far_gains = near_gains;
         }
 
         // Set joint config gains from near (initial operating gains)
@@ -204,6 +222,10 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             if (suffix == "gains_near") {
                 auto arr = param.as_integer_array();
                 GainProfile g = parseGainsArray(arr);
+                if (gravity_) {
+                    g.ki = 0;  // see loadJointConfigs: compensation replaces the integral term
+                    gs_far_[ji] = g;
+                }
                 gs_near_[ji] = g;
                 joint_configs_[ji].kp = g.kp;
                 joint_configs_[ji].ki = g.ki;
@@ -220,6 +242,9 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                 } catch (...) {
                     gs_far_[ji] = gs_near_[ji];
                 }
+                if (gravity_) {
+                    gs_far_[ji] = gs_near_[ji];
+                }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_far = [%d, %d, %d, %d, %d]", joint_num,
                             gs_far_[ji].kp, gs_far_[ji].ki, gs_far_[ji].kd, gs_far_[ji].ff1, gs_far_[ji].ff2);
             } else if (suffix == "gains_teleop") {
@@ -228,6 +253,9 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                     gs_teleop_[ji] = arr.empty() ? gs_near_[ji] : parseGainsArray(arr);
                 } catch (...) {
                     gs_teleop_[ji] = gs_near_[ji];
+                }
+                if (gravity_) {
+                    gs_teleop_[ji].ki = 0;
                 }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_teleop = [%d, %d, %d, %d, %d]", joint_num,
                             gs_teleop_[ji].kp, gs_teleop_[ji].ki, gs_teleop_[ji].kd, gs_teleop_[ji].ff1,

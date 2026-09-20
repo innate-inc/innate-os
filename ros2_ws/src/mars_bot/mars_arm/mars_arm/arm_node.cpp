@@ -82,6 +82,9 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
+    this->declare_parameter("gravity_compensation.enabled", false);
+    this->declare_parameter("gravity_compensation.max_offset_rad", 0.25);
+    this->declare_parameter("gravity_compensation.urdf_path", std::string(""));
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
@@ -89,6 +92,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 
     // Load joint configurations from sub-parameters (nav2 style)
     loadJointConfigs(joint_names_param);
+    setupGravityCompensation();
 
     // Auto-discover the arm's USB serial device (CH343 1a86:55d3)
     std::string device_name = discoverArmDevice(this->get_logger());
@@ -205,6 +209,41 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 
     // No homing here: the control timer consumes trajectories, and it only
     // fires once the executor spins — after this constructor returns.
+}
+
+void MarsArmNode::setupGravityCompensation() {
+    if (!this->get_parameter("gravity_compensation.enabled").as_bool()) {
+        RCLCPP_INFO(this->get_logger(), "Gravity compensation OFF — sag is fought with gain scheduling");
+        return;
+    }
+    const std::string urdf_path = this->get_parameter("gravity_compensation.urdf_path").as_string();
+    if (urdf_path.empty()) {
+        throw std::runtime_error(
+            "gravity_compensation.enabled but urdf_path is empty — arm.launch.py passes mars_description's "
+            "mars.urdf; a bare `ros2 run mars_arm arm` must pass it too");
+    }
+    // The URDF joints behind config joints 1-7, in chain order.
+    gravity_ = std::make_unique<GravityModel>(
+        urdf_path,
+        std::vector<std::string>{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"});
+    if (joint_configs_.size() != gravity_->size()) {
+        throw std::runtime_error("gravity compensation needs all 7 joints configured, got " +
+                                 std::to_string(joint_configs_.size()));
+    }
+    gravity_max_offset_rad_ = this->get_parameter("gravity_compensation.max_offset_rad").as_double();
+
+    RCLCPP_INFO(this->get_logger(), "Gravity compensation ON from %s (max offset %.1f deg)", urdf_path.c_str(),
+                gravity_max_offset_rad_ * 180.0 / M_PI);
+    for (size_t i = 0; i < joint_configs_.size(); ++i) {
+        const auto& c = joint_configs_[i];
+        if (c.full_pwm_torque_nm <= 0.0) {
+            RCLCPP_INFO(this->get_logger(), "  joint_%zu: no full_pwm_torque_nm — not compensated", i + 1);
+            continue;
+        }
+        const double nm_per_rad = c.kp > 0 ? 1.0 / gravityGoalOffsetRad(1.0, c.full_pwm_torque_nm, c.kp) : 0.0;
+        RCLCPP_INFO(this->get_logger(), "  joint_%zu: %.2f N*m at full PWM, kp=%d -> %.1f N*m/rad", i + 1,
+                    c.full_pwm_torque_nm, c.kp, nm_per_rad);
+    }
 }
 
 }  // namespace mars_arm

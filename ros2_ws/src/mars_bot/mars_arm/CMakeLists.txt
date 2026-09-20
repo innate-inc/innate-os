@@ -17,6 +17,7 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(urdf REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -30,6 +31,7 @@ include_directories(include)
 # Add arm node (dynamixel + robot + arm split into logical modules)
 add_executable(arm
   mars_arm/dynamixel.cpp
+  mars_arm/gravity.cpp
   mars_arm/robot.cpp
   mars_arm/arm_node.cpp
   mars_arm/arm_config.cpp
@@ -40,6 +42,7 @@ add_executable(arm
 
 ament_target_dependencies(arm
   rclcpp
+  urdf
   sensor_msgs
   std_msgs
   std_srvs
@@ -50,6 +53,10 @@ ament_target_dependencies(arm
   geometry_msgs
   trajectory_msgs
 )
+
+# ament_target_dependencies(Eigen3) does not carry the include path; the
+# gravity model is the first thing here to actually include Eigen.
+target_link_libraries(arm Eigen3::Eigen)
 
 target_include_directories(arm PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

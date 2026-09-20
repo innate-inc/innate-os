@@ -27,6 +27,26 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
 
+// ── Gravity compensation: holding torque -> goal-position offset ───────
+// X-series position control drives PWM from position error with
+//   PWM = (Position P Gain / 128) * error[encoder counts]
+// and full-scale PWM (885) commands the motor's full-PWM (stall) torque. So a
+// joint holding `torque` must sit at a steady-state error of that much PWM —
+// which is exactly the offset to ADD to its goal so the link lands on target
+// instead of sagging below it. No integral term, no gain scheduling: the offset
+// scales with 1/kp, so it re-solves itself whenever the gains change.
+static constexpr double kPwmFullScale = 885.0;
+static constexpr double kPositionPGainScale = 128.0;
+static constexpr double kEncoderCountsPerRev = 4096.0;
+
+inline double gravityGoalOffsetRad(double torque_nm, double full_pwm_torque_nm, int kp) {
+    if (kp <= 0 || full_pwm_torque_nm <= 0.0) {
+        return 0.0;
+    }
+    const double counts = torque_nm / full_pwm_torque_nm * kPwmFullScale * kPositionPGainScale / kp;
+    return counts * 2.0 * M_PI / kEncoderCountsPerRev;
+}
+
 inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;
 }
@@ -43,6 +63,10 @@ struct JointConfig {
     // under its own friction.
     int goal_current = 0;
     int homing_offset = 0;
+    // Torque at full PWM (885), N*m. The datasheet stall torque is the starting
+    // point; it is also the one knob that trims this joint's gravity
+    // compensation. 0 = no compensation on this joint.
+    double full_pwm_torque_nm = 0.0;
     int control_mode;
     int kp, ki, kd;
     int ff1 = 0;  // Velocity feedforward gain (addr 78, range 0-16383)

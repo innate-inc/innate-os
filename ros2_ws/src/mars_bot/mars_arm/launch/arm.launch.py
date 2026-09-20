@@ -15,11 +15,15 @@ def generate_launch_description():
     # Get the path to the config file
     config_file = os.path.join(mars_arm_dir, "config", "arm_config.yaml")
 
+    # The arm's gravity model reads the masses and centres of mass from the same
+    # URDF that robot_state_publisher and the sim do.
+    urdf_path = os.path.join(get_package_share_directory("mars_description"), "urdf", "mars.urdf")
+
     mars_arm_node = Node(
         package="mars_arm",
         executable="arm",
         name="mars_arm",
-        parameters=[config_file, *settings_params()],
+        parameters=[config_file, {"gravity_compensation.urdf_path": urdf_path}, *settings_params()],
         output="screen",
     )
 
