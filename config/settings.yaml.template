@@ -133,14 +133,15 @@
 
 # ── Arm ───────────────────────────────────────────────────────────────
 # Gravity compensation commands each joint past its target by the position error its own
-# P term needs to carry the arm's weight, so the link lands where it was asked to. Toggling
-# it here (or from Settings) moves only that offset and takes effect immediately; the gains
-# it replaces -- ki forced to 0, gain scheduling collapsed -- are set at launch.
+# P term needs to carry the arm's weight. It is additive -- gains are untouched -- and OFF by
+# default because it measures worse than the integral gains alone: the arm's steady-state
+# error is dominated by a 3-6 degree friction band per joint, which ki erases and a
+# feedforward cannot see. Live-toggleable, from here or from Settings.
 # mars_arm:
 #   ros__parameters:
 #     max_jerk: 150.0               # rad/s^3 trajectory jerk limit (0 disables)
 #     gravity_compensation:
-#       enabled: true               # false = the old scheduled-gain behaviour
+#       enabled: false              # see mars_arm/README.md for the measurements
 
 # ── Camera: main (stereo; hardware only) ──────────────────────────────
 # Resolution is staged: the sensor captures the full side-by-side stereo frame at

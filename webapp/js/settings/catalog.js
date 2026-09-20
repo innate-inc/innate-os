@@ -311,7 +311,7 @@ export const SETTINGS_PAGES = [
         title: "Arm",
         knobs: [
           { path: ["mars_arm", P, "max_jerk"], label: "Max jerk", default: 150, type: "float", unit: "rad/s³", doc: "Trajectory jerk limit (0 disables)" },
-          { path: ["mars_arm", P, "gravity_compensation", "enabled"], label: "Gravity compensation", default: true, type: "bool", live: "/mars_arm", doc: "Command each joint past its target by the sag its own position gain causes, so the arm holds where it was asked to. Turning it off here restores the sag but not the integral gain and gain scheduling it replaced — those are set at launch" },
+          { path: ["mars_arm", P, "gravity_compensation", "enabled"], label: "Gravity compensation", default: false, type: "bool", live: "/mars_arm", doc: "Command each joint past its target by the sag its own position gain causes. Off by default: measured on the real arm it lands twice as far from its target as the integral gains already do, because the error that dominates is a 3-6° friction band per joint, which an integral term erases and a feedforward cannot see" },
         ],
       },
     ],
