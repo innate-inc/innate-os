@@ -212,15 +212,16 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 }
 
 void MarsArmNode::setupGravityCompensation() {
-    if (!this->get_parameter("gravity_compensation.enabled").as_bool()) {
-        RCLCPP_INFO(this->get_logger(), "Gravity compensation OFF — sag is fought with gain scheduling");
-        return;
-    }
+    const bool enabled = this->get_parameter("gravity_compensation.enabled").as_bool();
     const std::string urdf_path = this->get_parameter("gravity_compensation.urdf_path").as_string();
     if (urdf_path.empty()) {
-        throw std::runtime_error(
-            "gravity_compensation.enabled but urdf_path is empty — arm.launch.py passes mars_description's "
-            "mars.urdf; a bare `ros2 run mars_arm arm` must pass it too");
+        if (enabled) {
+            throw std::runtime_error(
+                "gravity_compensation.enabled but urdf_path is empty — arm.launch.py passes mars_description's "
+                "mars.urdf; a bare `ros2 run mars_arm arm` must pass it too");
+        }
+        RCLCPP_WARN(this->get_logger(), "No gravity_compensation.urdf_path — compensation cannot be switched on");
+        return;
     }
     // The URDF joints behind config joints 1-7, in chain order.
     gravity_ = std::make_unique<GravityModel>(
@@ -231,9 +232,11 @@ void MarsArmNode::setupGravityCompensation() {
                                  std::to_string(joint_configs_.size()));
     }
     gravity_max_offset_rad_ = this->get_parameter("gravity_compensation.max_offset_rad").as_double();
+    gravity_active_ = enabled;
 
-    RCLCPP_INFO(this->get_logger(), "Gravity compensation ON from %s (max offset %.1f deg)", urdf_path.c_str(),
-                gravity_max_offset_rad_ * 180.0 / M_PI);
+    RCLCPP_INFO(this->get_logger(), "Gravity compensation %s from %s (max offset %.1f deg)",
+                enabled ? "ON" : "loaded but OFF", urdf_path.c_str(),
+                gravity_max_offset_rad_.load() * 180.0 / M_PI);
     for (size_t i = 0; i < joint_configs_.size(); ++i) {
         const auto& c = joint_configs_[i];
         if (c.full_pwm_torque_nm <= 0.0) {

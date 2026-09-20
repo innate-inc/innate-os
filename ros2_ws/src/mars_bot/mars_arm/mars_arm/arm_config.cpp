@@ -7,7 +7,7 @@ namespace mars_arm {
 
 void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) {
     RCLCPP_INFO(this->get_logger(), "Loading %zu joint configurations...", joint_names.size());
-    const bool compensated = this->get_parameter("gravity_compensation.enabled").as_bool();
+    gravity_gain_policy_ = this->get_parameter("gravity_compensation.enabled").as_bool();
 
     for (size_t i = 0; i < joint_names.size(); ++i) {
         const std::string& jn = joint_names[i];  // e.g. "joint_1"
@@ -125,7 +125,7 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
         // out of its own sag. The offset already scales with 1/kp, so it holds
         // at whatever gains are loaded — and far == near makes the scheduler's
         // interpolation a no-op without touching the control loop.
-        if (compensated) {
+        if (gravity_gain_policy_) {
             near_gains.ki = 0;
             teleop_gains.ki = 0;
             far_gains = near_gains;
@@ -200,6 +200,33 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             continue;
         }
 
+        // Switching the offsets mid-pose is how compensation gets judged on a
+        // real arm: the joints visibly rise or settle. Only the offsets move —
+        // the gains they replaced were written at boot.
+        if (name == "gravity_compensation.enabled") {
+            const bool on = param.as_bool();
+            if (on && !gravity_) {
+                result.successful = false;
+                result.reason = "no gravity model — the node booted without gravity_compensation.urdf_path";
+                continue;
+            }
+            gravity_active_ = on;
+            RCLCPP_INFO(this->get_logger(), "Hot-reload: gravity compensation %s", on ? "ON" : "OFF");
+            if (on != gravity_gain_policy_) {
+                RCLCPP_WARN(this->get_logger(),
+                            "Gains still follow the boot setting (ki %s, gain scheduling %s) — restart to change it",
+                            gravity_gain_policy_ ? "forced to 0" : "as configured",
+                            gravity_gain_policy_ ? "collapsed" : "active");
+            }
+            continue;
+        }
+        if (name == "gravity_compensation.max_offset_rad") {
+            gravity_max_offset_rad_ = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Hot-reload: gravity compensation max offset = %.1f deg",
+                        gravity_max_offset_rad_.load() * 180.0 / M_PI);
+            continue;
+        }
+
         // Match pattern: joint_N.<suffix>
         if (name.size() >= 8 && name.substr(0, 6) == "joint_") {
             size_t dot = name.find('.', 6);
@@ -222,7 +249,7 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             if (suffix == "gains_near") {
                 auto arr = param.as_integer_array();
                 GainProfile g = parseGainsArray(arr);
-                if (gravity_) {
+                if (gravity_gain_policy_) {
                     g.ki = 0;  // see loadJointConfigs: compensation replaces the integral term
                     gs_far_[ji] = g;
                 }
@@ -242,7 +269,7 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                 } catch (...) {
                     gs_far_[ji] = gs_near_[ji];
                 }
-                if (gravity_) {
+                if (gravity_gain_policy_) {
                     gs_far_[ji] = gs_near_[ji];
                 }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_far = [%d, %d, %d, %d, %d]", joint_num,
@@ -254,7 +281,7 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
                 } catch (...) {
                     gs_teleop_[ji] = gs_near_[ji];
                 }
-                if (gravity_) {
+                if (gravity_gain_policy_) {
                     gs_teleop_[ji].ki = 0;
                 }
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_teleop = [%d, %d, %d, %d, %d]", joint_num,

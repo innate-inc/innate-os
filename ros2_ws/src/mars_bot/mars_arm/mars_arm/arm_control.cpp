@@ -353,14 +353,14 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
 
 std::vector<double> MarsArmNode::gravityOffsets(const std::vector<double>& target) const {
     std::vector<double> offsets(target.size(), 0.0);
-    if (!gravity_) {
+    if (!gravity_ || !gravity_active_) {
         return offsets;
     }
+    const double limit = gravity_max_offset_rad_.load();
     const std::vector<double> torques = gravity_->holdingTorques(target);
     for (size_t i = 0; i < offsets.size(); ++i) {
         const auto& c = joint_configs_[i];
-        const double offset = gravityGoalOffsetRad(torques[i], c.full_pwm_torque_nm, c.kp);
-        offsets[i] = std::clamp(offset, -gravity_max_offset_rad_, gravity_max_offset_rad_);
+        offsets[i] = std::clamp(gravityGoalOffsetRad(torques[i], c.full_pwm_torque_nm, c.kp), -limit, limit);
     }
     return offsets;
 }
@@ -415,7 +415,7 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
     for (size_t i = 0; i < goals.size(); ++i) {
         goals[i] += offsets[i];
     }
-    if (gravity_) {
+    if (gravity_active_) {
         constexpr double kRadToDeg = 180.0 / M_PI;
         RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                               "GravComp (deg): J1=%+.2f J2=%+.2f J3=%+.2f J4=%+.2f J5=%+.2f J7=%+.2f",

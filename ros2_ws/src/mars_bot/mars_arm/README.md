@@ -58,8 +58,26 @@ stiction as well as its nominal meaning.
    direct measurement the sim's `STRUCT_STIFFNESS` / `ARM_BACKLASH_RAD` are still guessing at
    (`mars_sim_driver/world.py`).
 
-`gravity_compensation.enabled: false` restores the old behaviour — scheduled gains, integral
-terms and all — in one line.
+### Turning it on and off against a held pose
+
+`gravity_compensation.enabled` is live. Put the arm somewhere loaded, then flip it:
+
+```
+ros2 param set /mars_arm gravity_compensation.enabled false
+```
+
+— or use Settings → Safety & hardware → Arm, or edit `arm_config.yaml` with
+`pid_hot_reload.py` running. The joints visibly settle when it goes off and rise when it
+comes back, which is the whole measurement.
+
+That switch moves **only the offsets**. The gains compensation replaced — `ki` forced to 0,
+`gains_far := gains_near` — are written once at launch and stay put, so a live "off" is
+"these gains, no compensation", not the pre-compensation tuning. For that, set
+`enabled: false` in `arm_config.yaml` and restart: it restores scheduled gains, integral
+terms and all.
+
+The model itself loads whenever `gravity_compensation.urdf_path` is set, so the switch works
+in both directions regardless of which way the node booted.
 
 ### Where the URDF numbers come from
 

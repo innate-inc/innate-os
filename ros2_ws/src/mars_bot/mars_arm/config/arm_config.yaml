@@ -22,6 +22,11 @@
     # full_pwm_torque_nm per joint is the only knob: the datasheet stall
     # torque is the starting point, and trimming it up/down trims that joint's
     # compensation. See README.md for the on-robot procedure.
+    #
+    # `enabled` is live: set it while the arm holds a pose (Settings > Safety &
+    # hardware > Arm, or `ros2 param set /mars_arm gravity_compensation.enabled
+    # false`) and the joints visibly settle. Only the offsets move that way —
+    # the gains are written at launch.
     gravity_compensation:
       enabled: true
       # Blowup guard, not a working limit: the softest gains at full reach

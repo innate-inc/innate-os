@@ -173,9 +173,15 @@ class MarsArmNode : public rclcpp::Node {
     // PID hot-reload
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
-    // Gravity compensation. Null = off, and then nothing below it is read.
+    // Gravity compensation. The model is built whenever a URDF path is given,
+    // so the offsets can be switched on and off against a held pose at runtime
+    // (ros2 param set gravity_compensation.enabled) without a restart.
     std::unique_ptr<GravityModel> gravity_;
-    double gravity_max_offset_rad_ = 0.0;
+    std::atomic<bool> gravity_active_{false};
+    std::atomic<double> gravity_max_offset_rad_{0.0};
+    // Whether BOOT zeroed ki and flattened the gains. Not switchable: those
+    // gains are written once, and joints 5-7 are outside the scheduler's reach.
+    bool gravity_gain_policy_ = false;
     // The head is commanded in encoder counts, but the gravity model speaks the
     // URDF convention, so its latest target is kept here in radians.
     std::atomic<double> head_target_rad_{0.0};
