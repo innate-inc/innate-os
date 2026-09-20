@@ -15,20 +15,23 @@
     # The arm's holding torque is computed from mars.urdf and turned into a
     # goal-position offset — each joint is commanded exactly as far past its
     # target as its own P term needs to carry the load (see arm_types.hpp).
-    # With it on, ki is forced to 0 and gains_far is ignored (far := near):
-    # sag no longer depends on the gains, so it no longer needs scheduling or
-    # an integral term. Turn it off to get the old behaviour back.
+    # It is purely additive: gains, including ki, are whatever this file says.
     #
-    # full_pwm_torque_nm per joint is the only knob: the datasheet stall
-    # torque is the starting point, and trimming it up/down trims that joint's
-    # compensation. See README.md for the on-robot procedure.
+    # OFF by default, because it loses to the integral gains. Measured over the
+    # same nine held poses (/debug/arm-tracking.html), gripper error was 6.5mm
+    # with ki and no compensation, 16.5mm with compensation and ki=0, and 44mm
+    # with neither. The arm's steady-state error is dominated by a 3-6 degree
+    # friction band per joint, not by gravity: an integral term winds up until
+    # the joint breaks free, and a feedforward cannot see friction at all.
+    # Joint 1 is the proof — no gravity torque on it whatsoever, 1.3 degrees of
+    # error without ki and 0.28 with it. See README.md.
     #
-    # `enabled` is live: set it while the arm holds a pose (Settings > Safety &
-    # hardware > Arm, or `ros2 param set /mars_arm gravity_compensation.enabled
-    # false`) and the joints visibly settle. Only the offsets move that way —
-    # the gains are written at launch.
+    # `enabled` is live (Settings > Safety & hardware > Arm, or
+    # `ros2 param set /mars_arm gravity_compensation.enabled true`), so it can
+    # be switched against a held pose. full_pwm_torque_nm per joint is the
+    # trim; the fitted values are in README.md.
     gravity_compensation:
-      enabled: true
+      enabled: false
       # Blowup guard, not a working limit: the softest gains at full reach
       # legitimately need ~0.11 rad, so anything past this is a broken model.
       max_offset_rad: 0.25
@@ -40,7 +43,6 @@
     #
     # Gain scheduling always runs. It interpolates between near and far
     # based on end-effector extension. If near == far, no servo writes occur.
-    # gravity_compensation.enabled collapses near/far — see above.
     #
     # Profile (0 = unlimited):
     #   profile_velocity     = max velocity (rev/min units)

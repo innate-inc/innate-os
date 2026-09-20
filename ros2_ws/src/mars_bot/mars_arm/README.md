@@ -28,15 +28,43 @@ position error as `PWM = (kp / 128) · error[counts]`, and full-scale PWM (885) 
 motor's full-PWM torque. Invert it (`gravityGoalOffsetRad` in `arm_types.hpp`) and you get
 the offset to *add* to the goal so the link lands on the target instead of below it.
 
-The offset scales with `1/kp`, so it re-solves itself whenever the gains change. That is what
-makes the rest of the anti-sag machinery unnecessary:
+The offset scales with `1/kp`, so it re-solves itself whenever the gains change.
 
-- **No integral gain.** `ki` existed to creep a loaded joint back onto its target. With
-  `gravity_compensation.enabled` the node forces `ki` to 0 everywhere.
-- **No gain scheduling.** `gains_far` stiffened an extended arm out of its own sag; the node
-  now sets `far := near`, which makes the scheduler's interpolation a no-op.
-- **Soft gains stop sagging.** The teleop gains were the worst case (up to 46 mm); they are
-  now compensated like any other, which is why sag no longer argues with compliance.
+### It is off by default, because it loses to the integral gains
+
+Measured on the real arm over nine held poses, identical in each run
+(`/debug/arm-tracking.html`), RMS gripper error and mean droop:
+
+| configuration | gripper error | droop | settles under 10 mm |
+|---|---|---|---|
+| `ki` on, no compensation (the original) | **6.5 mm** | **−0.9 mm** | 9 of 9 dwells |
+| compensation on, `ki` forced to 0 | 16.5 mm | −6.1 mm | 1 of 9 |
+| neither | 44.1 mm | −32.9 mm | 1 of 9 |
+
+Both mechanisms are worth a lot against nothing at all. But the integral term is twice as
+good as compensation, and it wins the transient too — 8.3 mm at 0.1 s after the command
+settles, against 15.4 mm, and it keeps improving where compensation is flat forever.
+
+The reason is that **gravity is not what dominates this arm's steady-state error.** Each joint
+has a friction band 3–6° wide at teleop gains, wider than the sag itself: where a joint lands
+depends on which way it last moved. Adding the approach direction to a fit of error against
+gravity torque lifts R² from 0.22–0.35 to 0.76–0.95. An integral term erases that, because it
+winds up until the joint breaks free; a feedforward cannot see friction at all, only gravity.
+Joint 1 is the clean proof — it carries no gravity torque whatsoever, yet sits 1.3° off its
+target without `ki` and 0.28° off with it.
+
+So compensation is now purely additive: it changes goal positions and nothing else. `ki`,
+`gains_far` and gain scheduling are whatever `arm_config.yaml` says, compensated or not.
+
+**What it is still good for.** The gravity model itself is exact (see above) and independent of
+all this: it is what the sim compensates against, and it is the thing to reach for if the arm
+ever gets a current-control mode, a payload estimate, or a torque-limit check. And if the
+friction is ever reduced — a different geartrain, a stiffer cable run — the balance above could
+change, so the switch is left in place.
+
+The fitted trims from that session, if compensation is ever turned back on: `joint_2` 1.25,
+`joint_3` 1.14, `joint_4` 1.01 N·m. They come from the direction-corrected slopes, so they are
+the gravity part alone, and they say the datasheet stall torques were within about 25%.
 
 ### Calibrating it on the robot
 
@@ -44,8 +72,8 @@ makes the rest of the anti-sag machinery unnecessary:
 trimming it trims that joint's compensation — it absorbs voltage sag, gear efficiency and
 stiction as well as its nominal meaning.
 
-1. `ros2 launch mars_arm arm.launch.py`, and check the boot lines: each compensated joint
-   logs its full-PWM torque, its `kp`, and the resulting stiffness in N·m/rad.
+1. Turn it on (`gravity_compensation.enabled`), then check the boot lines: each compensated
+   joint logs its full-PWM torque, its `kp`, and the resulting stiffness in N·m/rad.
 2. Watch the offsets the model is actually applying: raise the node's log level to debug and
    read the throttled `GravComp (deg)` line, one entry per second.
 3. Measure it: open `/debug/arm-tracking.html` on the robot and hit **Run sweep**. It drives
