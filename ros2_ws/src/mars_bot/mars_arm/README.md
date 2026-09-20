@@ -87,9 +87,13 @@ stiction as well as its nominal meaning.
    (what the encoders read) and reports RMS error per joint plus the distance the gripper
    actually missed by, in mm.
 
-   Read the **held** column. Sag is a steady-state error, so it only exists while the arm is
-   holding; hand teleop never stops moving and measures tracking lag instead. A 35 s hand
-   session yielded 14 usable samples, a sweep yields ~800.
+   Read the **signed mean, held** column — that is the number to trim against. Each pose is
+   approached from both sides, so the friction band cancels there and what is left is what
+   gravity is still getting wrong. The RMS columns keep the band in, because it is part of how
+   far the arm really lands. Sag is a steady-state error, so it only exists while the arm is
+   holding; hand teleop never stops moving and measures tracking lag instead — a 35 s hand
+   session yielded 14 usable samples, a sweep yields ~1700 across 18 dwells, and takes
+   about 100 s.
 4. A joint that still sags wants a **smaller** `full_pwm_torque_nm`; one that overshoots its
    target wants a **larger** one. The relationship is linear, so one correction converges.
 

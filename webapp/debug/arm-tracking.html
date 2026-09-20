@@ -224,6 +224,14 @@
   ];
   const SWEEP_MAX_RATE = 0.6;   // rad/s ceiling on every glide
   const SWEEP_RAMP_S = 1.2;     // floor on a glide, so short hops are not instant
+  // Every pose is approached twice, once from each side. The joints have a friction
+  // band 3-6 degrees wide at teleop gains -- larger than the sag being measured -- so
+  // where a joint LANDS depends on which way it last moved. Averaging the two
+  // approaches cancels that and leaves the part gravity is responsible for; without
+  // it the approach direction explains more of the error than gravity does.
+  const SWEEP_DITHER_RAD = 0.15;   // comfortably wider than the band
+  const SWEEP_DITHER_JOINTS = [1, 2, 3];
+  const SWEEP_BACKOFF_S = 0.4;     // dwell at the dither point, just to settle there
   const SWEEP_HOLD_S = 2.0;
   const SWEEP_RATE_HZ = 20;
   const MIN_HELD_SAMPLES = 60;  // below this the held figures are anecdotes, not statistics
@@ -361,6 +369,10 @@
   let live = { names: [], t: [], cmd: [], pos: [], vel: [] };
   let latest = null;          // newest /mars/arm/state sample
   let recording = null;       // the run being filled, or null
+  // True only while the sweep is dwelling ON a measurement pose. The back-off it
+  // approaches from is a held pose by every other test, and counting it would put
+  // samples 0.15 rad from the target into the statistics.
+  let measuring = false;
   const runs = [null, null];  // slots A and B
 
   const ros = new Rws();
@@ -385,7 +397,10 @@
     if (!live.names.length) live.names = msg.name.slice(0, ARM_JOINTS);
     push(live, t, cmd, latest.pos, latest.vel);
     while (live.t.length > 2 && live.t[live.t.length - 1] - live.t[0] > LIVE_WINDOW_S) shift(live);
-    if (recording) push(recording, t, cmd, latest.pos, latest.vel);
+    if (recording) {
+      push(recording, t, cmd, latest.pos, latest.vel);
+      recording.tag.push(measuring ? 1 : 0);
+    }
   }
 
   function push(run, t, cmd, pos, vel) { run.t.push(t); run.cmd.push(cmd); run.pos.push(pos); run.vel.push(vel); }
@@ -394,6 +409,7 @@
   /** Samples where the command has been still for SETTLE_S and the arm has stopped. */
   function heldMask(run) {
     const out = new Array(run.t.length).fill(false);
+    const gated = run.sweep && run.tag;
     let lastChange = run.t[0] ?? 0;
     for (let i = 0; i < run.t.length; i++) {
       if (i > 0) {
@@ -403,7 +419,8 @@
       }
       let speed = 0;
       for (let j = 0; j < ARM_JOINTS; j++) speed = Math.max(speed, Math.abs(run.vel[i][j]));
-      out[i] = run.t[i] - lastChange >= SETTLE_S && speed <= VEL_STILL_RAD_S;
+      out[i] = run.t[i] - lastChange >= SETTLE_S && speed <= VEL_STILL_RAD_S
+        && (!gated || run.tag[i] === 1);
     }
     return out;
   }
@@ -436,10 +453,14 @@
   function summarise(run) {
     const mask = heldMask(run);
     const heldCount = mask.reduce((a, v) => a + (v ? 1 : 0), 0);
+    const mean = (values) => (values.length ? values.reduce((a, v) => a + v, 0) / values.length : NaN);
     const joints = run.names.map((name, j) => ({
       name,
       all: rms(jointErrors(run, j, null)),
       held: rms(jointErrors(run, j, mask)),
+      // Signed: with each pose approached from both sides the friction band cancels
+      // here, so this is the part gravity is still getting wrong.
+      bias: mean(jointErrors(run, j, mask)),
     }));
     const gripAll = gripperErrors(run, null);
     const gripHeld = gripperErrors(run, mask);
@@ -451,9 +472,7 @@
       gripper: gripAll && gripHeld ? {
         all: rms(gripAll.distance),
         held: rms(gripHeld.distance),
-        droop: gripHeld.vertical.length
-          ? gripHeld.vertical.reduce((a, v) => a + v, 0) / gripHeld.vertical.length
-          : NaN,
+        bias: mean(gripHeld.vertical),   // droop: signed, so it survives the friction band
       } : null,
     };
   }
@@ -561,41 +580,33 @@
       .filter(([, s]) => s && s.heldCount < MIN_HELD_SAMPLES)
       .map(([letter]) => `run ${letter}`);
 
-    const rows = (sa || sb).joints.map((_, j) => `
-      <tr>
-        <td>${(sa || sb).joints[j].name}</td>
-        <td>${sa ? fmt(sa.joints[j].held) : "—"}</td>
-        <td>${sb ? fmt(sb.joints[j].held) : "—"}</td>
-        ${sa && sb ? deltaCell(sa.joints[j].held, sb.joints[j].held, 0.02, 3) : "<td>—</td>"}
-        <td>${sa ? fmt(sa.joints[j].all) : "—"}</td>
-        <td>${sb ? fmt(sb.joints[j].all) : "—"}</td>
-      </tr>`).join("");
+    const cells = (pick, digits, floor) => `
+        <td>${sa ? fmt(pick(sa).held, digits) : "—"}</td>
+        <td>${sb ? fmt(pick(sb).held, digits) : "—"}</td>
+        ${sa && sb ? deltaCell(pick(sa).held, pick(sb).held, floor, digits) : "<td>—</td>"}
+        <td>${sa ? fmt(pick(sa).bias, digits) : "—"}</td>
+        <td>${sb ? fmt(pick(sb).bias, digits) : "—"}</td>
+        <td>${sa ? fmt(pick(sa).all, digits) : "—"}</td>
+        <td>${sb ? fmt(pick(sb).all, digits) : "—"}</td>`;
 
-    const grip = (sa?.gripper || sb?.gripper) ? `
-      <tr class="total">
-        <td>gripper, mm</td>
-        <td>${sa?.gripper ? fmt(sa.gripper.held, 1) : "—"}</td>
-        <td>${sb?.gripper ? fmt(sb.gripper.held, 1) : "—"}</td>
-        ${sa?.gripper && sb?.gripper ? deltaCell(sa.gripper.held, sb.gripper.held, 0.2, 1) : "<td>—</td>"}
-        <td>${sa?.gripper ? fmt(sa.gripper.all, 1) : "—"}</td>
-        <td>${sb?.gripper ? fmt(sb.gripper.all, 1) : "—"}</td>
-      </tr>
-      <tr>
-        <td>gripper droop, mm</td>
-        <td>${sa?.gripper ? fmt(sa.gripper.droop, 1) : "—"}</td>
-        <td>${sb?.gripper ? fmt(sb.gripper.droop, 1) : "—"}</td>
-        <td>—</td><td>—</td><td>—</td>
-      </tr>` : "";
+    const rows = (sa || sb).joints.map((_, j) => `
+      <tr><td>${(sa || sb).joints[j].name}</td>${cells((x) => x.joints[j], 3, 0.02)}</tr>`).join("");
+
+    const grip = (sa?.gripper || sb?.gripper)
+      ? `<tr class="total"><td>gripper, mm</td>${cells((x) => x.gripper || {}, 1, 0.2)}</tr>`
+      : "";
 
     host.innerHTML = `
       <table>
         <thead>
           <tr>
             <th rowspan="2">joint</th>
-            <th colspan="3">RMS error held (deg)</th>
-            <th colspan="2">RMS error all samples (deg)</th>
+            <th colspan="3">RMS error, held</th>
+            <th colspan="2">signed mean, held</th>
+            <th colspan="2">RMS error, all samples</th>
           </tr>
-          <tr><th>${head(sa, "A")}</th><th>${head(sb, "B")}</th><th>Δ A−B</th><th>A</th><th>B</th></tr>
+          <tr><th>${head(sa, "A")}</th><th>${head(sb, "B")}</th><th>Δ A−B</th>
+              <th>A</th><th>B</th><th>A</th><th>B</th></tr>
         </thead>
         <tbody>${rows}${grip}</tbody>
       </table>
@@ -606,8 +617,12 @@
       <p class="note">Held = command still for ${SETTLE_S}s and every joint under
         ${VEL_STILL_RAD_S} rad/s. Δ is A minus B on the held figure, in that row's units; green
         means A is closer to its target. Gripper error is forward kinematics on the same mars.urdf the arm node uses,
-        so it is the distance the hand actually missed by. Droop is the mean of its vertical
-        component while held — negative is hanging below the target.</p>`;
+        so it is the distance the hand actually missed by; its signed mean is vertical, so
+        negative means hanging below the target.</p>
+      <p class="note"><b>Signed mean</b> is the number to trim against. Each pose is approached
+        from both sides, so the joints' friction band — 3-6° wide at teleop gains, wider than the
+        sag itself — cancels here and leaves what gravity is still getting wrong. The RMS columns
+        keep the band in, because it is part of how far the arm really lands from its target.</p>`;
   }
 
   // ── compensation state ───────────────────────────────────────────────
@@ -678,7 +693,7 @@
   }
 
   function startRecording() {
-    recording = { names: live.names.slice(), compensated, t: [], cmd: [], pos: [], vel: [] };
+    recording = { names: live.names.slice(), compensated, t: [], cmd: [], pos: [], vel: [], tag: [] };
     recordButton.textContent = "Stop";
     recordButton.classList.add("recording");
   }
@@ -756,14 +771,30 @@
     startRecording();
     recording.sweep = true;
 
+    const dithered = (pose, sign) => {
+      const out = pose.slice();
+      for (const j of SWEEP_DITHER_JOINTS) out[j] += sign * SWEEP_DITHER_RAD;
+      return out;
+    };
+
     let from = latest.pos.slice();
     for (let i = 0; i < sweepPoses.length && !abortSweep; i++) {
-      sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · moving`;
-      await glide(from, sweepPoses[i]);
-      if (abortSweep) break;
-      sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · holding`;
-      await dwell(sweepPoses[i], SWEEP_HOLD_S);
-      from = sweepPoses[i];
+      const pose = sweepPoses[i];
+      for (const sign of [1, -1]) {
+        if (abortSweep) break;
+        const label = `pose ${i + 1}/${sweepPoses.length} ${sign > 0 ? "from above" : "from below"}`;
+        sweepStatus.textContent = `${label} · moving`;
+        const back = dithered(pose, sign);
+        await glide(from, back);
+        await dwell(back, SWEEP_BACKOFF_S);
+        await glide(back, pose);
+        if (abortSweep) break;
+        sweepStatus.textContent = `${label} · holding`;
+        measuring = true;
+        await dwell(pose, SWEEP_HOLD_S);
+        measuring = false;
+        from = pose;
+      }
     }
     if (!abortSweep) {
       sweepStatus.textContent = "returning";
@@ -771,6 +802,7 @@
       await dwell(startedAt, 0.5);
     }
 
+    measuring = false;
     stopRecording();
     sweeping = false;
     abortSweep = false;
@@ -808,6 +840,8 @@
       compensated: run.compensated,
       names: run.names,
       t: run.t.map((v) => +(v - run.t[0]).toFixed(4)),
+      sweep: !!run.sweep,
+      tag: run.tag,
       cmd: run.cmd,
       pos: run.pos,
       vel: run.vel,
