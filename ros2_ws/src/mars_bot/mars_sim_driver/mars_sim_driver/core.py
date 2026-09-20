@@ -60,6 +60,9 @@ SHADOWS = (
 
 # Arm/head PD servo -- apartmentWorker.ts's tuned defaults (reactive feel),
 # torque-clamped; the URDF's per-joint damping=5 caps speed at LIMIT/5 rad/s.
+# This gain no longer sets how far the arm sags: _apply_control cancels the
+# gravity droop the same way mars_arm does, so it is free to stay a
+# sim-stability number rather than track the servos' real position gains.
 KP_JOINT = 50.0
 KD_JOINT = 1.0
 EFFORT_LIMIT = 50.0  # N*m
@@ -349,6 +352,11 @@ class VirtualMars:
         self._servo = {dadr: (KD_JOINT, EFFORT_LIMIT) for _q, dadr, _home in self._joints.values()}
         for dadr in (self._joints[mimic_source][1], self._mimic[1]):
             self._servo[dadr] = (KD_GRIPPER, GRIPPER_EFFORT_LIMIT)
+        # arm_control.cpp commands each joint PAST its target by the position
+        # error its own P term needs to carry the load. qfrc_bias is that load,
+        # so the identical cancellation is exact here. The gripper is left out:
+        # on the robot it runs current-capped, with no position gain to invert.
+        self._compensated = {dadr for name, (_q, dadr, _home) in self._joints.items() if name != mimic_source}
 
         # Props are parked off-map in the model, so they exist only once
         # something places them (and only then does anything report them).
@@ -472,9 +480,12 @@ class VirtualMars:
             # Structural sag (world.STRUCT_STIFFNESS / ARM_BACKLASH_RAD):
             # the LINK settles below the encoder target under gravity load
             # (qfrc_bias ~= gravity torque at the near-static poses where
-            # sag matters).
+            # sag matters). Gravity compensation cannot see past the encoder,
+            # so this is what survives it (see self._compensated).
             bias = d.qfrc_bias[dadr]
             target -= bias / world.STRUCT_STIFFNESS + world.ARM_BACKLASH_RAD * math.tanh(bias / world.BACKLASH_TANH_NM)
+            if dadr in self._compensated:
+                target += bias / KP_JOINT
             kd, limit = self._servo[dadr]
             torque = KP_JOINT * (target - d.qpos[qadr]) - kd * d.qvel[dadr]
             d.qfrc_applied[dadr] = max(-limit, min(limit, torque))

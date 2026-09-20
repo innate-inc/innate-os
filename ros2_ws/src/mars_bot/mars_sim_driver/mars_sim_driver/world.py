@@ -78,8 +78,11 @@ FINGER_ARMATURE = 1e-4
 # Structural sag past the encoders (gear play, link flex): the link settles
 # gravity_torque/STRUCT_STIFFNESS + ARM_BACKLASH_RAD below the servo angle.
 # /joint_states reports ENCODER-side angles (core.encoder_positions), so the
-# sag is invisible to FK, like on the machine. Estimates (~19mm at the pick
-# pose) until measured on a real arm.
+# sag is invisible to FK, like on the machine. This is the one sag term the
+# arm's gravity compensation cannot reach -- the encoder is upstream of it --
+# and with compensation on the robot it is also the only sag LEFT there, so
+# what the real arm misses by is now a direct measurement of these two.
+# Estimates (~19mm at the pick pose) until that measurement is taken.
 STRUCT_STIFFNESS = 25.0  # N*m/rad, per arm joint
 # Geartrain free play, tanh-smoothed so unloaded joints get none.
 ARM_BACKLASH_RAD = 0.055
