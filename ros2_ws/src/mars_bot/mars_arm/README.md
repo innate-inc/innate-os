@@ -48,16 +48,23 @@ stiction as well as its nominal meaning.
    logs its full-PWM torque, its `kp`, and the resulting stiffness in N·m/rad.
 2. Watch the offsets the model is actually applying: raise the node's log level to debug and
    read the throttled `GravComp (deg)` line, one entry per second.
-3. Measure it: open `/debug/arm-tracking.html` on the robot, record a teleop session with
-   compensation on and another with it off, and read the table. It pairs
-   `/mars/arm/command_state` (what the arm was asked to hold) with `/mars/arm/state` (what
-   the encoders read), and reports RMS error per joint plus the distance the gripper
-   actually missed by, in mm. The figure to read is the **held** one — a moving arm trails
-   its setpoint by a lag compensation does not address, and averaging that in buries the
-   effect. The page can also flip compensation itself, so an A/B is two recordings without
-   touching a terminal.
+3. Measure it: open `/debug/arm-tracking.html` on the robot and hit **Run sweep**. It drives
+   the arm through eight poses around where it is parked, pausing at each, then repeats the
+   *identical* poses after you flip compensation — so the two runs differ in one thing. It
+   pairs `/mars/arm/command_state` (what the arm was asked to hold) with `/mars/arm/state`
+   (what the encoders read) and reports RMS error per joint plus the distance the gripper
+   actually missed by, in mm.
+
+   Read the **held** column. Sag is a steady-state error, so it only exists while the arm is
+   holding; hand teleop never stops moving and measures tracking lag instead. A 35 s hand
+   session yielded 14 usable samples, a sweep yields ~800.
 4. A joint that still sags wants a **smaller** `full_pwm_torque_nm`; one that overshoots its
    target wants a **larger** one. The relationship is linear, so one correction converges.
+
+   Calibrate against a **live** toggle, not a restart. Restarting with `enabled: false`
+   restores the integral gains, and an integral term erases steady-state error by itself —
+   so that comparison answers "is the new config better than the old one", not "is the model
+   right". Toggling live holds the gains still and leaves the offset as the only variable.
 5. Whatever is left after that is deflection *past* the encoder — gear play and link flex,
    which no goal offset can reach, because the servo cannot see it. That residual is the
    direct measurement the sim's `STRUCT_STIFFNESS` / `ARM_BACKLASH_RAD` are still guessing at

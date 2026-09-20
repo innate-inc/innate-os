@@ -143,6 +143,24 @@
   </div>
 
   <div class="card">
+    <h2>Pose sweep <span style="color:var(--bad);font-weight:400;font-size:13px">— moves the arm</span></h2>
+    <p class="note" style="margin-top:0">
+      Sag is a steady-state error, so it only shows up while the arm is <b>holding</b>. Hand teleop
+      never stops moving, which measures tracking lag instead. This drives the arm through a fixed
+      set of poses, pausing at each one, and records only that — then repeats the identical poses
+      for the second run, so the two are comparable. Stop any other teleop source first; whoever
+      publishes last wins.
+    </p>
+    <div class="row">
+      <button id="sweep" class="primary" disabled>Run sweep</button>
+      <button id="sweep-abort" disabled>Abort</button>
+      <span class="pill mono" id="sweep-status">no poses yet</span>
+      <span class="spacer"></span>
+      <button id="sweep-forget" disabled>Forget poses</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Result</h2>
     <div id="result"><p class="empty">Record a run to see the numbers.</p></div>
   </div>
@@ -182,6 +200,18 @@
   const CMD_STILL_RAD = 0.002;
   const VEL_STILL_RAD_S = 0.05;
   const LIVE_WINDOW_S = 20;
+  const COMMANDS_TOPIC = "/mars/arm/commands";
+  // Shoulder/elbow/wrist only: joint 1 is vertical and joint 5 rolls about its own
+  // mass, so neither changes what gravity asks of the arm. Offsets from wherever the
+  // arm is parked, so a sweep cannot fling it somewhere unexpected.
+  const SWEEP_DELTAS = [
+    [0, 0, 0], [0.35, 0, 0], [-0.35, 0, 0], [0, 0.35, 0],
+    [0, -0.35, 0], [0, 0, 0.35], [0.3, 0.3, 0], [-0.3, -0.3, 0],
+  ];
+  const SWEEP_RAMP_S = 1.2;
+  const SWEEP_HOLD_S = 2.0;
+  const SWEEP_RATE_HZ = 20;
+  const MIN_HELD_SAMPLES = 60;  // below this the held figures are anecdotes, not statistics
   const PLOT_POINTS = 900;  // one point per pixel is already more than an SVG needs
   const DEG = 180 / Math.PI;
 
@@ -200,6 +230,8 @@
       ws.onmessage = (ev) => this.#frame(ev.data);
     }
     #send(o) { if (this.connected) this.ws.send(JSON.stringify(o)); }
+    advertise(topic, type) { this.#send({ op: "advertise", topic, type }); }
+    publish(topic, msg) { this.#send({ op: "publish", topic, msg }); }
     #subscribe(topic, s) {
       this.#send({ op: "subscribe", topic, type: s.type, throttle_rate: s.throttle, queue_length: 1 });
     }
@@ -507,6 +539,9 @@
     const sa = a && summarise(a);
     const sb = b && summarise(b);
     const head = (s, letter) => (s ? `${letter} (${s.heldCount} held / ${s.total} samples)` : `${letter} —`);
+    const thin = [["A", sa], ["B", sb]]
+      .filter(([, s]) => s && s.heldCount < MIN_HELD_SAMPLES)
+      .map(([letter]) => `run ${letter}`);
 
     const rows = (sa || sb).joints.map((_, j) => `
       <tr>
@@ -546,6 +581,10 @@
         </thead>
         <tbody>${rows}${grip}</tbody>
       </table>
+      ${thin.length ? `<p class="note" style="color:var(--bad)"><b>Too few held samples in
+        ${thin.join(" and ")}.</b> Sag only exists while the arm is holding, so these figures rest on
+        a handful of moments at whatever poses they happened to be. Use the pose sweep above, which
+        pauses at each pose and repeats the same ones for both runs.</p>` : ""}
       <p class="note">Held = command still for ${SETTLE_S}s and every joint under
         ${VEL_STILL_RAD_S} rad/s. Δ is A against B on the held figure; green means A is closer to
         its target. Gripper error is forward kinematics on the same mars.urdf the arm node uses,
@@ -607,7 +646,7 @@
     if (!run) return `${letter} — empty`;
     const state = run.compensated === null ? "compensation unknown" : `compensation ${run.compensated ? "ON" : "OFF"}`;
     const seconds = run.t.length > 1 ? run.t[run.t.length - 1] - run.t[0] : 0;
-    return `${letter} — ${state}, ${seconds.toFixed(0)}s`;
+    return `${letter} — ${state}, ${seconds.toFixed(0)}s${run.sweep ? ", sweep" : ""}`;
   }
 
   function paintSlots() {
@@ -643,6 +682,99 @@
     renderRunCharts();
     status.textContent = `saved to ${"AB"[slot]}`;
   }
+
+  // ── pose sweep ───────────────────────────────────────────────────────
+  let sweepPoses = null;   // absolute targets, so run B repeats run A exactly
+  let sweeping = false;
+  let abortSweep = false;
+  const sweepStatus = document.getElementById("sweep-status");
+  const sweepButton = document.getElementById("sweep");
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function publishTarget(pose) {
+    ros.publish(COMMANDS_TOPIC, { layout: { dim: [], data_offset: 0 }, data: pose });
+  }
+
+  /** Ease from `from` to `to` over `seconds`, publishing at SWEEP_RATE_HZ. */
+  async function glide(from, to, seconds) {
+    const steps = Math.max(1, Math.round(seconds * SWEEP_RATE_HZ));
+    for (let i = 1; i <= steps && !abortSweep; i++) {
+      const alpha = i / steps;
+      // Cosine ease: a step command on soft gains overshoots and rings.
+      const blend = 0.5 - 0.5 * Math.cos(Math.PI * alpha);
+      publishTarget(from.map((v, j) => v + (to[j] - v) * blend));
+      await sleep(1000 / SWEEP_RATE_HZ);
+    }
+  }
+
+  /** Hold `pose` by keeping the stream alive — a silent stream is not a held pose. */
+  async function dwell(pose, seconds) {
+    const until = performance.now() + seconds * 1000;
+    while (performance.now() < until && !abortSweep) {
+      publishTarget(pose);
+      await sleep(1000 / SWEEP_RATE_HZ);
+    }
+  }
+
+  async function runSweep() {
+    if (!latest) { sweepStatus.textContent = "no arm state yet"; return; }
+    if (!sweepPoses) {
+      if (!confirm("This moves the arm through 8 poses around where it is now. Clear the area and "
+        + "stop any other teleop source. Continue?")) return;
+      const base = latest.pos.slice();
+      sweepPoses = SWEEP_DELTAS.map((delta) => {
+        const pose = base.slice();
+        for (let k = 0; k < 3; k++) pose[k + 1] = base[k + 1] + delta[k];
+        return pose;
+      });
+    }
+
+    sweeping = true;
+    abortSweep = false;
+    sweepButton.disabled = true;
+    document.getElementById("sweep-abort").disabled = false;
+    recordButton.disabled = true;
+    startRecording();
+    recording.sweep = true;
+
+    let from = latest.pos.slice();
+    for (let i = 0; i < sweepPoses.length && !abortSweep; i++) {
+      sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · moving`;
+      await glide(from, sweepPoses[i], SWEEP_RAMP_S);
+      if (abortSweep) break;
+      sweepStatus.textContent = `pose ${i + 1}/${sweepPoses.length} · holding`;
+      await dwell(sweepPoses[i], SWEEP_HOLD_S);
+      from = sweepPoses[i];
+    }
+    if (!abortSweep) {
+      sweepStatus.textContent = "returning";
+      await glide(from, sweepPoses[0], SWEEP_RAMP_S);
+      await dwell(sweepPoses[0], 0.5);
+    }
+
+    stopRecording();
+    sweeping = false;
+    abortSweep = false;
+    document.getElementById("sweep-abort").disabled = true;
+    sweepButton.disabled = !ros.connected;
+    recordButton.disabled = !ros.connected;
+    paintSweep();
+  }
+
+  function paintSweep() {
+    sweepButton.textContent = sweepPoses ? "Repeat sweep" : "Run sweep";
+    document.getElementById("sweep-forget").disabled = !sweepPoses || sweeping;
+    if (!sweeping) {
+      sweepStatus.textContent = sweepPoses
+        ? `${sweepPoses.length} poses held — repeat them for the other setting`
+        : "no poses yet";
+    }
+  }
+
+  sweepButton.addEventListener("click", runSweep);
+  document.getElementById("sweep-abort").addEventListener("click", () => { abortSweep = true; });
+  document.getElementById("sweep-forget").addEventListener("click", () => { sweepPoses = null; paintSweep(); });
 
   recordButton.addEventListener("click", () => (recording ? stopRecording() : startRecording()));
   document.getElementById("comp-toggle").addEventListener("click", toggleCompensation);
@@ -681,10 +813,11 @@
     dot.className = `dot ${state === "connected" ? "on" : state === "connecting" ? "" : "off"}`;
     document.getElementById("link-text").textContent = state;
     const up = state === "connected";
-    recordButton.disabled = !up;
+    recordButton.disabled = !up || sweeping;
+    sweepButton.disabled = !up || sweeping;
     document.getElementById("comp-toggle").disabled = !up;
-    if (up) readCompensation();
-    else if (recording) stopRecording();
+    if (up) { ros.advertise(COMMANDS_TOPIC, "std_msgs/msg/Float64MultiArray"); readCompensation(); }
+    else if (recording) { abortSweep = true; stopRecording(); }
   };
 
   const throttle = Math.round(1000 / Number(document.getElementById("rate").value));
@@ -706,6 +839,7 @@
 
   paintSlots();
   paintCompensation();
+  paintSweep();
 </script>
 </body>
 </html>
