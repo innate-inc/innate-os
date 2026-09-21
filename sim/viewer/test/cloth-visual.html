@@ -1,0 +1,141 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Sock visual regression</title>
+<style>
+  body {
+    margin: 0;
+    background: #e5e4e1;
+    font: 18px system-ui;
+    color: #333;
+  }
+  header {
+    display: flex;
+    justify-content: space-around;
+    padding: 20px;
+  }
+  canvas {
+    display: block;
+  }
+  #status {
+    padding: 12px;
+    font-size: 14px;
+  }
+</style>
+<header>
+  <span>Before · physics surface</span><span>After · visual subdivision</span>
+</header>
+<div id="status">Loading recorded pickup…</div>
+<script type="module">
+  import * as THREE from "three";
+  import { PropLibrary } from "../src/props.ts";
+  const woolComparison = new URLSearchParams(location.search).has("wool");
+  if (woolComparison) document.querySelector("header").innerHTML =
+    "<span>Cotton appearance</span><span>Wool appearance · same recorded motion</span>";
+  const data = await (
+    await fetch("/node_modules/.cache/sock-visual.json")
+  ).json();
+  const info = (name) => ({
+    name,
+    label: "",
+    title: "Sock",
+    collision: "box",
+    size: [0.1, 0.01, 0.2],
+    rgba: [0.7, 0.7, 0.7, 1],
+    viewer: {
+      glb: "/models/soft_sock.glb",
+      rotateToZUp: false,
+      clothMaterial: name === "wool_sock" ? "wool" : undefined,
+      deformable: {
+        id: 1,
+        controlVertexCount: 133,
+        renderVertexCount: 133,
+        skin: "/models/soft_sock_skin.bin",
+        space: "world",
+      },
+    },
+  });
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    preserveDrawingBuffer: true,
+  });
+  renderer.setSize(1200, 640);
+  renderer.setPixelRatio(1);
+  document.body.append(renderer.domElement);
+  renderer.setScissorTest(true);
+  const entries = [];
+  for (const name of woolComparison ? ["soft_sock", "wool_sock"] : ["coarse_sock", "soft_sock"]) {
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#e5e4e1");
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 2));
+    const sun = new THREE.DirectionalLight(0xffffff, 3);
+    sun.position.set(-1, -2, 3);
+    scene.add(sun);
+    const camera = new THREE.PerspectiveCamera(35, 600 / 640, 0.001, 10);
+    camera.up.set(0, 0, 1);
+    const props = new PropLibrary(scene, new THREE.MeshBasicMaterial());
+    props.setManifest([info(name)]);
+    props.prefetchModels();
+    entries.push({ scene, camera, props, name });
+  }
+  function frame(i) {
+    const values = new Float32Array(data.frames[i].flat());
+    const box = new THREE.Box3().setFromBufferAttribute(
+      new THREE.BufferAttribute(values, 3),
+    );
+    const center = box.getCenter(new THREE.Vector3());
+    for (const [side, e] of entries.entries()) {
+      e.props.setPoses({ [e.name]: [...center.toArray(), 1, 0, 0, 0] });
+      e.props.setDeformableFrame({
+        id: 1,
+        t: i / 30,
+        vertexCount: 133,
+        positions: values,
+      });
+      e.props.setPoses({ [e.name]: [...center.toArray(), 1, 0, 0, 0] });
+      e.camera.position.copy(center).add(new THREE.Vector3(0.25, -0.45, 0.14).multiplyScalar(woolComparison ? .7 : 1));
+      e.camera.lookAt(center);
+      renderer.setViewport(side * 600, 0, 600, 640);
+      renderer.setScissor(side * 600, 0, 600, 640);
+      renderer.render(e.scene, e.camera);
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  frame(100);
+  const counts = () =>
+    entries.map((e) => {
+      let n = 0;
+      e.scene.traverse((o) => {
+        if (o.isMesh) n += o.geometry.index?.count / 3 || 0;
+      });
+      return n;
+    });
+  const expectedCount = counts()[1];
+  if (woolComparison ? expectedCount <= 8192 : expectedCount !== 4096)
+    throw new Error("Subdivided live prop did not render: " + counts());
+  // Exercise remove/re-add and roster removal/re-add through the actual library.
+  for (const e of entries) e.props.setPoses({});
+  frame(100);
+  for (const e of entries) e.props.setManifest([]);
+  for (const e of entries) e.props.setManifest([info(e.name)]);
+  frame(100);
+  if (counts()[1] !== expectedCount) throw new Error("Lifecycle lost subdivision");
+  const timings = [];
+  for (let i = 0; i < 180; i++) {
+    const t = performance.now();
+    frame(i);
+    timings.push(performance.now() - t);
+  }
+  timings.sort((a, b) => a - b);
+  window.results = {
+    triangles: counts(),
+    comparisonFrameP95Ms: timings[171],
+    lifecycle: true,
+  };
+  window.showFrame = frame;
+  frame(100);
+  document.querySelector("#status").textContent =
+    "Same recorded physics · 133 simulated vertices · " +
+    counts().join(" → ") +
+    " visible triangles · spawn / remove / re-add passed";
+  window.ready = true;
+</script>

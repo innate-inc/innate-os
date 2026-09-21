@@ -14,6 +14,7 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
+import type { DeformableFrame } from "./physics/deformableFrame";
 import { PropLibrary, type PropInfo } from "./props";
 import { TrafficLibrary } from "./traffic";
 import type { TrafficManifest, TrafficState } from "./trafficState";
@@ -1129,6 +1130,11 @@ export class SimScene {
   /** Mirror authoritative signal aspects and car poses from MuJoCo. */
   setTrafficState(state: TrafficState | null): void {
     this.traffic.setState(state);
+  }
+
+  /** Upload the latest world-space control surface to its deformable prop. */
+  setDeformableFrame(frame: DeformableFrame): void {
+    this.props.setDeformableFrame(frame);
   }
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh
   // on those links shares one material.

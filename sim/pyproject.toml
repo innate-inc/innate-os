@@ -12,6 +12,10 @@ dependencies = [
     "pillow>=12.3.0",
 ]
 
+[project.optional-dependencies]
+# Opt-in experimental native cloth; pypbd itself is a patched native build.
+xpbd = ["numba==0.67.0; python_version >= '3.11'", "scipy==1.17.1; python_version >= '3.11'"]
+
 [dependency-groups]
 # For sandbox/virtual_mars_demo.ipynb: `uv sync --group notebook`.
 notebook = [

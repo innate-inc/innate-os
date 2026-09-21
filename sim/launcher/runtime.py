@@ -2540,7 +2540,7 @@ def _prefetch_world_env(config: dict[str, object]) -> None:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     log("Preparing the sim world's Python environment...")
     run_logged_with_heartbeat(
-        [uv, "sync", "--project", str(sim_repo)],
+        [uv, "sync", "--project", str(sim_repo)] + (["--extra", "xpbd"] if _cloth_backend() == "xpbd" else []),
         cwd=sim_repo,
         env=os.environ.copy(),
         log_path=BOOTSTRAP_LOG_PATH,
@@ -2591,10 +2591,29 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
     candidates = sorted((mars_bot / "mars_description" / "urdf").glob("*"))
     candidates += sorted((mars_bot / "mars_description" / "meshes").glob("*"))
-    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py", "traffic.py")]
+    candidates += [
+        driver / name
+        for name in (
+            "world.py",
+            "core.py",
+            "constants.py",
+            "environments.py",
+            "traffic.py",
+            "props.py",
+            "softbody.py",
+            "cloth_xpbd.py",
+            "cloth_fast_contact.py",
+            "cloth_contact_primitives.py",
+        )
+    ]
     candidates += [sim_repo / "assets" / ".assets-tag"]
     candidates += sorted((sim_repo / "environments").rglob("manifest.json"))
     digest = hashlib.sha256()
+    digest.update(_cloth_backend().encode())
+    digest.update(os.environ.get("INNATE_SIM_XPBD_MODULE_DIR", "").encode())
+    if _cloth_backend() == "xpbd":
+        native_dir = Path(os.environ.get("INNATE_SIM_XPBD_MODULE_DIR") or str(sim_repo / ".xpbd" / "lib")).expanduser()
+        candidates += sorted(native_dir.glob("pypbd*.so"))
     for f in candidates:
         with contextlib.suppress(OSError):
             digest.update(f.name.encode())
@@ -2781,6 +2800,11 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
+def _cloth_backend() -> str:
+    """Match VirtualMars defaults, including a blank shell override."""
+    return os.environ.get("INNATE_SIM_CLOTH_BACKEND", "xpbd").strip().lower() or "xpbd"
+
+
 def _start_world_server(
     uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
 ) -> bool:
@@ -2791,6 +2815,8 @@ def _start_world_server(
     )
     env = os.environ.copy()
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    if _cloth_backend() == "xpbd":
+        env.setdefault("OMP_NUM_THREADS", "1")
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
@@ -2800,6 +2826,7 @@ def _start_world_server(
                 "run",
                 "--project",
                 str(sim_repo),
+                *(["--extra", "xpbd"] if _cloth_backend() == "xpbd" else []),
                 "python",
                 "-c",
                 bootstrap,

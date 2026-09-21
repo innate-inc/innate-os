@@ -355,6 +355,18 @@ class VirtualMars:
         # mj_resetData restores the parked pose, so reset() just has to forget
         # which ones were out.
         self.props.bind(self.model)
+        cloth_backend = os.environ.get("INNATE_SIM_CLOTH_BACKEND", "xpbd").strip().lower() or "xpbd"
+        if cloth_backend not in ("mujoco", "xpbd"):
+            raise ValueError("INNATE_SIM_CLOTH_BACKEND must be 'mujoco' or 'xpbd'")
+        self.cloth_backend = cloth_backend
+        self._cloth = None
+        if cloth_backend == "xpbd" and self.props._soft:
+            try:
+                from .cloth_xpbd import XPBDClothSet
+            except ImportError as exc:
+                raise RuntimeError("XPBD dependencies are missing: use Python 3.11+ and uv run --extra xpbd") from exc
+
+            self._cloth = XPBDClothSet(self.model, self.data, self.props)
 
         self._renderer: mujoco.Renderer | None = None
         environment = self.model.body("apartment").id
@@ -381,7 +393,9 @@ class VirtualMars:
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic
         self.data.qpos[mq] = mult * ARM_HOME[source]
-        self.props.mark_all_parked()  # mj_resetData already re-parked every prop
+        self.props.mark_all_parked(self.data)  # also disables parked flex contacts/constraints
+        if self._cloth is not None:
+            self._cloth.reset()
         self.traffic.reset(self.data)
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
@@ -425,26 +439,62 @@ class VirtualMars:
     def step(self, duration: float) -> None:
         """Advance the sim by `duration` seconds, applying servos each step."""
         end = self.data.time + duration
-        dt = float(self.model.opt.timestep)
+        default_dt = float(self.model.opt.timestep)
+        dt = self.props.physics_timestep(default_dt)
+        if self._cloth is not None:
+            dt = self._cloth.physics_timestep(dt)
+        self.model.opt.timestep = dt
+        try:
+            self._step_until(end, dt)
+        finally:
+            # Accuracy is local to this advance, never a persistent setting
+            # change affecting a later reset/world/rigid-only run.
+            self.model.opt.timestep = default_dt
+
+    def _step_until(self, end: float, dt: float) -> None:
         while self.data.time < end:
-            self._apply_control()
-            if self.traffic.enabled:
-                self.traffic.step(self.data, dt, self.pose()[:2])
-            mujoco.mj_step(self.model, self.data)
+            if self.props.has_deformables:
+                # A deformable's rest-dihedral force depends on positions and
+                # velocities computed by step1. Clamp state before that phase;
+                # changing qvel afterwards would stale its velocity-dependent
+                # quantities. Servos and bending then belong before step2 so
+                # it integrates every applied force once.
+                self.props.prepare_step(self.data)
+                if self.traffic.enabled:
+                    self.traffic.step(self.data, dt, self.pose()[:2])
+                self._clamp_base_velocity()
+                mujoco.mj_step1(self.model, self.data)
+                self._apply_control(clamp_velocity=False)
+                self.props.apply_deformable_forces(self.data)
+                if self._cloth is not None:
+                    self._cloth.before_step(dt)
+                mujoco.mj_step2(self.model, self.data)
+                if self._cloth is not None:
+                    self._cloth.after_step()
+            else:
+                self._apply_control()
+                if self.traffic.enabled:
+                    self.traffic.step(self.data, dt, self.pose()[:2])
+                mujoco.mj_step(self.model, self.data)
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
                 return
 
-    def _apply_control(self) -> None:
+    def _clamp_base_velocity(self) -> None:
         d = self.data
         dof_x, dof_y, dof_yaw = (self._base[k][1] for k in ("x", "y", "yaw"))
-
         lin = math.hypot(d.qvel[dof_x], d.qvel[dof_y])
         if lin > world.MAX_BASE_LINEAR_SPEED:
             d.qvel[dof_x] *= world.MAX_BASE_LINEAR_SPEED / lin
             d.qvel[dof_y] *= world.MAX_BASE_LINEAR_SPEED / lin
         if abs(d.qvel[dof_yaw]) > world.MAX_BASE_ANGULAR_SPEED:
             d.qvel[dof_yaw] = math.copysign(world.MAX_BASE_ANGULAR_SPEED, d.qvel[dof_yaw])
+
+    def _apply_control(self, *, clamp_velocity: bool = True) -> None:
+        d = self.data
+        dof_x, dof_y, dof_yaw = (self._base[k][1] for k in ("x", "y", "yaw"))
+        if clamp_velocity:
+            self._clamp_base_velocity()
 
         expired = d.time - self._cmd_sim_time > CMD_VEL_TIMEOUT_S
         vx = 0.0 if expired else self._cmd_vx
@@ -533,7 +583,7 @@ class VirtualMars:
     def _encode_display_colours(self) -> None:
         """Prop rgba is linear light to the viewer's three.js and a display value to
         MuJoCo; encoded once, the cameras show the colours the viewer shows."""
-        prop_bodies = {self.model.body(name).id for name in self.props.props}
+        prop_bodies = self.props.rigid_body_ids()
         geoms = [g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] in prop_bodies]
         self.model.geom_rgba[geoms, :3] = _linear_to_srgb(self.model.geom_rgba[geoms, :3])
 
@@ -869,6 +919,10 @@ class VirtualMars:
         """[x, y, z, qw, qx, qy, qz] per prop in world frame. Props parked off-map
         are omitted."""
         return self.props.poses(self.data)
+
+    def deformable_frames(self) -> list[tuple[int, np.ndarray]]:
+        """Active low-resolution flex vertices for observer rendering."""
+        return self.props.deformable_frames(self.data)
 
     def object_centers(self) -> dict[str, tuple[float, float]]:
         """xy of each out prop's visual CENTRE (props.py center_offset), which

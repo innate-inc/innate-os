@@ -235,6 +235,7 @@ SIM_ASSET_UNITS_DERIVED = (
 SIM_ASSET_UNITS_AUTHORED = (
     "humans",
     "objects",
+    "softbodies",
 )
 SIM_ASSET_UNITS = SIM_ASSET_UNITS_DERIVED + SIM_ASSET_UNITS_AUTHORED
 # The published geometry to install when nothing built this checkout's tag. A

@@ -5,6 +5,7 @@
 // for the /scan debug overlay. Architecture: sim/README.md.
 
 import type { SimScene } from "./scene";
+import { DeformablePlayback } from "./physics/deformablePlayback";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
 import type {
@@ -127,6 +128,8 @@ export class SimSession {
   #props: PropInfo[] = [];
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
+  // Cloth and fingers must use the same delayed playback clock.
+  #deformables = new DeformablePlayback();
 
   #environment: EnvironmentRoster | null = null;
   #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
@@ -223,13 +226,23 @@ export class SimSession {
       this.#environment = roster;
       // Another world: its first pose must spawn (and frame) the robot afresh.
       if (roster.environment && roster.environment.id !== previous) {
+        this.#deformables.clear();
         this.#samples = [];
         this.#playT = null;
         this.#spawned = false;
       }
       for (const cb of this.#environmentListeners) cb(roster);
     };
+    this.#controller.onDeformableFrame = (frame) => {
+      this.#deformables.push(frame);
+    };
     this.#controller.onState = (s) => {
+      // A removed/re-dropped prop is a teleport, not a fold to interpolate
+      // from the old location through the room.
+      for (const prop of this.#props) {
+        const id = prop.viewer.deformable?.id;
+        if (id !== undefined && !(prop.name in s.objects)) this.#deformables.delete(id);
+      }
       const lag = Date.now() / 1000 - s.wall;
       if (lag < this.#lagMinS) this.#lagMinS = lag;
       this.#lagRecent.push(lag);
@@ -254,6 +267,7 @@ export class SimSession {
         traffic: s.traffic,
       };
       if (last !== undefined && s.worldEpoch !== last.worldEpoch) {
+        this.#deformables.clear();
         // Any reset is a hard generation boundary even if it happened before
         // the old sim clock advanced by the legacy 0.5-second heuristic.
         this.#samples = [sample];
@@ -263,6 +277,7 @@ export class SimSession {
         this.#samples.push(sample);
         if (this.#samples.length > 60) this.#samples.shift();
       } else if (s.t < last.t - 0.5) {
+        this.#deformables.clear();
         // Sim clock jumped backwards (world-server restart): restart playback.
         this.#samples = [sample];
         this.#playT = null;
@@ -291,6 +306,7 @@ export class SimSession {
     this.#controller = null;
     this.#scanFeed?.dispose();
     this.#scanFeed = null;
+    this.#deformables.clear();
     this.#started = false;
     this.#gotPose = false;
     this.#patch({ status: "idle", videoStream: null });
@@ -528,6 +544,7 @@ export class SimSession {
     }
     scene.setObjectPoses(objects);
     scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
+    for (const frame of this.#deformables.sample(this.#playT)) scene.setDeformableFrame(frame);
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);
