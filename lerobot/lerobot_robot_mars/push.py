@@ -16,7 +16,7 @@ from huggingface_hub import get_token
 from huggingface_hub.errors import HfHubHTTPError
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from .hub import dataset_root, hub_refusal, hub_url
+from .hub import dataset_root, has_dataset, hub_refusal, hub_url
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = dataset_root(args.repo_id, args.root)
-    if not (root / "meta" / "info.json").is_file():
+    if not has_dataset(root):
         parser.error(f"no dataset at {root}")
     if get_token() is None:
         parser.error("not logged in to Hugging Face; run `uv run hf auth login` first")

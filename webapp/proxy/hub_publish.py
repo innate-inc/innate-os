@@ -26,6 +26,7 @@ _INNATE_OS_ROOT = os.environ.get("INNATE_OS_ROOT", os.path.expanduser("~/innate-
 LEROBOT_DIR = Path(_INNATE_OS_ROOT) / "lerobot"
 VENV_ENV = "INNATE_LEROBOT_VENV"
 DATASET_METADATA = "dataset_metadata.json"
+EXPORT_FILE = "lerobot_export.json"
 EXPORT_KEY = "lerobot_export"
 REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w.\-]{0,95}/[A-Za-z0-9][\w.\-]{0,95}$")
 _TAIL_LINES = 12
@@ -80,12 +81,9 @@ def current_job() -> dict | None:
 
 
 def published(skill_dir: Path) -> dict | None:
-    """What an earlier publish of this skill recorded in its dataset metadata, if anything."""
-    try:
-        meta = json.loads((skill_dir / "data" / DATASET_METADATA).read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    export = meta.get(EXPORT_KEY)
+    """What an earlier publish of this skill recorded, if anything: the converter's own
+    data/lerobot_export.json, or the key it kept in dataset_metadata.json before that file existed."""
+    export = _json(skill_dir / "data" / EXPORT_FILE) or _json(skill_dir / "data" / DATASET_METADATA).get(EXPORT_KEY)
     if not isinstance(export, dict) or not export.get("repo_id"):
         return None
     return {
@@ -93,6 +91,14 @@ def published(skill_dir: Path) -> dict | None:
         "episodes": len(export.get("episode_ids", [])),
         "pushed": bool(export.get("pushed")),
     }
+
+
+def _json(path: Path) -> dict:
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def start_publish(skill_dir: Path, repo_id: str, *, private: bool, include_failures: bool, token: str) -> None:

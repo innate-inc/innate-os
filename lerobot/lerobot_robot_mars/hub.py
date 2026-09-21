@@ -14,6 +14,10 @@ def dataset_root(repo_id: str, root: str | Path | None) -> Path:
     return Path(root).expanduser() if root else HF_LEROBOT_HOME / repo_id
 
 
+def has_dataset(root: Path) -> bool:
+    return (root / "meta" / "info.json").is_file()
+
+
 def hub_url(repo_id: str) -> str:
     return f"https://huggingface.co/datasets/{repo_id}"
 

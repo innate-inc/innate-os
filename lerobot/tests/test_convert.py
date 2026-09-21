@@ -11,7 +11,7 @@ import pytest
 import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from lerobot_robot_mars.convert import EXPORT_KEY, convert_skill
+from lerobot_robot_mars.convert import EXPORT_FILE, convert_skill
 from lerobot_robot_mars.dataset_meta import read_sidecar
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_SHAPE, STATE_NAMES, dataset_features
 
@@ -95,7 +95,7 @@ def test_converted_dataset_matches_the_live_schema(skill_dir: Path, tmp_path: Pa
     assert head.mean(dim=(1, 2)).argmax().item() == 2  # RGB: blue is channel 2
     assert first["observation.images.wrist"].mean(dim=(1, 2)).argmax().item() == 1
 
-    export = json.loads((skill_dir / "data" / "dataset_metadata.json").read_text())[EXPORT_KEY]
+    export = json.loads((skill_dir / "data" / EXPORT_FILE).read_text())
     assert export["repo_id"] == "innate/mars-test" and export["episode_ids"] == [0, 2]
     sidecar = read_sidecar(root)
     assert sidecar is not None and sidecar["head_angle_deg"] == -20.0 and sidecar["head_angle_assumed"] is True
@@ -103,7 +103,11 @@ def test_converted_dataset_matches_the_live_schema(skill_dir: Path, tmp_path: Pa
 
 def test_rerun_appends_only_new_episodes(skill_dir: Path, tmp_path: Path) -> None:
     root = tmp_path / "out"
+    recorders_file = skill_dir / "data" / "dataset_metadata.json"
+    recorders_snapshot = recorders_file.read_text()
     convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    # The recorder rewrites its file from a snapshot taken before the export; nothing may hang on that file.
+    recorders_file.write_text(recorders_snapshot)
     convert_skill(
         skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", include_failures=True, log=lambda _m: None
     )
@@ -111,7 +115,7 @@ def test_rerun_appends_only_new_episodes(skill_dir: Path, tmp_path: Path) -> Non
     dataset = LeRobotDataset("innate/mars-test", root=root)
     assert dataset.num_episodes == 3
     assert dataset.num_frames == 3 * T
-    export = json.loads((skill_dir / "data" / "dataset_metadata.json").read_text())[EXPORT_KEY]
+    export = json.loads((skill_dir / "data" / EXPORT_FILE).read_text())
     assert export["episode_ids"] == [0, 1, 2]
 
 
@@ -125,3 +129,27 @@ def test_a_lost_local_copy_is_rebuilt_in_full_not_replaced_by_the_new_episodes(s
         skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", include_failures=True, log=lambda _m: None
     )
     assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 3
+
+
+def test_a_copy_left_by_a_killed_run_is_rebuilt(skill_dir: Path, tmp_path: Path) -> None:
+    root = tmp_path / "out"
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    # What SIGKILL before finalize() leaves: info.json counts the episode, its parquet has no footer.
+    info = root / "meta" / "info.json"
+    info.write_text(json.dumps({**json.loads(info.read_text()), "total_episodes": 3}))
+    parquet = next((root / "data").rglob("*.parquet"))
+    parquet.write_bytes(parquet.read_bytes()[:-64])
+    convert_skill(
+        skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", include_failures=True, log=lambda _m: None
+    )
+    dataset = LeRobotDataset("innate/mars-test", root=root)
+    assert dataset.num_episodes == 3 and dataset.num_frames == 3 * T
+
+
+def test_a_folder_the_converter_did_not_write_is_never_cleared(skill_dir: Path, tmp_path: Path) -> None:
+    someone_elses = tmp_path / "recorded-with-lerobot"
+    (someone_elses / "meta").mkdir(parents=True)
+    (someone_elses / "meta" / "info.json").write_text('{"total_episodes": 50}')
+    with pytest.raises(FileExistsError):
+        convert_skill(skill_dir, repo_id="innate/mars-test", root=someone_elses, log=lambda _m: None)
+    assert (someone_elses / "meta" / "info.json").is_file()

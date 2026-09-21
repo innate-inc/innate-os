@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import json
 import os
+import shutil
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -30,12 +30,17 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 from .dataset_meta import DEFAULT_HEAD_ANGLE_DEG, read_sidecar, write_sidecar
-from .hub import dataset_root, hub_refusal, hub_url
+from .hub import dataset_root, has_dataset, hub_refusal, hub_url
 from .schema import CAMERA_ORDER, CAMERA_SHAPE, FPS, ROBOT_TYPE, dataset_features, image_key
 
 DATASET_METADATA = "dataset_metadata.json"
 RAW_DATA_DIR = "raw_data"
-EXPORT_KEY = "lerobot_export"
+# The record of what was exported lives in a file only this converter writes. The recorder rewrites
+# dataset_metadata.json from a snapshot taken when the skill was activated and would drop a key kept
+# there, after which the next publish appends every episode a second time.
+EXPORT_FILE = "lerobot_export.json"
+LEGACY_EXPORT_KEY = "lerobot_export"  # where the record lived before it had its own file
+CONVERTER = "mars2lerobot"
 RECORDER_CAMERAS: tuple[str, ...] = ("camera_1", "camera_2")
 
 Frame = dict[str, np.ndarray]
@@ -61,9 +66,9 @@ class SkillRecording:
     def __init__(self, skill_dir: Path) -> None:
         self.skill_dir = skill_dir
         self.data_dir = skill_dir / "data"
-        self.meta_path = self.data_dir / DATASET_METADATA
         self.skill_meta = _read_json(skill_dir / "metadata.json")
-        self.dataset_meta = _read_json(self.meta_path)
+        self.dataset_meta = _read_json(self.data_dir / DATASET_METADATA)
+        self.export_path = (self.data_dir if self.data_dir.is_dir() else skill_dir) / EXPORT_FILE
 
     @property
     def name(self) -> str:
@@ -88,35 +93,13 @@ class SkillRecording:
         files = sorted(folder.glob("episode_*.h5"), key=lambda p: _episode_id(p.name))
         return [EpisodeRef(_episode_id(p.name), p.name, "teleop", None, ()) for p in files]
 
-    def exported_ids(self, repo_id: str) -> set[int]:
-        export = self.dataset_meta.get(EXPORT_KEY, {})
-        if export.get("repo_id") != repo_id:
-            return set()
-        return {int(i) for i in export.get("episode_ids", [])}
+    def export(self, repo_id: str) -> dict:
+        record = _read_json(self.export_path) or self.dataset_meta.get(LEGACY_EXPORT_KEY, {})
+        return record if record.get("repo_id") == repo_id else {}
 
-    def mark_exported(self, repo_id: str, root: Path, episode_id: int) -> None:
-        if not self.meta_path.is_file():
-            return
-        with _locked(self.meta_path):
-            meta = _read_json(self.meta_path)
-            export = meta.get(EXPORT_KEY, {})
-            ids = set(export.get("episode_ids", [])) if export.get("repo_id") == repo_id else set()
-            ids.add(episode_id)
-            meta[EXPORT_KEY] = {"repo_id": repo_id, "root": str(root), "episode_ids": sorted(ids), "pushed": False}
-            _write_json_atomic(self.meta_path, meta)
-        self.dataset_meta = meta
-
-    def mark_pushed(self, repo_id: str) -> None:
-        if not self.meta_path.is_file():
-            return
-        with _locked(self.meta_path):
-            meta = _read_json(self.meta_path)
-            export = meta.get(EXPORT_KEY, {})
-            if export.get("repo_id") == repo_id:
-                export["pushed"] = True
-                meta[EXPORT_KEY] = export
-                _write_json_atomic(self.meta_path, meta)
-        self.dataset_meta = meta
+    def record_export(self, repo_id: str, root: Path, episode_ids: set[int], *, pushed: bool) -> None:
+        record = {"repo_id": repo_id, "root": str(root), "episode_ids": sorted(episode_ids), "pushed": pushed}
+        _write_json_atomic(self.export_path, record)
 
     def episode_path(self, ref: EpisodeRef) -> Path:
         candidates = (
@@ -255,22 +238,11 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-@contextlib.contextmanager
-def _locked(path: Path) -> Iterator[None]:
-    """The same lock the on-robot encoder takes before rewriting dataset_metadata.json."""
-    with open(path.with_suffix(path.suffix + ".lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-
-
 def open_dataset(
     repo_id: str, root: Path, fps: int, *, vcodec: str | None, image_writer_threads: int
 ) -> LeRobotDataset:
     encoder = RGBEncoderConfig(vcodec=vcodec) if vcodec else None
-    if (root / "meta" / "info.json").is_file():
+    if has_dataset(root):
         dataset = LeRobotDataset.resume(
             repo_id, root=root, rgb_encoder=encoder, image_writer_threads=image_writer_threads
         )
@@ -307,11 +279,7 @@ def convert_skill(
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
     task_text = task or recording.task
-    # The record of what was exported is only as good as the converted copy it describes. If that
-    # copy is gone, appending "only the new episodes" would build a dataset of just those and
-    # upload it over the full one, so start again from every episode instead.
-    has_copy = (out / "meta" / "info.json").is_file()
-    exported = recording.exported_ids(repo_id) if has_copy else set()
+    exported = _episodes_in_copy(recording, repo_id, out, log)
     todo = [
         ref
         for ref in recording.episodes(include_failures)
@@ -319,16 +287,17 @@ def convert_skill(
     ]
     if not todo:
         log(f"{recording.name}: nothing new to export to {repo_id}")
-        if push and (out / "meta" / "info.json").is_file():
+        if push and exported:
             progress({"event": "push"})
             LeRobotDataset(repo_id, root=out).push_to_hub(private=private)
-            recording.mark_pushed(repo_id)
+            recording.record_export(repo_id, out, exported, pushed=True)
             progress({"event": "done", "url": hub_url(repo_id), "message": "Already converted; uploaded again"})
         else:
             progress({"event": "done", "url": "", "message": "Nothing new to publish"})
         return out
 
     dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
+    recording.record_export(repo_id, out, exported, pushed=False)  # claims `out` before anything can go wrong
     head_angles: list[float] = []
     progress({"event": "start", "total": len(todo)})
     for done, ref in enumerate(todo, start=1):
@@ -340,26 +309,49 @@ def convert_skill(
             dataset.add_frame({**frame, "task": task_text})
             count += 1
         dataset.save_episode()
-        recording.mark_exported(repo_id, out, ref.episode_id)
         log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
         progress({"event": "episode", "index": done, "total": len(todo), "frames": count})
     dataset.finalize()
+    # Only now are the episodes durable: until finalize() the parquet files have no footer.
+    exported |= {ref.episode_id for ref in todo}
+    recording.record_export(repo_id, out, exported, pushed=False)
     if read_sidecar(out) is None:
         write_sidecar(
             out,
             head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
             head_angle_assumed=not head_angles,
-            source="mars2lerobot",
+            source=CONVERTER,
         )
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
         progress({"event": "push"})
         dataset.push_to_hub(private=private)
-        recording.mark_pushed(repo_id)
+        recording.record_export(repo_id, out, exported, pushed=True)
         log(f"pushed to {hub_url(repo_id)}")
     episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
     progress({"event": "done", "url": hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
     return out
+
+
+def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: Log) -> set[int]:
+    """The episode ids the converted copy at `out` already holds, after clearing a copy that cannot be trusted.
+
+    A copy is appended to only when it holds exactly the recorded episodes. One left by a run killed before
+    finalize() is unreadable, and a missing one must not become a dataset of just the new episodes uploaded
+    over the full one; both are rebuilt from every episode. A folder this converter never made is left alone.
+    """
+    record = recording.export(repo_id)
+    exported = {int(i) for i in record.get("episode_ids", [])}
+    if exported and has_dataset(out) and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
+        return exported
+    if not out.exists():
+        return set()
+    ours = record.get("root") == str(out) or (read_sidecar(out) or {}).get("source") == CONVERTER
+    if not ours:
+        raise FileExistsError(f"{out} already holds something this converter did not write; choose another --root")
+    log(f"{recording.name}: the converted copy at {out} is incomplete; rebuilding it from every episode")
+    shutil.rmtree(out)
+    return set()
 
 
 def _print_event(event: dict) -> None:
@@ -389,30 +381,26 @@ def main(argv: list[str] | None = None) -> int:
     repo_id = args.repo_id or f"innate/mars-{SkillRecording(skill_dir).name}"
     report = _print_event if args.progress_json else (lambda _event: None)
     try:
-        _convert(args, skill_dir, repo_id, report)
-    except HfHubHTTPError as e:
-        message = hub_refusal(e, repo_id)
+        convert_skill(
+            skill_dir,
+            repo_id=repo_id,
+            root=args.root,
+            task=args.task,
+            include_failures=args.include_failures,
+            episode_ids=set(args.episodes) if args.episodes else None,
+            vcodec=args.vcodec,
+            push=args.push,
+            private=args.private,
+            image_writer_threads=args.image_writer_threads,
+            log=(lambda _message: None) if args.progress_json else print,
+            progress=report,
+        )
+    except (HfHubHTTPError, FileExistsError) as e:
+        message = hub_refusal(e, repo_id) if isinstance(e, HfHubHTTPError) else str(e)
         report({"event": "error", "message": message})
         print(message, file=sys.stderr)
         return 1
     return 0
-
-
-def _convert(args: argparse.Namespace, skill_dir: Path, repo_id: str, report: Progress) -> None:
-    convert_skill(
-        skill_dir,
-        repo_id=repo_id,
-        root=args.root,
-        task=args.task,
-        include_failures=args.include_failures,
-        episode_ids=set(args.episodes) if args.episodes else None,
-        vcodec=args.vcodec,
-        push=args.push,
-        private=args.private,
-        image_writer_threads=args.image_writer_threads,
-        log=(lambda _message: None) if args.progress_json else print,
-        progress=report,
-    )
 
 
 if __name__ == "__main__":
