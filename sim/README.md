@@ -157,6 +157,8 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 | +4 | Foxglove bridge | `SIM_FOXGLOVE_PORT` | 8765 |
 | +5 | world server RPC | `SIM_WORLD_PORT` | 8799 |
 | +6 | world state stream | `SIM_WORLD_STATE_PORT` | 8800 |
+| +7 | LeRobot bridge, actions | `SIM_LEROBOT_ACTIONS_PORT` | 5555 |
+| +8 | LeRobot bridge, observations | `SIM_LEROBOT_OBSERVATIONS_PORT` | 5556 |
 
 ## Configuration
 

@@ -2,19 +2,10 @@
 # Copyright (c) 2026 Innate Inc
 """Client side of the MARS bridge protocol.
 
-The bridge (``manipulation/lerobot_bridge.py`` in innate-os) binds two ZMQ sockets:
-
-- PULL on ``port_actions``: clients PUSH one JSON object per message. ``{"_hb": 1}`` is a
-  heartbeat; anything with the six ``jointN.pos`` keys is a command (``x.vel`` and
-  ``theta.vel`` optional, default 0); ``{"_head": deg}`` tilts the head.
-- PUB on ``port_observations``: one frame per message, ``<topic> <json header>\n<payload>``.
-  Topic ``state`` has no payload; topic ``obs`` carries the JPEGs of the cameras in ``_cams``
-  concatenated, their lengths in ``_sizes``. Single frames let the subscriber conflate, so a
-  client always reads the newest observation, never a backlog.
-
-The header holds ``jointN.pos`` (measured, rad), ``cmd.jointN.pos`` and ``cmd.x.vel`` /
-``cmd.theta.vel`` (last commanded), ``head.deg`` (measured tilt), ``seq``, ``t``, ``busy``. The bridge only streams while it
-has heard from a client within the last couple of seconds, so every client heartbeats.
+The protocol is described once, in the docstring of the bridge that serves it:
+``ros2_ws/src/brain/manipulation/manipulation/lerobot_bridge.py``. The constants below repeat the
+bridge's because the two sides run on different Pythons and share no code; ``tests/test_wire.py``
+holds them equal. The bridge streams only while it hears from a client, so every client heartbeats.
 """
 
 from __future__ import annotations
@@ -128,13 +119,7 @@ class Link:
         sub = self._require(self._sub)
         if not sub.poll(timeout_ms, zmq.POLLIN):
             return None
-        raw: bytes | None = None
-        while True:
-            try:
-                raw = sub.recv(zmq.NOBLOCK)
-            except zmq.Again:
-                break
-        return parse_message(raw) if raw is not None else None
+        return parse_message(sub.recv(zmq.NOBLOCK))  # CONFLATE keeps one message: the newest
 
     def send(self, payload: dict[str, float]) -> None:
         self._send(payload)

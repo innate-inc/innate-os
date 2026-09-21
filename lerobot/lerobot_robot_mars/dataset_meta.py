@@ -10,6 +10,7 @@ which decides what the head camera sees and must match between recording and rol
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
@@ -18,6 +19,8 @@ from pathlib import Path
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 from lerobot.utils.constants import HF_LEROBOT_HOME
+
+from .hub import has_dataset
 
 SIDECAR = Path("meta") / "mars.json"
 DEFAULT_HEAD_ANGLE_DEG = -20.0
@@ -58,7 +61,7 @@ def recording_root(argv: Sequence[str], now: float | None = None) -> Path | None
     root = _flag(argv, "--dataset.root")
     if root:
         path = Path(root).expanduser()
-        return path if (path / "meta" / "info.json").is_file() else None
+        return path if has_dataset(path) else None
     repo_id = _flag(argv, "--dataset.repo_id")
     if not repo_id or "/" not in repo_id:
         return None
@@ -68,13 +71,15 @@ def recording_root(argv: Sequence[str], now: float | None = None) -> Path | None
         return None
     if (_flag(argv, "--resume") or "").lower() == "true":
         resumed = parent / name
-        return resumed if (resumed / "meta" / "info.json").is_file() else None
+        return resumed if has_dataset(resumed) else None
     now = time.time() if now is None else now
+    # The name itself or lerobot's `_YYYYMMDD_HHMMSS` stamp on it; a bare prefix would also match a
+    # sibling dataset ("pick" and "pick_tv") and label it with this run's head angle.
+    stamped = re.compile(re.escape(name) + r"(_\d{8}_\d{6})?")
     fresh = [
         info.parent.parent
         for info in parent.glob("*/meta/info.json")
-        if (info.parent.parent.name == name or info.parent.parent.name.startswith(name + "_"))
-        and now - info.stat().st_mtime <= RECENT_S
+        if stamped.fullmatch(info.parent.parent.name) and now - info.stat().st_mtime <= RECENT_S
     ]
     return max(fresh, key=lambda d: (d / "meta" / "info.json").stat().st_mtime, default=None)
 

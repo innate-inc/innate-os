@@ -382,7 +382,9 @@ picks the angle and holds the head there:
 
 ### Safety behaviour of the bridge
 
-- Commands are ignored while an Innate skill or policy is executing on the robot.
+- Commands are ignored while the robot runs a recorded or learned behavior of its own. Code skills and
+  the agent are not covered: the base is safe behind the velocity mux, where app teleop always wins, but
+  the arm has no such arbiter, so do not run a LeRobot policy while a skill or the agent moves the arm.
 - The base stops if a commanding client goes silent for half a second.
 - Gripper targets are held to the safe range: a policy cannot squeeze hard enough to trip the servo.
 - Speed and joint limits are enforced by the robot's own drivers, as for every other command source.
@@ -409,7 +411,7 @@ Swap `lawam` for the extra of the policy you want. `uv sync` puts the released v
 | `No 'obs' messages from the MARS bridge` | The robot is not reachable at `MARS_HOST`. Use its IP address, check you are on the same network, and look for the `LeRobot bridge listening` log line. |
 | Log says `LeRobot bridge disabled: …` | The line names the reason. `innate update reinstall` installs a missing dependency and rebuilds. |
 | Replay or a policy moves the arm oddly and the base not at all | The phone app or the web app is still teleoperating. Leave teleop first. |
-| The robot ignores actions | An Innate skill is running. Wait for it to finish. |
+| The robot ignores actions | The robot is running a recorded or learned behavior of its own. Wait for it to finish. |
 | The base stops half a second after the last action | That is the watchdog. Send actions continuously, as the LeRobot commands do. |
 | `lerobot-train` asks for a `repo_id` | Add `--policy.push_to_hub=false`. |
 | `401 Unauthorized` or `403 Forbidden` from the Hub | Not logged in, a read-only token, or a name you cannot write to. See [Log in to Hugging Face](#5-log-in-to-hugging-face). |

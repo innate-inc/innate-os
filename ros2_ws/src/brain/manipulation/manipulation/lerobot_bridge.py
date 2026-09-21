@@ -4,7 +4,8 @@
 
 ROS-free on purpose: manipulation_server owns the topics and hands this class the latest
 sensor data and three publish callbacks. The client half lives in innate-os/lerobot
-(``lerobot_robot_mars.wire``); the protocol is documented there and pinned by tests on both sides.
+(``lerobot_robot_mars.wire``). This docstring is the protocol's one description; lerobot/tests runs
+this module against the client, so the two sides cannot drift apart.
 
 Sockets (bridge binds, clients connect):
 - PULL ``port_actions``: one JSON object per message. ``{"_hb": 1}`` is a heartbeat; an object
@@ -14,6 +15,12 @@ Sockets (bridge binds, clients connect):
   Topic ``state`` has no payload. Topic ``obs`` carries the JPEGs of the cameras listed in
   ``_cams`` concatenated, their byte lengths in ``_sizes``. One frame per message lets a
   subscriber set ZMQ_CONFLATE and always read the newest observation instead of a backlog.
+  The header holds ``jointN.pos`` (measured, rad), ``cmd.jointN.pos`` and ``cmd.x.vel`` /
+  ``cmd.theta.vel`` (last commanded by anyone), ``head.deg``, ``seq``, ``t``, and ``busy``.
+
+Commands are ignored while manipulation_server itself executes a behavior (``busy``). Nothing else
+is arbitrated here: the base goes through the velocity mux, where app teleop wins, but the arm has
+no mux, so a client that drives the arm while a code skill or the agent moves it will fight them.
 
 The bridge streams only while a client has been heard within ``idle_after_s``, so an idle robot
 encodes nothing. Once a client has commanded the base, silence longer than ``watchdog_s`` stops it.
@@ -89,6 +96,7 @@ class LeRobotBridge:
         self._last_action: float | None = None
         self._base_stopped = True
         self._seq = 0
+        self._encoded: dict[str, tuple[np.ndarray, bytes]] = {}
         # Set by the owner while a skill or policy is executing: commands are then ignored.
         self.commands_blocked = False
 
@@ -156,7 +164,7 @@ class LeRobotBridge:
         header.update(zip((COMMAND_PREFIX + k for k in JOINT_KEYS), (float(v) for v in commanded), strict=True))
         header.update(zip((COMMAND_PREFIX + k for k in BASE_KEYS), (float(v) for v in base), strict=True))
         self._send(encode_message(TOPIC_STATE, header))
-        jpegs = [self._encode(images.get(camera)) for camera in CAMERAS]
+        jpegs = [self._encode(camera, images.get(camera)) for camera in CAMERAS]
         header[CAMERAS_KEY] = list(CAMERAS)
         header[SIZES_KEY] = [len(jpeg) for jpeg in jpegs]
         self._send(encode_message(TOPIC_OBS, header, b"".join(jpegs)))
@@ -170,11 +178,18 @@ class LeRobotBridge:
         except zmq.Again:
             return  # a slow subscriber drops this tick rather than stalling the robot
 
-    def _encode(self, image_bgr: np.ndarray | None) -> bytes:
+    def _encode(self, camera: str, image_bgr: np.ndarray | None) -> bytes:
         if image_bgr is None:
             return b""
+        # The head camera is 15 fps under a 30 Hz tick, so every frame comes round twice; encoding
+        # it once matters while a policy is running inference beside us.
+        cached = self._encoded.get(camera)
+        if cached is not None and cached[0] is image_bgr:
+            return cached[1]
         ok, jpeg = cv2.imencode(".jpg", image_bgr, self._jpeg_params)
-        return jpeg.tobytes() if ok else b""
+        data = jpeg.tobytes() if ok else b""
+        self._encoded[camera] = (image_bgr, data)
+        return data
 
     def _apply_head(self, payload: dict) -> None:
         if HEAD_KEY not in payload or self.commands_blocked:
