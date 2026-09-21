@@ -355,6 +355,18 @@ class VirtualMars:
         # mj_resetData restores the parked pose, so reset() just has to forget
         # which ones were out.
         self.props.bind(self.model)
+        cloth_backend = os.environ.get("INNATE_SIM_CLOTH_BACKEND", "xpbd").strip().lower() or "xpbd"
+        if cloth_backend not in ("mujoco", "xpbd"):
+            raise ValueError("INNATE_SIM_CLOTH_BACKEND must be 'mujoco' or 'xpbd'")
+        self.cloth_backend = cloth_backend
+        self._cloth = None
+        if cloth_backend == "xpbd" and self.props._soft:
+            try:
+                from .cloth_xpbd import XPBDClothSet
+            except ImportError as exc:
+                raise RuntimeError("XPBD dependencies are missing: use Python 3.11+ and uv run --extra xpbd") from exc
+
+            self._cloth = XPBDClothSet(self.model, self.data, self.props)
 
         self._renderer: mujoco.Renderer | None = None
         environment = self.model.body("apartment").id
@@ -382,6 +394,8 @@ class VirtualMars:
         mq, _md, source, mult = self._mimic
         self.data.qpos[mq] = mult * ARM_HOME[source]
         self.props.mark_all_parked(self.data)  # also disables parked flex contacts/constraints
+        if self._cloth is not None:
+            self._cloth.reset()
         self.traffic.reset(self.data)
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
@@ -425,7 +439,19 @@ class VirtualMars:
     def step(self, duration: float) -> None:
         """Advance the sim by `duration` seconds, applying servos each step."""
         end = self.data.time + duration
-        dt = float(self.model.opt.timestep)
+        default_dt = float(self.model.opt.timestep)
+        dt = self.props.physics_timestep(default_dt)
+        if self._cloth is not None:
+            dt = self._cloth.physics_timestep(dt)
+        self.model.opt.timestep = dt
+        try:
+            self._step_until(end, dt)
+        finally:
+            # Accuracy is local to this advance, never a persistent setting
+            # change affecting a later reset/world/rigid-only run.
+            self.model.opt.timestep = default_dt
+
+    def _step_until(self, end: float, dt: float) -> None:
         while self.data.time < end:
             if self.props.has_deformables:
                 # A deformable's rest-dihedral force depends on positions and
@@ -440,7 +466,11 @@ class VirtualMars:
                 mujoco.mj_step1(self.model, self.data)
                 self._apply_control(clamp_velocity=False)
                 self.props.apply_deformable_forces(self.data)
+                if self._cloth is not None:
+                    self._cloth.before_step(dt)
                 mujoco.mj_step2(self.model, self.data)
+                if self._cloth is not None:
+                    self._cloth.after_step()
             else:
                 self._apply_control()
                 if self.traffic.enabled:

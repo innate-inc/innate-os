@@ -149,6 +149,8 @@ class SoftBinding:
     def __init__(self, prop: SoftProp, model: mujoco.MjModel, park_xy: tuple[float, float]) -> None:
         self.prop = prop
         self.model = model
+        self.external_physics = False
+        self.placement_revision = 0
         flex_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_FLEX, prop.name)
         if flex_id < 0:
             raise ValueError(f"compiled model has no flex named {prop.name!r}")
@@ -169,11 +171,14 @@ class SoftBinding:
             raise RuntimeError("soft-prop slide joints are not world-aligned XYZ triplets")
 
         cloth_data = prop.cloth_data()
-        self._local_vertices = np.asarray(cloth_data["vertices"], dtype=np.float64).copy()
+        rest_vertices = np.asarray(cloth_data["vertices"], dtype=np.float64)
+        self._local_vertices = np.asarray(cloth_data.get("initial_vertices", rest_vertices), dtype=np.float64).copy()
         if self._local_vertices.shape != (vertex_num, 3):
             raise ValueError(f"flex has {vertex_num} vertices but cloth data has {len(self._local_vertices)}")
+        if not np.isfinite(self._local_vertices).all():
+            raise ValueError("soft-prop initial vertices must be finite")
         park_x, park_y = park_xy
-        self._compiled_vertices = self._local_vertices + np.asarray((park_x, park_y, prop.rest_z))
+        self._compiled_vertices = rest_vertices + np.asarray((park_x, park_y, prop.rest_z))
         self._qpos0 = np.asarray(model.qpos0[self._qpos_indices], dtype=np.float64).copy()
 
         eq_type = np.asarray(model.eq_type)
@@ -202,6 +207,7 @@ class SoftBinding:
 
     def set_pose(self, data: mujoco.MjData, x: float, y: float, z: float, yaw: float) -> None:
         """Place the rest sock at an anchor pose; lowest rest vertex is at z."""
+        self.placement_revision += 1
         cosine, sine = math.cos(yaw), math.sin(yaw)
         target = self._local_vertices.copy()
         local_x, local_y = target[:, 0].copy(), target[:, 1].copy()
@@ -218,6 +224,7 @@ class SoftBinding:
 
     def set_active(self, data: mujoco.MjData, active: bool) -> None:
         """Enable/disable this flex's contacts and edge equalities."""
+        active = active and not self.external_physics
         self.model.flex_contype[self.flex_id] = self._contact_type if active else 0
         self.model.flex_conaffinity[self.flex_id] = self._contact_affinity if active else 0
         data.eq_active[self._equality_ids] = self._equality_active if active else 0
@@ -232,6 +239,8 @@ class SoftBinding:
         # bending is integrated once without erasing unrelated external force
         # users elsewhere in the model.
         data.qfrc_applied[self._dof_indices] = 0.0
+        if self.external_physics:
+            return 0.0, 0.0
         return self.bending.apply(data)
 
     def vertices(self, data: mujoco.MjData) -> np.ndarray:
@@ -266,6 +275,7 @@ class SoftProp:
     size: tuple[float, ...] = (0.05, 0.03, 0.10)
     collision: str = "flex"
     mass: float = 0.02
+    max_timestep: float | None = None
     radius: float = 4.0e-5
     condim: int = 3
     contact_priority: int = 0
@@ -278,6 +288,10 @@ class SoftProp:
     edge_damping: float = 0.001
     bend_stiffness: float = 5.0e-7
     bend_damping_ratio: float = 0.04
+    xpbd_bend_stiffness: float = 1.0e-5
+    xpbd_panel_bend_stiffness: float = 0.0
+    xpbd_bending_model: int = 3
+    xpbd_contact_thickness: float = 0.00025
     hinge_quality_min: float = 0.10
     rest_z: float = 0.0
     drop_z: float | None = None
@@ -288,6 +302,18 @@ class SoftProp:
     _cloth_cache: dict[str, np.ndarray] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.xpbd_panel_bend_stiffness) or self.xpbd_panel_bend_stiffness < 0:
+            raise ValueError("Panel bending stiffness must be finite and nonnegative")
+        if not math.isfinite(self.xpbd_bend_stiffness) or self.xpbd_bend_stiffness <= 0:
+            raise ValueError("XPBD bending stiffness must be finite and positive")
+        if self.xpbd_bending_model not in (1, 3):
+            raise ValueError("XPBD bending model must be dihedral (1) or isometric (3)")
+        if self.xpbd_bending_model == 1 and self.xpbd_bend_stiffness > 1:
+            raise ValueError("Dihedral bending stiffness must be at most 1")
+        if not math.isfinite(self.xpbd_contact_thickness) or not 0 < self.xpbd_contact_thickness < 0.003:
+            raise ValueError("XPBD contact thickness must be positive and below the 3 mm activation distance")
+        if self.max_timestep is not None and (not math.isfinite(self.max_timestep) or self.max_timestep <= 0):
+            raise ValueError("soft-prop max_timestep must be finite and positive")
         if not self.title:
             self.title = self.name.replace("_", " ").capitalize()
         if self.drop_z is None:

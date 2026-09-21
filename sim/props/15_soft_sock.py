@@ -16,10 +16,8 @@ with np.load(_CLOTH_DATA) as _stored:
     _CONTROL_VERTEX_COUNT = int(np.asarray(_stored["vertices"]).shape[0])
     _RENDER_VERTEX_COUNT = int(np.asarray(_stored["render_vertex_count"]))
 
-# The browser keeps the original 2,496-vertex textured surface and skins it
-# from the 109 vertices MuJoCo actually simulates. Native robot cameras use the
-# separately copied texture on the low-resolution flex, so both views retain
-# the authored pattern rather than substituting a generic material.
+# The asset/stream describes the sewn cloth surface. The browser adds visual
+# subdivision; native cameras and collision retain the coarse surface.
 PROP = SoftProp(
     name="soft_sock",
     label="🧦",
@@ -29,22 +27,28 @@ PROP = SoftProp(
     deformable_id=1,
     rgba=(0.34117647, 0.57254902, 0.72156863, 1.0),
     # The generated local frame is XY-centred with its lowest point at z=0.
-    size=(0.0553, 0.0299, 0.0998),
-    mass=0.065,
+    size=(0.066, 0.002, 0.10),
+    mass=0.025,
+    # Thin fabric needs smaller contact steps while it is present. The world
+    # keeps its normal timestep when the sock is parked or removed.
+    max_timestep=0.0005,
     condim=3,
     contact_priority=3,
-    friction=(0.8, 0.02, 0.002),
+    friction=(0.8, 0.005, 0.0001),
     # Model the folded fabric as a thin shell instead of an effectively
     # zero-thickness mathematical surface.  The contact margin lets MuJoCo
     # establish the constraint before a narrow fingertip crosses the shell.
     radius=0.001,
     contact_margin=0.001,
-    # Keep enough rest-dihedral force to stop the coarse cage collapsing into
-    # arbitrary creases, but let a handled sock retain folds instead of
-    # springing back like rubber.  Extra damping removes the resulting flutter
-    # without making the edge-length constraints softer.
-    bend_stiffness=1.0e-6,
-    bend_damping_ratio=0.15,
+    # Cloth vertices are far lighter than the rigid props. Soft, mass-scaled
+    # contact compliance lets a loaded fingertip cross a sub-mm sheet.
+    contact_solimp=(0.9999, 0.99999, 0.0001),
+    # Bending and in-plane extension are separate: retain edge constraints
+    # against rubber-band stretch, but let the thin panels drape and swing.
+    # Contact priority 3 deliberately avoids the rigid fingers' condim=6
+    # torsional/rolling resistance, which is inappropriate for cloth.
+    bend_stiffness=1.0e-7,
+    bend_damping_ratio=0.04,
     rest_z=0.001,
     drop_z=0.35,
     # The authored sock is ~20 cm long, so keep it clear of the chassis when

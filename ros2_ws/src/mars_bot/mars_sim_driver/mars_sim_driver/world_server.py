@@ -494,6 +494,7 @@ class WorldServer:
             return {
                 "ok": True,
                 "state_port": self.state_port,
+                "cloth_backend": getattr(self.sim, "cloth_backend", "mujoco"),
                 "binds": self.binds,
                 "environment": environment.id if environment else None,
             }, None

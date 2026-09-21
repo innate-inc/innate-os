@@ -21,6 +21,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { decodeDeformableSkin, skinDeformablePositions, type DeformableSkin } from "./deformableSkin";
+import { ClothVisualSurface, cottonBumpTexture, woolBumpTexture } from "./clothVisualSurface";
 import type { DeformableFrame } from "./physics/deformableFrame";
 import { PropModels } from "./propModels";
 
@@ -41,6 +42,7 @@ export interface PropDeformableViewerDef {
 
 /** How the browser should place a prop's glb into its MuJoCo body frame. */
 export interface PropViewerDef {
+  clothMaterial?: "cotton" | "wool";
   glb?: string;
   /** Procedural browser-only visual layered over a simple physics collider. */
   kind?: "door_frame";
@@ -218,6 +220,7 @@ export class PropLibrary {
   /** Only the newest frame matters; rendering deliberately does not queue. */
   private latestDeformables = new Map<number, DeformableFrame>();
   private deformableMeshes = new Map<string, THREE.Mesh>();
+  private clothSurfaces = new WeakMap<THREE.Mesh, ClothVisualSurface>();
   private deformableRestPositions = new Map<string, Float32Array>();
   private activeDeformables = new Set<string>();
   private skinLoads = new Map<string, Promise<DeformableSkin | null>>();
@@ -260,6 +263,7 @@ export class PropLibrary {
     }
     for (const [name, root] of this.roots) {
       if (!this.info.has(name)) {
+        this.restoreDeformable(name);
         this.scene.remove(root);
         const label = nameLabelOf(root);
         if (label) {
@@ -586,7 +590,9 @@ export class PropLibrary {
     if (!model || model.parent !== root) return; // placeholder still owns the root
     const mesh = this.deformableMesh(info, model);
     if (!mesh) return;
-    const position = mesh.geometry.getAttribute("position");
+    const surface = this.clothSurfaces.get(mesh);
+    const geometry = surface?.controlGeometry ?? mesh.geometry;
+    const position = geometry.getAttribute("position");
     if (!(position instanceof THREE.BufferAttribute) || position.itemSize !== 3 || position.count !== skin.renderCount) {
       this.warnOnce(`position:${info.name}`, `deformable '${info.name}' glb has no matching xyz position buffer`);
       return;
@@ -597,7 +603,7 @@ export class PropLibrary {
       output = position.array;
     } else {
       output = new Float32Array(skin.renderCount * 3);
-      mesh.geometry.setAttribute("position", new THREE.BufferAttribute(output, 3));
+      geometry.setAttribute("position", new THREE.BufferAttribute(output, 3));
     }
     skinDeformablePositions(skin, frame.positions, output);
     // skinDeformablePositions deliberately reconstructs exact world-space
@@ -611,10 +617,13 @@ export class PropLibrary {
       output[i + 1] -= rootY;
       output[i + 2] -= rootZ;
     }
-    mesh.geometry.getAttribute("position").needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
-    mesh.geometry.computeBoundingBox();
-    mesh.geometry.computeBoundingSphere();
+    geometry.getAttribute("position").needsUpdate = true;
+    if (surface) surface.update();
+    else {
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+    }
 
     root.quaternion.identity();
     root.scale.set(1, 1, 1);
@@ -631,7 +640,7 @@ export class PropLibrary {
     const matches: THREE.Mesh[] = [];
     model.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
-      const position = obj.geometry.getAttribute("position");
+      const position = (this.clothSurfaces.get(obj)?.controlGeometry ?? obj.geometry).getAttribute("position");
       if (position?.itemSize === 3 && position.count === expected) matches.push(obj);
     });
     if (matches.length !== 1) {
@@ -643,12 +652,34 @@ export class PropLibrary {
     }
 
     const mesh = matches[0];
-    const position = mesh.geometry.getAttribute("position");
+    const geometry = this.clothSurfaces.get(mesh)?.controlGeometry ?? mesh.geometry;
+    const position = geometry.getAttribute("position");
     if (position instanceof THREE.BufferAttribute) position.setUsage(THREE.DynamicDrawUsage);
     this.deformableMeshes.set(info.name, mesh);
     this.deformableRestPositions.set(info.name, Float32Array.from(position.array));
+    // Only the sock opts into this visual approximation; all physics buffers
+    // and stream/skin counts remain unchanged. Reuse when the roster resets.
+    const wool = info.viewer.clothMaterial === "wool";
+    const clothVisual = info.name === "soft_sock" || wool || info.viewer.clothMaterial === "cotton";
+    if (clothVisual && !this.clothSurfaces.has(mesh)) {
+      try {
+        const surface = new ClothVisualSurface(geometry, 2, wool ? 0.0018 : 0);
+        this.clothSurfaces.set(mesh, surface);
+        mesh.geometry = surface.geometry;
+      } catch (error) {
+        this.warnOnce(`surface:${info.name}`, `Cannot smooth sock surface: ${error}`);
+      }
+    }
     for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
       material.side = THREE.DoubleSide;
+      if (clothVisual && material instanceof THREE.MeshStandardMaterial) {
+        material.flatShading = false;
+        material.roughness = 0.95;
+        material.metalness = 0;
+        material.bumpMap = wool ? woolBumpTexture() : cottonBumpTexture();
+        material.bumpScale = wool ? 0.00035 : 0.00004;
+        if (wool) material.color.set("#dacbb3");
+      }
       material.needsUpdate = true;
     }
     return mesh;
@@ -659,13 +690,17 @@ export class PropLibrary {
     if (!this.activeDeformables.delete(name)) return;
     const mesh = this.deformableMeshes.get(name);
     const rest = this.deformableRestPositions.get(name);
-    const position = mesh?.geometry.getAttribute("position");
+    const surface = mesh ? this.clothSurfaces.get(mesh) : undefined;
+    const position = (surface?.controlGeometry ?? mesh?.geometry)?.getAttribute("position");
     if (!mesh || !rest || !(position instanceof THREE.BufferAttribute) || position.count * 3 !== rest.length) return;
     position.copyArray(rest);
     position.needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
-    mesh.geometry.computeBoundingBox();
-    mesh.geometry.computeBoundingSphere();
+    if (surface) surface.update();
+    else {
+      mesh.geometry.computeVertexNormals();
+      mesh.geometry.computeBoundingBox();
+      mesh.geometry.computeBoundingSphere();
+    }
   }
 
   private loadSkin(info: PropInfo): Promise<DeformableSkin | null> {

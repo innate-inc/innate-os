@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """Build a real-time MuJoCo/Three.js sock from the authored cloth bundle.
 
-The source bundle keeps a high-resolution control surface.  That surface is
-useful for offline renders but too expensive for the simulator's wall-clock
-physics loop. Directly decimating its close inner/outer layers makes them
-intersect at tiny resolutions, so this tool builds a regularly sampled
-cross-section cage with an open cuff and emits the two artifacts the runtime
-consumes:
+Two sewn panels have a planar rest metric, a small initial opening, and an open cuff.
 
 * ``cloth_data.npz`` for MuJoCo flex topology and rest-dihedral bending.
-* a textured, double-sided GLB plus a compact skin map for Three.js.
+* a textured, double-sided GLB plus a skin map for Three.js. Panel skins are
+  identity maps, so rendered folds match the collision surface exactly.
 
 Both outputs use metres, Z-up, an identity object transform, and a local frame
 whose XY centre and lowest Z point are at the origin.
@@ -83,92 +79,6 @@ def _cross_section_points(vertices: np.ndarray, faces: np.ndarray, z: float) -> 
     return np.unique(np.round(np.concatenate(points), 10), axis=0)
 
 
-def _convex_hull_2d(points: np.ndarray) -> np.ndarray:
-    """Andrew monotone-chain hull, returned counter-clockwise."""
-    ordered = sorted(map(tuple, points.tolist()))
-    if len(ordered) < 3:
-        raise RuntimeError("sock cross-section has fewer than three points")
-
-    def cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower: list[tuple[float, float]] = []
-    for point in ordered:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
-            lower.pop()
-        lower.append(point)
-    upper: list[tuple[float, float]] = []
-    for point in reversed(ordered):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
-            upper.pop()
-        upper.append(point)
-    return np.asarray(lower[:-1] + upper[:-1], dtype=np.float64)
-
-
-def _sample_hull_radially(hull: np.ndarray, segments: int) -> np.ndarray:
-    """Sample a convex section at consistent angles around an interior point."""
-    center = hull.mean(axis=0)
-    sampled = []
-    for angle in np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False):
-        direction = np.asarray((np.cos(angle), np.sin(angle)))
-        hits = []
-        for start, end in zip(hull, np.roll(hull, -1, axis=0), strict=True):
-            edge = end - start
-            denominator = direction[0] * edge[1] - direction[1] * edge[0]
-            if abs(denominator) < 1.0e-12:
-                continue
-            relative = start - center
-            distance = (relative[0] * edge[1] - relative[1] * edge[0]) / denominator
-            fraction = (relative[0] * direction[1] - relative[1] * direction[0]) / denominator
-            if distance >= 0.0 and -1.0e-9 <= fraction <= 1.0 + 1.0e-9:
-                hits.append(distance)
-        if not hits:
-            raise RuntimeError("failed to intersect a radial ray with the sock cross-section")
-        sampled.append(center + min(hits) * direction)
-    return np.asarray(sampled)
-
-
-def _regular_control_cage(
-    source_vertices: np.ndarray, source_faces: np.ndarray, rings: int, segments: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build an evenly sampled, open-cuff surface instead of a lumpy decimation.
-
-    The former 42-point convex hull put nearly every vertex at the sole or
-    cuff, leaving the middle of the sock as a few huge rigid triangles.  This
-    swept cage gives every longitudinal region the same deformation budget.
-    """
-    z_min = float(source_vertices[:, 2].min())
-    z_max = float(source_vertices[:, 2].max())
-    inset = min(0.002, 0.02 * (z_max - z_min))
-    levels = np.linspace(z_min + inset, z_max - inset, rings)
-    ring_vertices = []
-    for z in levels:
-        section = _cross_section_points(source_vertices, source_faces, float(z))
-        sampled = _sample_hull_radially(_convex_hull_2d(section), segments)
-        ring_vertices.append(np.column_stack((sampled, np.full(segments, z))))
-
-    vertices = np.concatenate(ring_vertices, axis=0)
-    bottom_center = np.asarray((vertices[:segments, 0].mean(), vertices[:segments, 1].mean(), z_min))
-    vertices = np.vstack((vertices, bottom_center))
-    bottom = len(vertices) - 1
-    faces: list[tuple[int, int, int]] = []
-    for ring in range(rings - 1):
-        lower = ring * segments
-        upper = (ring + 1) * segments
-        for segment in range(segments):
-            following = (segment + 1) % segments
-            a, b = lower + segment, lower + following
-            c, d = upper + following, upper + segment
-            if (ring + segment) % 2:
-                faces.extend(((a, b, d), (b, c, d)))
-            else:
-                faces.extend(((a, b, c), (a, c, d)))
-    for segment in range(segments):
-        following = (segment + 1) % segments
-        faces.append((bottom, following, segment))
-    return vertices, np.asarray(faces, dtype=np.int32)
-
-
 def _nearest_uvs(source_vertices: np.ndarray, source_uvs: np.ndarray, vertices: np.ndarray) -> np.ndarray:
     """Map UVs without pulling scipy into the simulator toolchain."""
     nearest = np.empty(len(vertices), dtype=np.int32)
@@ -177,6 +87,67 @@ def _nearest_uvs(source_vertices: np.ndarray, source_uvs: np.ndarray, vertices: 
         distances = np.sum((chunk[:, None, :] - source_vertices[None, :, :]) ** 2, axis=2)
         nearest[start : start + len(chunk)] = np.argmin(distances, axis=1)
     return np.asarray(source_uvs[nearest], dtype=np.float64)
+
+
+def _sewn_panels(
+    source_vertices: np.ndarray, source_faces: np.ndarray, rows: int = 17, columns: int = 5
+) -> tuple[np.ndarray, np.ndarray]:
+    """Two thin fabric panels sharing a toe/side seam, with an unsewn cuff.
+
+    The source supplies the X/Z tailoring outline, NOT a puffy rest metric.
+    Inextensible triangles on the old inflated cage lock its non-developable
+    curvature. These nearly planar panels can instead fold without stretching.
+    Shared seam vertices cannot separate; there are no hidden cross-cuff bars,
+    interior solids, doubled render shells, or welds to the gripper.
+    """
+    if rows < 3 or columns < 3:
+        raise ValueError("sewn panels need at least three rows and columns")
+    low, high = source_vertices[:, 2].min(), source_vertices[:, 2].max()
+    inset = min(0.002, 0.02 * (high - low))
+    vertices: list[list[float]] = []
+    ids: dict[tuple[int, int, int], int] = {}
+    for row, z in enumerate(np.linspace(low + inset, high - inset, rows)):
+        section = _cross_section_points(source_vertices, source_faces, float(z))
+        left, right = section[:, 0].min(), section[:, 0].max()
+        for side in range(2):
+            for col in range(columns):
+                seam = col in (0, columns - 1) or row == 0
+                if side == 1 and seam:
+                    ids[side, row, col] = ids[0, row, col]
+                    continue
+                ids[side, row, col] = len(vertices)
+                u = col / (columns - 1)
+                # A small opening keeps opposing faces initially separated.
+                # This is empty space between panels, not cloth thickness.
+                y = 0.0 if seam else (1 if side else -1) * 0.002 * np.sin(np.pi * u)
+                vertices.append([float(left + (right - left) * u), float(y), float(z)])
+    faces = []
+    for side in range(2):
+        for row in range(rows - 1):
+            for col in range(columns - 1):
+                a, b, c, d = [
+                    ids[side, r, k] for r, k in ((row, col), (row, col + 1), (row + 1, col + 1), (row + 1, col))
+                ]
+                # At the sewn toe's right corner, the other diagonal creates
+                # an all-seam triangle duplicated on both panels when columns
+                # is even. Keep the diagonal incident to the interior vertex.
+                diagonal_ac = (row + col) % 2 == 0 and not (row == 0 and col == columns - 2)
+                triangles = [(a, b, c), (a, c, d)] if diagonal_ac else [(a, b, d), (b, c, d)]
+                faces.extend(triangles if side == 0 else [t[::-1] for t in triangles])
+    return np.asarray(vertices), np.asarray(faces, dtype=np.int32)
+
+
+def _export_surface_skin(path: Path, vertices: np.ndarray) -> None:
+    """Identity ISK2: visible fabric is exactly the colliding cloth surface.
+
+    No signed MLS weights spanning opposite panels, or rigid normal offsets
+    that can stick out through a fingertip when the cloth folds tightly.
+    """
+    count = len(vertices)
+    header = b"ISK2" + np.asarray((count, count, 0), dtype="<u4").tobytes()
+    rest = np.asarray(vertices, dtype="<f4").tobytes()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header + rest + rest + np.eye(count, dtype="<f4").tobytes())
 
 
 def _position_uvs(vertices: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -236,126 +207,48 @@ def _export_glb(
     path.write_bytes(scene.export(file_type="glb"))
 
 
-def _localized_affine_weights(
-    render_vertices: np.ndarray,
-    control_vertices: np.ndarray,
-    neighbor_count: int,
-) -> tuple[np.ndarray, float, int]:
-    """Blend nearby controls while reproducing every affine transform.
-
-    The former polyharmonic RBF solve coupled every render vertex to every
-    control.  It was continuous, but a local pinch visibly pulled the whole
-    sock like jelly.  These moving-least-squares coordinates use a compact
-    Wendland kernel and expand the neighborhood only when the local surface is
-    too nearly planar to satisfy the affine constraints robustly.
-    """
-    control_count = len(control_vertices)
-    if not 4 <= neighbor_count <= control_count:
-        raise ValueError(f"skin neighborhood must be between 4 and {control_count}, got {neighbor_count}")
-    scale = float(np.max(np.ptp(control_vertices, axis=0)))
-    if not np.isfinite(scale) or scale <= 0.0:
-        raise ValueError("control vertices must span a finite, non-zero volume")
-    weights = np.zeros((len(render_vertices), control_count), dtype=np.float64)
-    worst_condition = 0.0
-    largest_neighborhood = 0
-
-    for render_index, render in enumerate(render_vertices):
-        distances = np.linalg.norm(control_vertices - render, axis=1)
-        ordered = np.argsort(distances)
-        solved = False
-        neighborhood_sizes = list(range(neighbor_count, control_count + 1, 4))
-        if neighborhood_sizes[-1] != control_count:
-            neighborhood_sizes.append(control_count)
-        for count in neighborhood_sizes:
-            indices = ordered[:count]
-            offsets = (control_vertices[indices] - render) / scale
-            # Keep the outermost weight near zero so swapping one neighbor for
-            # another does not introduce a visible seam across render edges.
-            support = max(float(distances[indices[-1]]) * 1.15, 1.0e-9)
-            radial_distance = np.minimum(distances[indices] / support, 1.0)
-            radial = (1.0 - radial_distance) ** 4 * (4.0 * radial_distance + 1.0)
-            basis = np.column_stack((np.ones(count), offsets))
-            moment = basis.T @ (radial[:, None] * basis)
-            condition = float(np.linalg.cond(moment))
-            if not np.isfinite(condition) or condition > 1.0e10:
-                if count < control_count:
-                    continue
-                raise RuntimeError(f"render vertex {render_index} has an ill-conditioned affine neighborhood")
-            coefficients = np.linalg.solve(moment, np.asarray((1.0, 0.0, 0.0, 0.0)))
-            local_weights = radial * (basis @ coefficients)
-            residual = basis.T @ local_weights - np.asarray((1.0, 0.0, 0.0, 0.0))
-            if np.max(np.abs(residual)) > 1.0e-8:
-                if count < control_count:
-                    continue
-                raise RuntimeError(f"render vertex {render_index} affine residual is {np.max(np.abs(residual))}")
-            weights[render_index, indices] = local_weights
-            worst_condition = max(worst_condition, condition)
-            largest_neighborhood = max(largest_neighborhood, count)
-            solved = True
-            break
-        if not solved:
-            raise RuntimeError(f"could not construct a stable local skin map for render vertex {render_index}")
-    return weights, worst_condition, largest_neighborhood
-
-
-def _export_skin(
-    path: Path,
-    render_vertices: np.ndarray,
-    control_vertices: np.ndarray,
-    control_faces: np.ndarray,
-    neighbor_count: int,
-) -> tuple[float, float, float, int, float]:
-    """Write a localized, affine-preserving deformation map (ISK2)."""
-    del control_faces  # topology drives physics; smooth skinning uses its vertices
-    weights, worst_condition, largest_neighborhood = _localized_affine_weights(
-        render_vertices, control_vertices, neighbor_count
-    )
-    reconstructed = weights @ control_vertices
-    rest_error = float(np.max(np.linalg.norm(reconstructed - render_vertices, axis=1)))
-    partition_error = float(np.max(np.abs(weights.sum(axis=1) - 1.0)))
-    largest_weight_l1 = float(np.max(np.sum(np.abs(weights), axis=1)))
-
-    header = b"ISK2" + np.asarray((len(render_vertices), len(control_vertices), 0), dtype="<u4").tobytes()
-    payload = (
-        header
-        + np.asarray(control_vertices, dtype="<f4").tobytes()
-        + np.asarray(render_vertices, dtype="<f4").tobytes()
-        + np.asarray(weights, dtype="<f4").tobytes()
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
-    return rest_error, partition_error, worst_condition, largest_neighborhood, largest_weight_l1
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-data", type=Path, required=True)
-    parser.add_argument("--source-texture", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--source-data", type=Path)
+    source.add_argument("--source-glb", type=Path)
+    parser.add_argument("--source-texture", type=Path)
     parser.add_argument("--physics-dir", type=Path, required=True)
     parser.add_argument("--viewer-glb", type=Path, required=True)
     parser.add_argument("--viewer-skin", type=Path, required=True)
-    parser.add_argument("--control-rings", type=int, default=9)
-    parser.add_argument("--control-segments", type=int, default=12)
-    parser.add_argument("--skin-neighbors", type=int, default=20)
     parser.add_argument("--texture-size", type=int, default=1024)
     parser.add_argument("--palette", choices=("authored", "two-tone-gray"), default="two-tone-gray")
+    parser.add_argument("--panel-rows", type=int, default=17)
+    parser.add_argument("--panel-columns", type=int, default=5)
     args = parser.parse_args()
 
-    with np.load(args.source_data.resolve()) as stored:
-        source_vertices = np.asarray(stored["vertices"], dtype=np.float64)
-        source_faces = np.asarray(stored["faces"], dtype=np.int32)
-        source_uvs = np.asarray(stored["uvs"], dtype=np.float64)
+    if args.source_glb:
+        mesh = trimesh.load(args.source_glb.resolve(), force="mesh", process=False)
+        source_vertices, source_faces = np.asarray(mesh.vertices), np.asarray(mesh.faces)
+        source_uvs = np.asarray(mesh.visual.uv)
+    else:
+        with np.load(args.source_data.resolve()) as stored:
+            source_vertices = np.asarray(stored["vertices"], dtype=np.float64)
+            source_faces = np.asarray(stored["faces"], dtype=np.int32)
+            source_uvs = np.asarray(stored["uvs"], dtype=np.float64)
+    if args.palette == "authored" and not args.source_texture:
+        parser.error("--palette authored requires --source-texture")
     if args.palette == "two-tone-gray":
         source_uvs = _position_uvs(source_vertices, source_vertices)
 
-    vertices, faces = _regular_control_cage(source_vertices, source_faces, args.control_rings, args.control_segments)
+    source_vertex_count, source_face_count = len(source_vertices), len(source_faces)
+    vertices, faces = _sewn_panels(source_vertices, source_faces, args.panel_rows, args.panel_columns)
     anchor = np.array((vertices[:, 0].mean(), vertices[:, 1].mean(), vertices[:, 2].min()))
     vertices -= anchor
     source_vertices = source_vertices - anchor
+    initial_vertices = vertices.copy()
+    # Stress-free planar rest metric; placement opens the two panels.
+    vertices[:, 1] = 0.0
     if args.palette == "two-tone-gray":
         uvs = _position_uvs(vertices, source_vertices)
     else:
         uvs = _nearest_uvs(source_vertices, source_uvs, vertices)
+    source_vertices, source_faces, source_uvs = initial_vertices.copy(), faces.copy(), uvs.copy()
     hinges, rest_angles, rest_lengths = _build_hinges(vertices, faces)
     boundary_edges, nonmanifold_edges = _topology_counts(faces)
     if not boundary_edges or nonmanifold_edges:
@@ -376,6 +269,7 @@ def main() -> None:
     np.savez_compressed(
         physics_dir / "cloth_data.npz",
         vertices=vertices,
+        initial_vertices=initial_vertices,
         faces=faces,
         uvs=uvs,
         hinges=hinges,
@@ -383,9 +277,6 @@ def main() -> None:
         rest_lengths=rest_lengths,
         render_vertex_count=np.asarray(len(source_vertices), dtype=np.int32),
     )
-    # Render the original 5k-triangle control surface, skinned to the tiny
-    # physics mesh. This keeps the authored colour/outline without sending or
-    # simulating the offline mesh's 2,496 control vertices.
     _export_glb(
         args.viewer_glb.resolve(),
         source_vertices,
@@ -394,29 +285,21 @@ def main() -> None:
         output_texture,
         args.texture_size,
     )
-    skin_error, skin_partition_error, skin_condition, skin_neighborhood, skin_weight_l1 = _export_skin(
-        args.viewer_skin.resolve(), source_vertices, vertices, faces, args.skin_neighbors
-    )
+    _export_surface_skin(args.viewer_skin.resolve(), vertices)
     diagnostics = {
-        "source_vertices": len(source_vertices),
-        "source_triangles": len(source_faces),
+        "source_vertices": source_vertex_count,
+        "source_triangles": source_face_count,
         "control_vertices": len(vertices),
         "control_triangles": len(faces),
-        "control_strategy": "regular_cross_section_cage",
-        "control_rings": args.control_rings,
-        "control_segments": args.control_segments,
+        "control_strategy": "sewn-panels",
+        "panel_rows": args.panel_rows,
+        "panel_columns": args.panel_columns,
         "bending_hinges": len(hinges),
         "boundary_edges": boundary_edges,
         "nonmanifold_edges": nonmanifold_edges,
         "bounds_m": [vertices.min(axis=0).tolist(), vertices.max(axis=0).tolist()],
         "render_vertices": len(source_vertices),
         "render_triangles": len(source_faces),
-        "skin_rest_max_error_m": skin_error,
-        "skin_partition_max_error": skin_partition_error,
-        "skin_requested_neighbors": args.skin_neighbors,
-        "skin_largest_neighborhood": skin_neighborhood,
-        "skin_worst_moment_condition": skin_condition,
-        "skin_largest_weight_l1": skin_weight_l1,
         "viewer_glb_bytes": args.viewer_glb.resolve().stat().st_size,
         "viewer_skin_bytes": args.viewer_skin.resolve().stat().st_size,
         "physics_texture_bytes": (physics_dir / "texture_base_color.png").stat().st_size,

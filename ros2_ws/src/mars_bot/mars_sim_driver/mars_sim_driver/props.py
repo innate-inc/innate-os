@@ -469,6 +469,19 @@ class PropRegistry:
     def has_deformables(self) -> bool:
         return bool(self._soft)
 
+    def physics_timestep(self, default: float) -> float:
+        """Resolve active cloth accuracy limits; parked assets have no cost."""
+        return min(
+            [default]
+            + [
+                self.props[name].max_timestep
+                for name in self._soft
+                if name in self.out
+                and self.props[name].max_timestep is not None
+                and not getattr(self._soft[name], "external_physics", False)
+            ]
+        )
+
     def prepare_step(self, data) -> None:
         """Keep parked flexes at their compiled rest pose before dynamics."""
         for name, soft in self._soft.items():
