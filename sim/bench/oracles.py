@@ -112,14 +112,17 @@ ORACLES: dict[str, list[tuple]] = {
     # Stops sit ~0.6 m in front of each station pad: inside the 0.85 goal
     # radius, and clear of the prop set back behind it.
     "household_take_orders": [
-        # (-3.0, 1.3): the person's drop moved (a marker post it used to
-        # land on, see 41_take_orders.py). Measured through the REAL engine,
-        # not a standalone physics test -- object_centers() rotates
-        # center_offset by the body's FINAL orientation, which a raw xpos
-        # reading (what earlier standalone tests checked) does not capture,
-        # and the two disagreed by over a metre here. Engine-measured centre
-        # is (-3.30, 1.27); this waypoint is within the 0.9 m goal radius.
-        ("goto", -3.0, 1.3),
+        # (-1.5, 2.05): the fallen body moved out of the spine wall it used
+        # to be dropped inside (see 41_take_orders.py), so the waypoint moves
+        # with it. Measured through the REAL engine, not a standalone physics
+        # test -- object_centers() rotates center_offset by the body's FINAL
+        # orientation, which a raw xpos reading does not capture, and the two
+        # disagreed by over a metre here. Engine-measured centre is
+        # (-2.00, 2.06), and a route from the spawn stops at (-1.51, 2.05),
+        # 0.49 m from it, inside the 0.9 m goal radius. Approaching from the
+        # east also keeps the route off the body itself, which a waypoint on
+        # the far side of it cannot do.
+        ("goto", -1.5, 2.05),
         ("wait", 2.5),
         ("goto", -0.4, 1.2),
         ("goto", 0.4, 1.2),
@@ -161,8 +164,11 @@ ORACLES: dict[str, list[tuple]] = {
         ("grab", "household_mug_kitchen"),
         ("goto", 0.4, 1.2),
         ("goto", -0.4, 1.2),
-        ("goto", -1.3, 2.0),
-        ("put", "household_mug_kitchen", -1.3, 2.6),
+        # The mat's centre is a marker post, and the release-point search
+        # finds no cell beside it; 2.2 is the one spot around the station a
+        # route reaches to within 0.1 m. See 42_fetch_from_kitchen.py.
+        ("goto", -1.3, 1.9),
+        ("put", "household_mug_kitchen", -1.3, 2.2),
         ("wait", 1.0),
     ],
 }

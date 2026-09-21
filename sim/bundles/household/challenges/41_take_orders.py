@@ -35,31 +35,33 @@ CHALLENGE = Challenge(
         "where the dog is, and finally the bedroom."
     ),
     setup=[
-        # (-3.4, -0.5) at yaw 0, NOT (-1.3, 2.6): that earlier spot sat
-        # exactly on top of a pre-existing marker post+pad in the room's
-        # static geometry (identical x, y to three decimals) -- the body's
-        # foot settled perched on the post, which a probe agent's rendered
-        # frame showed as "floating... feet balanced on a thin pole". Drift
-        # and rest-z both looked fine at that spot, which is why it was not
-        # caught the first time -- the fix was verified by RENDERING the
-        # settled frame, not by checking those two numbers again.
+        # (-2.0, 1.75) at yaw 0: the WHOLE body inside the living room, and
+        # off the route to the bedroom door.
         #
-        # RESIDUAL, DISCLOSED IMPERFECTION: the body's full 1.7 m length
-        # matters, not just its origin -- an intermediate candidate placed
-        # the feet clear of the sofa but let the HEAD end swing into the
-        # sofa's back/cushion, producing a genuinely chaotic multi-second
-        # bounce (traced step-by-step: calm for ~150 steps, then a violent
-        # excursion up to z=1.27 before finally settling ~1.4 m from the
-        # drop point). This position keeps the whole body's swept path clear
-        # of furniture and settles calmly with no bounce -- but the final
-        # rest pose still is not a clean "flat on the back" silhouette. That
-        # appears to be a property of collision="hull" on this mesh (a
-        # convexified human silhouette has no flat resting face -- heels,
-        # shoulders and hips are all local high points), not of any one drop
-        # position: seven candidates were tried and none produced a
-        # textbook-flat lying pose, only calm-vs-chaotic settling. Filed as
-        # a known limitation rather than chased further; see FINDINGS.md.
-        Drop("human", -3.4, -0.5, yaw_deg=0),
+        # The previous (-3.4, -0.5) put the feet in the bedroom and the head
+        # 1.23 m into the living room, straight through the spine wall that
+        # divides them -- the body was spawned inside 2.4 m of masonry.
+        # Measured over the 1.5 s after a reset: it is thrown to a peak of
+        # 2.285 m and lands 1.732 m away, so every run of this challenge began
+        # by hurling the casualty across the flat. Found in
+        # sim/bench/ENVIRONMENT_AUDIT.md.
+        #
+        # THE NAV MAP CANNOT SEE THIS BODY. occupancy_grid rasterises static
+        # world geometry only, so a prop is invisible to the planner: a route
+        # that plans cleanly is no evidence the robot can drive it. Four
+        # candidate positions all planned perfectly and all ended the episode
+        # "stuck at (-1.63, 0.76) heading for (-2.50, 0.50)", because the
+        # approach to the casualty nudged the body south into the bedroom leg.
+        # Only running the oracle distinguishes them; this position is the one
+        # that scores 3/3.
+        #
+        # RESIDUAL, DISCLOSED IMPERFECTION: the final rest pose is still not a
+        # clean "flat on the back" silhouette. That is a property of
+        # collision="hull" on this mesh -- a convexified human has no flat
+        # resting face, since heels, shoulders and hips are all local high
+        # points -- rather than of any one drop position. Filed as a known
+        # limitation; see FINDINGS.md.
+        Drop("human", -2.0, 1.75, yaw_deg=0),
         Drop("labrador", 1.0, 1.65, yaw_deg=90),
     ],
     # The first two checks are anchored to the person and the dog, not to
