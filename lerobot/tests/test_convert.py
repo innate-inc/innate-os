@@ -222,3 +222,15 @@ def test_the_webapp_reads_the_export_record_the_converter_writes(
         "pushed": False,
         "removed": 0,
     }
+
+
+def test_a_second_conversion_into_the_same_folder_waits_its_turn(skill_dir: Path, tmp_path: Path) -> None:
+    import fcntl
+
+    root = tmp_path / "out"
+    with open(tmp_path / ".out.lock", "w") as held:  # the first conversion, still running
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(FileExistsError):  # it would clear the first one's staging folder
+            convert_skill(skill_dir, repo_id="innate/mars-test", root=root, log=lambda _m: None)
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2

@@ -30,6 +30,11 @@ from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STATE
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
 from .dataset_meta import DEFAULT_HEAD_ANGLE_DEG, read_sidecar, write_sidecar
 from .hub import dataset_root, has_dataset, hub_refusal, hub_url, push_mirror
 from .schema import CAMERA_ORDER, CAMERA_SHAPE, FPS, ROBOT_TYPE, dataset_features, image_key
@@ -283,71 +288,72 @@ def convert_skill(
 ) -> Path:
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
-    task_text = task or recording.task
-    if push:
-        _refuse_foreign_hub_dataset(recording, repo_id)
-    eligible = recording.episodes(include_failures)
-    exported = _episodes_in_copy(recording, repo_id, out, {ref.episode_id for ref in eligible}, log)
-    todo = [
-        ref
-        for ref in eligible
-        if ref.episode_id not in exported and (episode_ids is None or ref.episode_id in episode_ids)
-    ]
-    if not todo:
-        log(f"{recording.name}: nothing new to export to {repo_id}")
-        if push and exported:
-            progress({"event": "push"})
-            push_mirror(LeRobotDataset(repo_id, root=out), private=private)
-            recording.record_export(repo_id, out, exported, pushed=True)
-            progress({"event": "done", "url": hub_url(repo_id), "message": "Already converted; uploaded again"})
-        else:
-            progress({"event": "done", "url": "", "message": "Nothing new to publish"})
-        return out
+    with _only_conversion_into(out):
+        task_text = task or recording.task
+        if push:
+            _refuse_foreign_hub_dataset(recording, repo_id)
+        eligible = recording.episodes(include_failures)
+        exported = _episodes_in_copy(recording, repo_id, out, {ref.episode_id for ref in eligible}, log)
+        todo = [
+            ref
+            for ref in eligible
+            if ref.episode_id not in exported and (episode_ids is None or ref.episode_id in episode_ids)
+        ]
+        if not todo:
+            log(f"{recording.name}: nothing new to export to {repo_id}")
+            if push and exported:
+                progress({"event": "push"})
+                push_mirror(LeRobotDataset(repo_id, root=out), private=private)
+                recording.record_export(repo_id, out, exported, pushed=True)
+                progress({"event": "done", "url": hub_url(repo_id), "message": "Already converted; uploaded again"})
+            else:
+                progress({"event": "done", "url": "", "message": "Nothing new to publish"})
+            return out
 
-    # A new copy is built beside `out` and moved into place only once it is finalized and marked as this
-    # skill's, so `out` never exists half-made: lerobot refuses to create into an existing folder, so a
-    # marker could not come first, and an unmarked folder is one the ownership check must refuse.
-    fresh = not out.exists()
-    build = out.with_name(f".{out.name}.partial") if fresh else out
-    if fresh:
-        shutil.rmtree(build, ignore_errors=True)  # what a killed earlier build left; its name makes it ours
-    dataset = open_dataset(repo_id, build, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
-    head_angles: list[float] = []
-    progress({"event": "start", "total": len(todo)})
-    for done, ref in enumerate(todo, start=1):
-        angle = recording.head_angle(ref)
-        if angle is not None:
-            head_angles.append(angle)
-        count = 0
-        for frame in recording.frames(ref):
-            dataset.add_frame({**frame, "task": task_text})
-            count += 1
-        dataset.save_episode()
-        log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
-        progress({"event": "episode", "index": done, "total": len(todo), "frames": count})
-    dataset.finalize()
-    if fresh:
-        write_sidecar(
-            build,
-            head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
-            head_angle_assumed=not head_angles,
-            source=CONVERTER,
-            skill=recording.skill_id,
-        )
-        os.replace(build, out)
-        dataset = LeRobotDataset(repo_id, root=out)
-    # Only now are the episodes durable: until finalize() the parquet files have no footer.
-    exported |= {ref.episode_id for ref in todo}
-    recording.record_export(repo_id, out, exported, pushed=False)
-    log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
-    if push:
-        progress({"event": "push"})
-        push_mirror(dataset, private=private)
-        recording.record_export(repo_id, out, exported, pushed=True)
-        log(f"pushed to {hub_url(repo_id)}")
-    episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
-    progress({"event": "done", "url": hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
-    return out
+        # A new copy is built beside `out` and moved into place only once it is finalized and marked as this
+        # skill's, so `out` never exists half-made: lerobot refuses to create into an existing folder, so a
+        # marker could not come first, and an unmarked folder is one the ownership check must refuse.
+        fresh = not out.exists()
+        build = out.with_name(f".{out.name}.partial") if fresh else out
+        if fresh:
+            shutil.rmtree(build, ignore_errors=True)  # what a killed earlier build left; its name makes it ours
+        dataset = open_dataset(repo_id, build, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
+        head_angles: list[float] = []
+        progress({"event": "start", "total": len(todo)})
+        for done, ref in enumerate(todo, start=1):
+            angle = recording.head_angle(ref)
+            if angle is not None:
+                head_angles.append(angle)
+            count = 0
+            for frame in recording.frames(ref):
+                dataset.add_frame({**frame, "task": task_text})
+                count += 1
+            dataset.save_episode()
+            log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
+            progress({"event": "episode", "index": done, "total": len(todo), "frames": count})
+        dataset.finalize()
+        if fresh:
+            write_sidecar(
+                build,
+                head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
+                head_angle_assumed=not head_angles,
+                source=CONVERTER,
+                skill=recording.skill_id,
+            )
+            os.replace(build, out)
+            dataset = LeRobotDataset(repo_id, root=out)
+        # Only now are the episodes durable: until finalize() the parquet files have no footer.
+        exported |= {ref.episode_id for ref in todo}
+        recording.record_export(repo_id, out, exported, pushed=False)
+        log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
+        if push:
+            progress({"event": "push"})
+            push_mirror(dataset, private=private)
+            recording.record_export(repo_id, out, exported, pushed=True)
+            log(f"pushed to {hub_url(repo_id)}")
+        episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
+        progress({"event": "done", "url": hub_url(repo_id) if push else "", "message": f"Published {episodes}"})
+        return out
 
 
 def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, current: set[int], log: Log) -> set[int]:
@@ -382,6 +388,25 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, curren
     log(f"{recording.name}: {reason}; rebuilding {out} in full")
     shutil.rmtree(out)
     return set()
+
+
+@contextlib.contextmanager
+def _only_conversion_into(out: Path) -> Iterator[None]:
+    """Hold `out` for one conversion at a time: a second one would clear the first's staging folder.
+
+    flock goes with the process, so a killed run never leaves the folder locked. Windows has no
+    flock; there the lock is skipped, and so is the guarantee.
+    """
+    if fcntl is None:
+        yield
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out.with_name(f".{out.name}.lock"), "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise FileExistsError(f"another conversion into {out} is running; wait for it to finish") from None
+        yield
 
 
 def _refuse_foreign_hub_dataset(recording: SkillRecording, repo_id: str) -> None:
