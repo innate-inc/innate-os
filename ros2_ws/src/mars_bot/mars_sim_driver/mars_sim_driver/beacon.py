@@ -48,9 +48,7 @@ class SimBeacon:
     @classmethod
     def from_env(cls) -> SimBeacon | None:
         """Configured by the launcher through the environment; None when it
-        opted out (INNATE_SIM_BEACON=0) or never configured a port."""
-        if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
-            return None
+        configured no port (it leaves them out when advertising is off)."""
         rosbridge = os.environ.get("INNATE_SIM_BEACON_ROSBRIDGE_PORT", "").strip()
         if not rosbridge.isdigit():
             return None

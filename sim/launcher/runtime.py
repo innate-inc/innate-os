@@ -2795,7 +2795,9 @@ def _beacon_ports_wanted() -> list[int] | None:
 def _beacon_env(repo_root: Path) -> dict[str, str]:
     """What the world server's LAN discovery beacon announces (mars_sim_driver
     beacon.py): the ports the controller app needs, the robot's name file, and
-    the checkout's version."""
+    the checkout's version. Empty when advertising is switched off."""
+    if _beacon_ports_wanted() is None:
+        return {}
     described = subprocess.run(
         ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
         capture_output=True,
