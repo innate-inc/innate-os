@@ -2819,7 +2819,9 @@ def _start_world_server(
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
         "from mars_sim_driver.world_server import main; main()"
     )
-    env = os.environ.copy()
+    # The beacon's settings come only from this launcher: one inherited from the
+    # shell would advertise after an opt-out, and every later up would restart.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("INNATE_SIM_BEACON_")}
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
     env.update(_beacon_env(sim_repo.parent))
     if mujoco_gl:
