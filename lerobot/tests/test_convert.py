@@ -146,17 +146,21 @@ def test_a_copy_left_by_a_killed_run_is_rebuilt(skill_dir: Path, tmp_path: Path)
     )
     dataset = LeRobotDataset("innate/mars-test", root=root)
     assert dataset.num_episodes == 3 and dataset.num_frames == 3 * T
-    # Killed earlier still, between lerobot creating the dataset and the converter marking it as its own.
-    (root / "meta" / "mars.json").unlink()
-    info.write_text(json.dumps({**json.loads(info.read_text()), "total_episodes": 0}))
-    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
-    assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2
+    # A fresh build killed before it was moved into place leaves only its hidden staging folder.
+    fresh = tmp_path / "fresh"
+    staged = tmp_path / ".fresh.partial"
+    (staged / "meta").mkdir(parents=True)
+    (staged / "meta" / "info.json").write_text('{"total_episodes": 0}')
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=fresh, vcodec="h264", log=lambda _m: None)
+    assert LeRobotDataset("innate/mars-test", root=fresh).num_episodes == 2 and not staged.exists()
 
 
 def test_a_folder_the_converter_did_not_write_is_never_cleared(skill_dir: Path, tmp_path: Path) -> None:
     someone_elses = tmp_path / "recorded-with-lerobot"
     (someone_elses / "meta").mkdir(parents=True)
-    (someone_elses / "meta" / "info.json").write_text('{"total_episodes": 1}')
+    (someone_elses / "meta" / "info.json").write_text(
+        '{"total_episodes": 0}'
+    )  # e.g. a lerobot-record session just started
     # Even when a stale record of ours names this very path and its episode count happens to match,
     # which would otherwise read as "our copy, append to it": what sits there now is what counts.
     stale = {"repo_id": "innate/mars-test", "root": str(someone_elses), "episode_ids": [0], "pushed": False}

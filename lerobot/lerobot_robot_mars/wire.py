@@ -79,6 +79,7 @@ class Link:
         self._sub: zmq.Socket | None = None
         self._last_send = 0.0
         self._asking_since: float | None = None
+        self._last_ask = 0.0
 
     @property
     def is_open(self) -> bool:
@@ -120,8 +121,14 @@ class Link:
     def latest(self, timeout_ms: int) -> Message | None:
         """The newest message, waiting up to *timeout_ms* for one; None if nothing arrived."""
         sub = self._require(self._sub)
+        now = time.monotonic()
+        # A gap between asks is a pause on this side (lerobot saving an episode), not silence from
+        # the robot: the clock restarts, so only continuous asking can run it out.
+        if now - self._last_ask > HEARTBEAT_S:
+            self._asking_since = None
+        self._last_ask = now
         if not sub.poll(timeout_ms, zmq.POLLIN):
-            self._asking_since = self._asking_since or time.monotonic()
+            self._asking_since = self._asking_since or now
             return None
         self._asking_since = None
         return parse_message(sub.recv(zmq.NOBLOCK))  # CONFLATE keeps one message: the newest
@@ -129,8 +136,8 @@ class Link:
     def ensure_alive(self) -> None:
         """Raise once the bridge has not answered for SILENT_AFTER_S of asking.
 
-        Counted from the first unanswered ask, not from the last message, so a long pause on this
-        side (lerobot saving an episode) is not mistaken for a dead robot. Without it a rebooted
+        Counted over continuous asking, not from the last message, so a long pause on this side
+        (lerobot saving an episode) is not mistaken for a dead robot. Without it a rebooted
         robot or a dropped network reads as a frozen but healthy one, and a recording keeps writing
         the last frame with fresh timestamps.
         """

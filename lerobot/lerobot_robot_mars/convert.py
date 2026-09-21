@@ -304,11 +304,14 @@ def convert_skill(
             progress({"event": "done", "url": "", "message": "Nothing new to publish"})
         return out
 
-    dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
-    if read_sidecar(out) is None:
-        # Marks the folder as this converter's, for this skill, from its first moment: only a folder
-        # that says so itself may ever be appended to or cleared. The head angle follows later.
-        write_sidecar(out, head_angle_deg=None, source=CONVERTER, skill=recording.skill_id)
+    # A new copy is built beside `out` and moved into place only once it is finalized and marked as this
+    # skill's, so `out` never exists half-made: lerobot refuses to create into an existing folder, so a
+    # marker could not come first, and an unmarked folder is one the ownership check must refuse.
+    fresh = not out.exists()
+    build = out.with_name(f".{out.name}.partial") if fresh else out
+    if fresh:
+        shutil.rmtree(build, ignore_errors=True)  # what a killed earlier build left; its name makes it ours
+    dataset = open_dataset(repo_id, build, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
     head_angles: list[float] = []
     progress({"event": "start", "total": len(todo)})
     for done, ref in enumerate(todo, start=1):
@@ -323,17 +326,19 @@ def convert_skill(
         log(f"{recording.name}: episode {ref.episode_id} ({ref.source}, {count} frames) -> {repo_id}")
         progress({"event": "episode", "index": done, "total": len(todo), "frames": count})
     dataset.finalize()
-    # Only now are the episodes durable: until finalize() the parquet files have no footer.
-    exported |= {ref.episode_id for ref in todo}
-    recording.record_export(repo_id, out, exported, pushed=False)
-    if (read_sidecar(out) or {}).get("head_angle_deg") is None:
+    if fresh:
         write_sidecar(
-            out,
+            build,
             head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
             head_angle_assumed=not head_angles,
             source=CONVERTER,
             skill=recording.skill_id,
         )
+        os.replace(build, out)
+        dataset = LeRobotDataset(repo_id, root=out)
+    # Only now are the episodes durable: until finalize() the parquet files have no footer.
+    exported |= {ref.episode_id for ref in todo}
+    recording.record_export(repo_id, out, exported, pushed=False)
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
         progress({"event": "push"})
@@ -360,12 +365,6 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, curren
     """
     if not out.exists():
         return set()
-    if _holds_no_episodes(out):
-        # Nothing to lose. It is also what a run killed between lerobot creating the dataset and this
-        # converter marking it leaves behind: lerobot refuses to create into an existing folder, so the
-        # mark cannot come first, and refusing here would wedge the repository name for good.
-        shutil.rmtree(out)
-        return set()
     sidecar = read_sidecar(out) or {}
     if sidecar.get("source") != CONVERTER or sidecar.get("skill") != recording.skill_id:
         raise FileExistsError(
@@ -383,14 +382,6 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, curren
     log(f"{recording.name}: {reason}; rebuilding {out} in full")
     shutil.rmtree(out)
     return set()
-
-
-def _holds_no_episodes(out: Path) -> bool:
-    """An empty folder, or a lerobot dataset that has not saved an episode yet. Anything else, even a
-    folder with no dataset in it at all, may be someone's and is not ours to clear."""
-    if not any(out.iterdir()):
-        return True
-    return has_dataset(out) and _read_json(out / "meta" / "info.json").get("total_episodes") == 0
 
 
 def _refuse_foreign_hub_dataset(recording: SkillRecording, repo_id: str) -> None:
