@@ -19,6 +19,9 @@ from zeroconf import IPVersion, ServiceInfo, Zeroconf
 
 SERVICE_TYPE = "_innate._tcp.local."
 REFRESH_S = 5.0
+# zeroconf's default keeps records 75 min: a sim killed without saying goodbye
+# would stay listed on phones that long. Answering re-queries costs nothing.
+RECORD_TTL_S = 60
 # Host-side ends of container networks: on the LAN they are unreachable.
 _CONTAINER_ADAPTERS = ("docker", "br-", "veth", "bridge", "utun", "tun", "tap")
 
@@ -69,6 +72,8 @@ class SimBeacon:
             SERVICE_TYPE,
             f"{self._instance}.{SERVICE_TYPE}",
             port=self.rosbridge_port,
+            host_ttl=RECORD_TTL_S,
+            other_ttl=RECORD_TTL_S,
             # Its own host record: the machine's .local name belongs to the OS responder.
             server=f"{self._instance}.local.",
             parsed_addresses=addresses,
@@ -82,12 +87,12 @@ class SimBeacon:
 
     def _robot_name(self) -> str:
         if self.robot_info_path is None:
-            return "Simulator"
+            return "MARS"
         try:
             name = json.loads(self.robot_info_path.read_text(encoding="utf-8")).get("robot_name")
         except (OSError, ValueError, AttributeError):
-            return "Simulator"
-        return f"{name} (sim)" if name else "Simulator"
+            return "MARS"
+        return name or "MARS"
 
     def _run(self) -> None:
         announced: tuple[str, list[str]] | None = None
