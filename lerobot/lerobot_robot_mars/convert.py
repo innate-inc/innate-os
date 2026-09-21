@@ -39,7 +39,6 @@ RAW_DATA_DIR = "raw_data"
 # dataset_metadata.json from a snapshot taken when the skill was activated and would drop a key kept
 # there, after which the next publish appends every episode a second time.
 EXPORT_FILE = "lerobot_export.json"
-LEGACY_EXPORT_KEY = "lerobot_export"  # where the record lived before it had its own file
 CONVERTER = "mars2lerobot"
 RECORDER_CAMERAS: tuple[str, ...] = ("camera_1", "camera_2")
 
@@ -71,6 +70,11 @@ class SkillRecording:
         self.export_path = (self.data_dir if self.data_dir.is_dir() else skill_dir) / EXPORT_FILE
 
     @property
+    def skill_id(self) -> str:
+        """The skill's folder name: what a converted copy is tied to, stable where the display name is not."""
+        return self.skill_dir.resolve().name
+
+    @property
     def name(self) -> str:
         return str(self.skill_meta.get("name") or self.skill_dir.name)
 
@@ -94,7 +98,7 @@ class SkillRecording:
         return [EpisodeRef(_episode_id(p.name), p.name, "teleop", None, ()) for p in files]
 
     def export(self, repo_id: str) -> dict:
-        record = _read_json(self.export_path) or self.dataset_meta.get(LEGACY_EXPORT_KEY, {})
+        record = _read_json(self.export_path)
         return record if record.get("repo_id") == repo_id else {}
 
     def record_export(self, repo_id: str, root: Path, episode_ids: set[int], *, pushed: bool) -> None:
@@ -298,9 +302,9 @@ def convert_skill(
 
     dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
     if read_sidecar(out) is None:
-        # Marks the folder as this converter's from its first moment: only a folder that says so
-        # itself may ever be cleared for a rebuild. The head angle follows once the episodes are read.
-        write_sidecar(out, head_angle_deg=None, source=CONVERTER)
+        # Marks the folder as this converter's, for this skill, from its first moment: only a folder
+        # that says so itself may ever be appended to or cleared. The head angle follows later.
+        write_sidecar(out, head_angle_deg=None, source=CONVERTER, skill=recording.skill_id)
     head_angles: list[float] = []
     progress({"event": "start", "total": len(todo)})
     for done, ref in enumerate(todo, start=1):
@@ -324,6 +328,7 @@ def convert_skill(
             head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
             head_angle_assumed=not head_angles,
             source=CONVERTER,
+            skill=recording.skill_id,
         )
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
@@ -340,8 +345,9 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
     """The episode ids the converted copy at `out` already holds, after clearing a copy that cannot be trusted.
 
     Whatever already sits at `out` is touched, appended to or cleared, only if the folder itself says it
-    is this converter's (its meta/mars.json): the export record merely names a path, and what is at that
-    path may since have been replaced by a dataset someone recorded.
+    is this converter's copy of this skill (its meta/mars.json). The export record merely names a path:
+    what is there may since have been replaced by a dataset someone recorded, or belong to another
+    skill published under the same repository name, which a rebuild would wipe locally and on the Hub.
 
     Our own copy is appended to only when it holds exactly the recorded episodes. One left by a run
     killed before finalize() is unreadable, and one that lost episodes must not be topped up and uploaded
@@ -349,14 +355,16 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
     """
     if not out.exists():
         return set()
-    if (read_sidecar(out) or {}).get("source") != CONVERTER:
+    sidecar = read_sidecar(out) or {}
+    # No skill named: a copy from before the marker carried one, taken as this skill's.
+    if sidecar.get("source") != CONVERTER or sidecar.get("skill", recording.skill_id) != recording.skill_id:
         raise FileExistsError(
-            f"{out} holds something this converter did not write; move it away or choose another --root"
+            f"{out} holds a dataset that is not this skill's; publish under another repository name or move it away"
         )
     exported = {int(i) for i in recording.export(repo_id).get("episode_ids", [])}
     if exported and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
         return exported
-    log(f"{recording.name}: the converted copy at {out} is incomplete; rebuilding it from every episode")
+    log(f"{recording.name}: the copy at {out} does not match this skill's export record; rebuilding it in full")
     shutil.rmtree(out)
     return set()
 

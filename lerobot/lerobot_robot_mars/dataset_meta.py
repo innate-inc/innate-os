@@ -35,7 +35,9 @@ def read_sidecar(root: Path) -> dict | None:
         return json.load(f)
 
 
-def write_sidecar(root: Path, *, head_angle_deg: float | None, source: str, head_angle_assumed: bool = False) -> Path:
+def write_sidecar(
+    root: Path, *, head_angle_deg: float | None, source: str, head_angle_assumed: bool = False, skill: str | None = None
+) -> Path:
     path = root / SIDECAR
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -44,6 +46,7 @@ def write_sidecar(root: Path, *, head_angle_deg: float | None, source: str, head
         "head_angle_assumed": head_angle_assumed,
         "source": source,
         "plugin_version": _plugin_version(),
+        **({"skill": skill} if skill else {}),
     }
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)

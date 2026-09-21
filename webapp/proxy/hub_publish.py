@@ -25,9 +25,7 @@ from pathlib import Path
 _INNATE_OS_ROOT = os.environ.get("INNATE_OS_ROOT", os.path.expanduser("~/innate-os"))
 LEROBOT_DIR = Path(_INNATE_OS_ROOT) / "lerobot"
 VENV_ENV = "INNATE_LEROBOT_VENV"
-DATASET_METADATA = "dataset_metadata.json"
 EXPORT_FILE = "lerobot_export.json"
-EXPORT_KEY = "lerobot_export"
 REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w.\-]{0,95}/[A-Za-z0-9][\w.\-]{0,95}$")
 _TAIL_LINES = 12
 # Converting is most of the work; the Hub upload gets the last stretch of the bar.
@@ -81,10 +79,9 @@ def current_job() -> dict | None:
 
 
 def published(skill_dir: Path) -> dict | None:
-    """What an earlier publish of this skill recorded, if anything: the converter's own
-    data/lerobot_export.json, or the key it kept in dataset_metadata.json before that file existed."""
-    export = _json(skill_dir / "data" / EXPORT_FILE) or _json(skill_dir / "data" / DATASET_METADATA).get(EXPORT_KEY)
-    if not isinstance(export, dict) or not export.get("repo_id"):
+    """What an earlier publish of this skill recorded, if anything (the converter's data/lerobot_export.json)."""
+    export = _json(skill_dir / "data" / EXPORT_FILE)
+    if not export.get("repo_id"):
         return None
     return {
         "repo_id": export["repo_id"],

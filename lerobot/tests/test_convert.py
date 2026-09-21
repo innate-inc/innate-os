@@ -157,3 +157,16 @@ def test_a_folder_the_converter_did_not_write_is_never_cleared(skill_dir: Path, 
     with pytest.raises(FileExistsError):
         convert_skill(skill_dir, repo_id="innate/mars-test", root=someone_elses, log=lambda _m: None)
     assert sorted(p.name for p in someone_elses.rglob("*")) == ["info.json", "meta"]  # untouched
+
+
+def test_a_second_skill_cannot_take_over_the_first_ones_dataset(skill_dir: Path, tmp_path: Path) -> None:
+    import shutil
+
+    root = tmp_path / "out"
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    other_skill = Path(shutil.copytree(skill_dir, tmp_path / "other_skill"))
+    (other_skill / "data" / EXPORT_FILE).unlink()
+    # Same repository name, no record of its own: a rebuild here would wipe the first skill's dataset on the Hub.
+    with pytest.raises(FileExistsError):
+        convert_skill(other_skill, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2
