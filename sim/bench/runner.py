@@ -245,6 +245,29 @@ class _Ready(NamedTuple):
     nav: object
 
 
+def _bundle_binding():
+    """Snapshot the two process-wide handles _prepare moves, and hand back a
+    callable that puts them where they were.
+
+    VIRTUAL_MARS_ASSETS selects the bundle and core.ASSETS_DIR caches what it
+    resolved to. Leaving either set means the next world built in this process
+    is furnished from the last episode's map.
+    """
+    from mars_sim_driver import core as _core
+
+    before_env = os.environ.get("VIRTUAL_MARS_ASSETS")
+    before_dir = _core.ASSETS_DIR
+
+    def restore():
+        if before_env is None:
+            os.environ.pop("VIRTUAL_MARS_ASSETS", None)
+        else:
+            os.environ["VIRTUAL_MARS_ASSETS"] = before_env
+        _core.ASSETS_DIR = before_dir
+
+    return restore
+
+
 def _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0):
     """Build the world, the judge and the agent, and start the challenge.
 
@@ -369,9 +392,15 @@ def run_episode(
     code under test -- letting that escape kills the worker.
     """
     wall0 = time.time()
+    # _prepare points the process at this map's bundle, through the
+    # environment and through core.ASSETS_DIR, and a caller that runs two
+    # episodes of different maps -- or anything else after one -- must not
+    # inherit the first. Restored in the finally below.
+    _restore = _bundle_binding()
     try:
         ready = _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0)
     except BaseException as exc:  # noqa: BLE001 -- setup, so every failure is ours
+        _restore()
         if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
             raise  # the user asked to stop; that is not a result
         detail = describe(exc)
@@ -391,6 +420,7 @@ def run_episode(
             started=False,
         )
     if isinstance(ready, Episode):
+        _restore()
         return ready
     mars, sim_lock, engine, ch, agent, nav = ready
 
@@ -578,6 +608,11 @@ def run_episode(
         # The score cannot be computed from what survived, and a default would
         # be a verdict nobody reached.
         blocked = f"harness: could not read {', '.join(lost)}"
+    # The run is over and the episode is built from what it left behind, so
+    # the process can stop pointing at this map's bundle. The two early
+    # returns above restore it as well; the run loop's own failures are caught
+    # into `crash` rather than raised, so this line is reached either way.
+    _restore()
     return Episode(
         map=map_name,
         challenge=challenge_id,
