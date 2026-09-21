@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
+from brain_client.transport.speech_recording import MAX_PCM_BYTES, save_speech
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 
@@ -265,6 +266,8 @@ class TTSHandler:
         q: queue.Queue[bytes | None] = queue.Queue()
 
         def _writer() -> None:
+            recorded = bytearray()
+            recording_overflow = False
             assert player.stdin is not None
             while True:
                 chunk = q.get()
@@ -272,12 +275,20 @@ class TTSHandler:
                     break
                 try:
                     player.stdin.write(chunk)
+                    if not recording_overflow:
+                        if len(recorded) + len(chunk) <= MAX_PCM_BYTES:
+                            recorded.extend(chunk)
+                        else:
+                            recording_overflow = True
+                            recorded.clear()
+                            self.logger.warning("Speech recording skipped: clip exceeds ten minutes")
                 except BrokenPipeError:
                     break
             try:
                 player.stdin.close()
             except Exception:
                 pass
+            save_speech(recorded, self.SPEAKER_SAMPLE_RATE, self.logger)
 
         writer = threading.Thread(target=_writer, daemon=True)
         writer.start()

@@ -46,7 +46,7 @@ NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 WRIST_AIM_PX = (320, 280)
 # The arm reports its wrist origin; the fingertips land this far ahead of it in the top-down grasp.
 FINGERTIP_X_OFF = -0.01
-DRIVE_MAX_M, TURN_MAX_DEG, LIFT_Z = 0.3, 90.0, 0.22
+DRIVE_MAX_M, TURN_MAX_DEG, LIFT_Z = 0.15, 90.0, 0.22
 # Skill-local wrist-origin limit in base_link, to reduce shoulder loading.
 ARM_MAX_X = 0.30
 ARM_REACH_X = (Manipulation.REACH_X[0], ARM_MAX_X)
@@ -71,8 +71,12 @@ ModelChoice = Literal[
 SYSTEM = f"""You control MARS, a small mobile robot with a 5-joint arm and a two-finger gripper, to carry out a task
 given in words. Each turn you get the head camera with a floor grid (base_link metres: +x forward, +y left; the
 orange box is the arm's reach), the wrist camera (the crosshair marks the fingertips), the robot's state and what
-your earlier actions did. Reply with ONE JSON object and nothing else:
-{{"see": "<one sentence: what you observe that matters>", "do": "<action>", ...its parameters}}.
+your earlier actions did. Other robots,
+arms and hands around you are not a reason to stop: the robot's own protections guard the hardware, so keep working
+around them. Reply with ONE JSON object and nothing else:
+{{"see": "<where the task stands>", "do": "<action>", ...its parameters}}.
+"see" is one or two sentences read off the current frames, not carried over from earlier steps: where the task's
+objects are relative to the gripper and the goal, and what still separates them from done.
 
 Actions:
 - drive: forward_m (-{DRIVE_MAX_M}..{DRIVE_MAX_M}, negative backs up), turn_deg (-{TURN_MAX_DEG:.0f}..{TURN_MAX_DEG:.0f},
@@ -83,12 +87,15 @@ Actions:
   fold brings the arm out to a compact pose: wrist at x={ARM_MAX_X:.2f} m, z={LIFT_Z:.2f} m, gripper horizontal.
   Wrist targets must stay at x <= {ARM_MAX_X:.2f} m to reduce shoulder load; move the base closer instead of
   extending farther. With the arm folded, leave room in front for it to come out.
-- grip: close (true/false). The result says whether the fingers stopped on something.
+- grip: close (true/false). The result says whether the fingers stopped on something, but it can read as
+  held when the fingers caught only part of the object or something else; check the frames.
 - look: tilt_deg — head pitch, negative looks down ({HEAD_RANGE_DEG[0]:.0f}..{HEAD_RANGE_DEG[1]:.0f}).
 - rest: fold the arm away (keeps whatever it holds).
-- done: message — the task is complete. fail: message — it cannot be done.
+- done: message — only when the current frames show the task complete, and "see" says what in them shows it.
+  Neither the gripper reading nor what earlier steps said is proof: if the frames cannot show the result, move or
+  look until they do. fail: message — it cannot be done; not for a doubt one more look or move would settle.
 
-Move a little, look at the new frames, decide again. Every result you get back is measured, not assumed."""
+Move a little, look at the new frames, decide again. Positions you get back are measured, not assumed."""
 
 
 class DoTask(Skill):
@@ -97,8 +104,10 @@ class DoTask(Skill):
     off the floor, pushing it somewhere or dropping it in a container. The
     robot's vision model plans every step from the cameras, so it is slower
     and less reliable than a dedicated skill; use it when no dedicated skill
-    fits. `task` is the instruction; `model` runs it on a model other than
-    the robot's default."""
+    fits. `task` is the instruction, stated as the goal alone: caveats such
+    as "stop if another robot is near" make it give up, and the robot's own
+    protections already guard the hardware. `model` runs it on a model other
+    than the robot's default."""
 
     main_image: MainImage
     wrist_image: WristImage
