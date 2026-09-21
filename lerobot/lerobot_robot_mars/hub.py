@@ -34,21 +34,20 @@ def push_mirror(dataset: LeRobotDataset, *, private: bool) -> None:
 
     push_to_hub uploads but never deletes, and lerobot loads every parquet file under data/ and
     meta/episodes/, so a copy rebuilt with fewer files would leave the Hub serving the old episodes as
-    well. Stale files go first: lerobot moves its version tag only after the upload, so readers keep
-    the old, consistent revision until the new one is complete.
+    well. One commit therefore uploads this copy and deletes every other file in the dataset folders:
+    if it fails, the Hub keeps the previous dataset whole. push_to_hub then finds nothing left to
+    upload and only refreshes the dataset card and moves lerobot's version tag.
     """
     api = HfApi()
     if api.repo_exists(dataset.repo_id, repo_type="dataset"):
-        local = {path.relative_to(dataset.root).as_posix() for path in dataset.root.rglob("*") if path.is_file()}
-        remote = api.list_repo_files(dataset.repo_id, repo_type="dataset")
-        stale = [name for name in remote if name.split("/", 1)[0] in DATASET_DIRS and name not in local]
-        if stale:
-            api.delete_files(
-                dataset.repo_id,
-                delete_patterns=stale,
-                repo_type="dataset",
-                commit_message="Remove files the rebuilt dataset no longer has",
-            )
+        api.upload_folder(
+            repo_id=dataset.repo_id,
+            repo_type="dataset",
+            folder_path=dataset.root,
+            ignore_patterns=["images/"],  # lerobot's own push leaves the raw frame scratch folder out too
+            delete_patterns=[f"{folder}/" for folder in DATASET_DIRS],
+            commit_message="Replace the dataset with the current copy",
+        )
     dataset.push_to_hub(private=private)
 
 
