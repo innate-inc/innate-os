@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import TypedDict
+from dataclasses import dataclass
 
 import rclpy
 from brain_messages.action import ExecuteArmCommand
@@ -39,7 +39,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float64MultiArray, String
 
 from brain_client.common.enums import StrEnum
-from brain_client.common.geometry import apply_pose_delta
+from brain_client.common.geometry import Quat, apply_pose_delta
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
 from brain_client.robot.manipulation import Manipulation
 from brain_client.state.arm import Arm
@@ -244,19 +244,15 @@ def execute_goal(goal_handle):
             motion_lock.release()
 
 
-class PoseSample(TypedDict):
+@dataclass(frozen=True)
+class PoseSample:
     """One /armsdk/stream_pose message: a base_link delta from the pose the arm
     had when ``session`` began, and an optional gripper opening (0 closed … 1
     open). A new session re-anchors on the live pose."""
 
     session: str
-    x: float
-    y: float
-    z: float
-    qx: float
-    qy: float
-    qz: float
-    qw: float
+    position: tuple[float, float, float]
+    rotation: Quat
     grip: float | None
 
 
@@ -281,6 +277,7 @@ class PoseFollower:
         self._anchor: tuple[str, Arm] | None = None
         # The stream being answered: a refused one never gets an anchor.
         self._session: str | None = None
+        self._expired: str | None = None
         self._state = FollowState.IDLE
         self._detail = ""
         self._status_pub = node.create_publisher(String, "/armsdk/stream_pose/status", 10)
@@ -292,19 +289,13 @@ class PoseFollower:
             body = json.loads(msg.data)
             sample = PoseSample(
                 session=str(body["session"]),
-                x=float(body["x"]),
-                y=float(body["y"]),
-                z=float(body["z"]),
-                qx=float(body["qx"]),
-                qy=float(body["qy"]),
-                qz=float(body["qz"]),
-                qw=float(body["qw"]),
+                position=(float(body["x"]), float(body["y"]), float(body["z"])),
+                rotation=(float(body["qx"]), float(body["qy"]), float(body["qz"]), float(body["qw"])),
                 grip=None if body.get("grip") is None else min(1.0, max(0.0, float(body["grip"]))),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             node.get_logger().warning(f"bad stream_pose message: {e}", throttle_duration_sec=2.0)
             return
-        touch()
         with self._lock:
             self._sample = sample
             self._stamp = time.monotonic()
@@ -315,12 +306,18 @@ class PoseFollower:
             time.sleep(dt)
             with self._lock:
                 sample, fresh = self._sample, time.monotonic() - self._stamp < Manipulation.STREAM_IDLE_S
-            if sample is None or not fresh:
+            if sample is None or not fresh or sample.session == self._expired:
+                # A stream that went quiet stays dropped: resuming it would
+                # re-anchor on a pose that already holds its delta, and apply
+                # the whole delta a second time. The operator presses again.
+                if sample is not None:
+                    self._expired = sample.session
                 self._session = None
                 self._set(FollowState.IDLE)
                 self._anchor = None
                 continue
-            self._session = sample["session"]
+            self._session = sample.session
+            touch()  # here, not in the subscription callback: waking the feeds can block
             self._step(sample)
             self._publish_status()
 
@@ -328,14 +325,9 @@ class PoseFollower:
         if not motion_lock.acquire(blocking=False):
             return  # a discrete motion owns the arm; the next tick retries
         try:
-            anchor = self._anchor_for(sample["session"])
-            target = apply_pose_delta(
-                anchor.position,
-                anchor.orientation,
-                (sample["x"], sample["y"], sample["z"]),
-                (sample["qx"], sample["qy"], sample["qz"], sample["qw"]),
-            )
-            grip = None if sample["grip"] is None else sample["grip"] * Manipulation.GRIPPER_OPEN
+            anchor = self._anchor_for(sample.session)
+            target = apply_pose_delta(anchor.position, anchor.orientation, sample.position, sample.rotation)
+            grip = None if sample.grip is None else sample.grip * Manipulation.GRIPPER_OPEN
             reached = manip.stream_pose(*target, grip=grip)
             self._set(FollowState.FOLLOWING if reached else FollowState.UNREACHABLE)
         except (ArmFailed, ArmUnhealthy) as e:

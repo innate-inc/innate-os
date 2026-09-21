@@ -298,10 +298,6 @@ class KDLIKNode(Node):
         # cmd_msg.data = ik_positions
         # self.command_pub.publish(cmd_msg)
 
-        # Not q_out: that is the last seed tried, None when its solve failed,
-        # and a None seed crashed the node on the next joint state.
-        self.current_q = best_solution
-
 
 def main(args=None):
     rclpy.init(args=args)
