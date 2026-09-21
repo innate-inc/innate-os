@@ -1,4 +1,5 @@
 """Export recorded cloth positions for the viewer-only visual regression page."""
+
 import argparse
 import json
 from pathlib import Path

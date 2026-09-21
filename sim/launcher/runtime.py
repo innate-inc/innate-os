@@ -2536,8 +2536,7 @@ def _prefetch_world_env(config: dict[str, object]) -> None:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     log("Preparing the sim world's Python environment...")
     run_logged_with_heartbeat(
-        [uv, "sync", "--project", str(sim_repo)]
-        + (["--extra", "xpbd"] if _cloth_backend() == "xpbd" else []),
+        [uv, "sync", "--project", str(sim_repo)] + (["--extra", "xpbd"] if _cloth_backend() == "xpbd" else []),
         cwd=sim_repo,
         env=os.environ.copy(),
         log_path=BOOTSTRAP_LOG_PATH,
@@ -2823,11 +2822,7 @@ def _start_world_server(
                 "run",
                 "--project",
                 str(sim_repo),
-                *(
-                    ["--extra", "xpbd"]
-                    if _cloth_backend() == "xpbd"
-                    else []
-                ),
+                *(["--extra", "xpbd"] if _cloth_backend() == "xpbd" else []),
                 "python",
                 "-c",
                 bootstrap,
