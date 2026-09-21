@@ -169,4 +169,9 @@ def test_a_second_skill_cannot_take_over_the_first_ones_dataset(skill_dir: Path,
     # Same repository name, no record of its own: a rebuild here would wipe the first skill's dataset on the Hub.
     with pytest.raises(FileExistsError):
         convert_skill(other_skill, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    # A copy whose marker names no skill at all is nobody's to take either.
+    marker = root / "meta" / "mars.json"
+    marker.write_text(json.dumps({k: v for k, v in json.loads(marker.read_text()).items() if k != "skill"}))
+    with pytest.raises(FileExistsError):
+        convert_skill(other_skill, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
     assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2

@@ -356,8 +356,7 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
     if not out.exists():
         return set()
     sidecar = read_sidecar(out) or {}
-    # No skill named: a copy from before the marker carried one, taken as this skill's.
-    if sidecar.get("source") != CONVERTER or sidecar.get("skill", recording.skill_id) != recording.skill_id:
+    if sidecar.get("source") != CONVERTER or sidecar.get("skill") != recording.skill_id:
         raise FileExistsError(
             f"{out} holds a dataset that is not this skill's; publish under another repository name or move it away"
         )
