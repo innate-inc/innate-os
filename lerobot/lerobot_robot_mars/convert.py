@@ -297,7 +297,10 @@ def convert_skill(
         return out
 
     dataset = open_dataset(repo_id, out, recording.fps, vcodec=vcodec, image_writer_threads=image_writer_threads)
-    recording.record_export(repo_id, out, exported, pushed=False)  # claims `out` before anything can go wrong
+    if read_sidecar(out) is None:
+        # Marks the folder as this converter's from its first moment: only a folder that says so
+        # itself may ever be cleared for a rebuild. The head angle follows once the episodes are read.
+        write_sidecar(out, head_angle_deg=None, source=CONVERTER)
     head_angles: list[float] = []
     progress({"event": "start", "total": len(todo)})
     for done, ref in enumerate(todo, start=1):
@@ -315,7 +318,7 @@ def convert_skill(
     # Only now are the episodes durable: until finalize() the parquet files have no footer.
     exported |= {ref.episode_id for ref in todo}
     recording.record_export(repo_id, out, exported, pushed=False)
-    if read_sidecar(out) is None:
+    if (read_sidecar(out) or {}).get("head_angle_deg") is None:
         write_sidecar(
             out,
             head_angle_deg=float(np.median(head_angles)) if head_angles else DEFAULT_HEAD_ANGLE_DEG,
@@ -338,7 +341,9 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
 
     A copy is appended to only when it holds exactly the recorded episodes. One left by a run killed before
     finalize() is unreadable, and a missing one must not become a dataset of just the new episodes uploaded
-    over the full one; both are rebuilt from every episode. A folder this converter never made is left alone.
+    over the full one; both are rebuilt from every episode. Rebuilding deletes `out`, so the folder itself
+    must say it is this converter's (its meta/mars.json): the export record only names a path, and what
+    sits at that path may since have been replaced by a dataset someone recorded.
     """
     record = recording.export(repo_id)
     exported = {int(i) for i in record.get("episode_ids", [])}
@@ -346,9 +351,10 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
         return exported
     if not out.exists():
         return set()
-    ours = record.get("root") == str(out) or (read_sidecar(out) or {}).get("source") == CONVERTER
-    if not ours:
-        raise FileExistsError(f"{out} already holds something this converter did not write; choose another --root")
+    if (read_sidecar(out) or {}).get("source") != CONVERTER:
+        raise FileExistsError(
+            f"{out} holds something this converter did not write; move it away or choose another --root"
+        )
     log(f"{recording.name}: the converted copy at {out} is incomplete; rebuilding it from every episode")
     shutil.rmtree(out)
     return set()
