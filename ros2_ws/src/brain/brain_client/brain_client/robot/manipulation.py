@@ -141,6 +141,9 @@ class Manipulation:
     STREAM_MAX_SPEED = 1.8  # rad/s
     STREAM_IDLE_S = 0.4
     STREAM_IK_TIMEOUT_S = 0.1
+    # Pose samples arrive slower and less evenly than the slew loop ticks; an
+    # unsmoothed loop reaches each target in one tick and then stalls.
+    STREAM_POSE_SMOOTHING_S = 0.1
 
     # A motion completes on ARRIVAL, and motions serialize in the driver, so a
     # queued one waits out whatever is already moving before its own duration
@@ -175,6 +178,7 @@ class Manipulation:
         self._stream_target: list[float] | None = None
         self._stream_cmd: list[float] | None = None
         self._stream_speed = self.STREAM_MAX_SPEED
+        self._stream_smoothing = 0.0
         self._stream_stamp = 0.0
         self._stream_thread: threading.Thread | None = None
 
@@ -516,7 +520,9 @@ class Manipulation:
 
     # --- streaming ---
 
-    def stream_joints(self, joints: Sequence[float], *, max_speed: float | None = None) -> None:
+    def stream_joints(
+        self, joints: Sequence[float], *, max_speed: float | None = None, smoothing_s: float = 0.0
+    ) -> None:
         """Continuously retarget the arm (teleop-style streaming); returns at
         once.
 
@@ -524,7 +530,9 @@ class Manipulation:
         path leader-arm teleop uses, soft gains, no per-step splines — via a
         STREAM_RATE_HZ slew loop that clamps each joint to ``max_speed``
         (default STREAM_MAX_SPEED rad/s), so a far target ramps instead of
-        snapping. Call repeatedly from a UI or servoing loop; the stream idles
+        snapping. ``smoothing_s`` low-passes the approach with that time
+        constant, for targets that arrive slower than the loop ticks. Call
+        repeatedly from a UI or servoing loop; the stream idles
         out STREAM_IDLE_S after the last call, and the last streamed j6
         becomes the standing grip target. 5 values keep the standing grip,
         6 set it. Any discrete motion stops the stream first, and a skill
@@ -559,6 +567,7 @@ class Manipulation:
                 self._stream_cmd = seed
             self._stream_target = target
             self._stream_speed = float(max_speed) if max_speed is not None else self.STREAM_MAX_SPEED
+            self._stream_smoothing = smoothing_s
             self._stream_stamp = time.monotonic()
             if starting:
                 self._stream_thread = threading.Thread(target=self._stream_run, daemon=True)
@@ -585,7 +594,7 @@ class Manipulation:
         joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
         if joints is None:
             return False
-        self.stream_joints(joints if grip is None else [*joints, grip])
+        self.stream_joints(joints if grip is None else [*joints, grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
         return True
 
     def stream_stop(self) -> None:
@@ -618,9 +627,10 @@ class Manipulation:
                     self._stream_thread = None  # under the lock: see stream_joints
                     return
                 step = self._stream_speed * dt
+                gain = min(1.0, dt / self._stream_smoothing) if self._stream_smoothing > 0 else 1.0
                 assert self._stream_cmd is not None  # seeded before the thread starts
                 for i in range(6):
-                    delta = self._stream_target[i] - self._stream_cmd[i]
+                    delta = (self._stream_target[i] - self._stream_cmd[i]) * gain
                     self._stream_cmd[i] += max(-step, min(step, delta))
                 msg = Float64MultiArray()
                 msg.data = [float(v) for v in self._stream_cmd]
