@@ -427,7 +427,7 @@ uv run pytest
 ```
 
 The tests run the real bridge module from `ros2_ws/src/brain/manipulation` against the client,
-so the wire protocol is pinned on both sides. The protocol itself is documented in
+so the wire protocol is pinned on both sides. CI runs them whenever the plugin or the bridge changes. The protocol itself is documented in
 `lerobot_robot_mars/wire.py`.
 
 ### Why `uv.lock` is about 2,500 lines
