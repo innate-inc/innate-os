@@ -339,22 +339,23 @@ def convert_skill(
 def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: Log) -> set[int]:
     """The episode ids the converted copy at `out` already holds, after clearing a copy that cannot be trusted.
 
-    A copy is appended to only when it holds exactly the recorded episodes. One left by a run killed before
-    finalize() is unreadable, and a missing one must not become a dataset of just the new episodes uploaded
-    over the full one; both are rebuilt from every episode. Rebuilding deletes `out`, so the folder itself
-    must say it is this converter's (its meta/mars.json): the export record only names a path, and what
-    sits at that path may since have been replaced by a dataset someone recorded.
+    Whatever already sits at `out` is touched, appended to or cleared, only if the folder itself says it
+    is this converter's (its meta/mars.json): the export record merely names a path, and what is at that
+    path may since have been replaced by a dataset someone recorded.
+
+    Our own copy is appended to only when it holds exactly the recorded episodes. One left by a run
+    killed before finalize() is unreadable, and one that lost episodes must not be topped up and uploaded
+    over the full dataset; both are rebuilt from every episode.
     """
-    record = recording.export(repo_id)
-    exported = {int(i) for i in record.get("episode_ids", [])}
-    if exported and has_dataset(out) and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
-        return exported
     if not out.exists():
         return set()
     if (read_sidecar(out) or {}).get("source") != CONVERTER:
         raise FileExistsError(
             f"{out} holds something this converter did not write; move it away or choose another --root"
         )
+    exported = {int(i) for i in recording.export(repo_id).get("episode_ids", [])}
+    if exported and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
+        return exported
     log(f"{recording.name}: the converted copy at {out} is incomplete; rebuilding it from every episode")
     shutil.rmtree(out)
     return set()

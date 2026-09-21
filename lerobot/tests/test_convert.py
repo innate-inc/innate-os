@@ -149,10 +149,11 @@ def test_a_copy_left_by_a_killed_run_is_rebuilt(skill_dir: Path, tmp_path: Path)
 def test_a_folder_the_converter_did_not_write_is_never_cleared(skill_dir: Path, tmp_path: Path) -> None:
     someone_elses = tmp_path / "recorded-with-lerobot"
     (someone_elses / "meta").mkdir(parents=True)
-    (someone_elses / "meta" / "info.json").write_text('{"total_episodes": 50}')
-    # Even when a stale record of ours names this very path: what sits there now is what counts.
+    (someone_elses / "meta" / "info.json").write_text('{"total_episodes": 1}')
+    # Even when a stale record of ours names this very path and its episode count happens to match,
+    # which would otherwise read as "our copy, append to it": what sits there now is what counts.
     stale = {"repo_id": "innate/mars-test", "root": str(someone_elses), "episode_ids": [0], "pushed": False}
     (skill_dir / "data" / EXPORT_FILE).write_text(json.dumps(stale))
     with pytest.raises(FileExistsError):
         convert_skill(skill_dir, repo_id="innate/mars-test", root=someone_elses, log=lambda _m: None)
-    assert (someone_elses / "meta" / "info.json").is_file()
+    assert sorted(p.name for p in someone_elses.rglob("*")) == ["info.json", "meta"]  # untouched
