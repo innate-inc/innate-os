@@ -2639,7 +2639,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
-            and reply.get("beacon") == _beacon_port_wanted()
+            and reply.get("mdns") == _beacon_port_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.

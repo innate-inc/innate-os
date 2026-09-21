@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""LAN discovery beacon for the simulator.
+"""LAN discovery for the simulator.
 
 The controller app finds real robots over Bluetooth; a sim has none, and the
-container sits on a Docker bridge that cannot broadcast to the LAN. So the
-world server -- the one always-alive host process -- announces the sim: a
-JSON beacon broadcast on BEACON_PORT every BEACON_INTERVAL_S, and a unicast
-reply to any probe an app sends to the same port (the probe is also what
-makes iOS ask for local-network permission, and it survives access points
-that drop broadcasts).
+container sits on a Docker bridge that multicast does not cross. So the world
+server -- the one always-alive host process -- advertises the sim over
+mDNS/DNS-SD: the one LAN discovery both phone platforms browse without a
+special entitlement. The SRV port is rosbridge's, so a checkout on its own
+port block, or several sims on one host, each resolve to the right socket.
 """
 
 from __future__ import annotations
@@ -20,27 +19,37 @@ import threading
 import time
 from pathlib import Path
 
-BEACON_PORT = 19090
-BEACON_INTERVAL_S = 2.0
-_BROADCAST = ("255.255.255.255", BEACON_PORT)
+import ifaddr
+from zeroconf import IPVersion, ServiceInfo, Zeroconf
+
+SERVICE_TYPE = "_innate._tcp.local."
+REFRESH_S = 5.0
+# Host-side ends of container networks: on the LAN they are unreachable.
+_CONTAINER_ADAPTERS = ("docker", "br-", "veth", "bridge", "utun", "tun", "tap")
+
+
+def lan_addresses() -> list[str]:
+    return sorted(
+        str(ip.ip)
+        for adapter in ifaddr.get_adapters()
+        if not adapter.name.startswith(_CONTAINER_ADAPTERS)
+        for ip in adapter.ips
+        if ip.is_IPv4 and not str(ip.ip).startswith(("127.", "169.254."))
+    )
 
 
 class SimBeacon:
-    """Announce this sim; ``robot_info_path`` is read on every beacon so a
-    rename from the app shows up without a restart."""
+    """Advertise this sim. The robot name and the host's addresses are
+    re-read every REFRESH_S, so a rename from the app or a laptop that changed
+    networks shows up without a restart."""
 
     def __init__(self, robot_info_path: Path | None, rosbridge_port: int, webapp_port: int, version: str):
         self.robot_info_path = robot_info_path
         self.rosbridge_port = rosbridge_port
         self.webapp_port = webapp_port
         self.version = version
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if hasattr(socket, "SO_REUSEPORT"):  # several checkouts' sims share the port
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self._sock.bind(("", BEACON_PORT))
-        self._sock.settimeout(BEACON_INTERVAL_S)
+        host = socket.gethostname().split(".")[0]
+        self._instance = f"innate-sim-{host}-{rosbridge_port}"
 
     @classmethod
     def from_env(cls) -> SimBeacon | None:
@@ -61,18 +70,23 @@ class SimBeacon:
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="sim-beacon", daemon=True).start()
-        print(f"[world-server] discovery beacon on udp/{BEACON_PORT} (rosbridge {self.rosbridge_port})", flush=True)
+        print(f"[world-server] advertising {SERVICE_TYPE} (rosbridge {self.rosbridge_port})", flush=True)
 
-    def payload(self) -> bytes:
-        return json.dumps(
-            {
-                "innate_sim": True,
+    def service_info(self, addresses: list[str]) -> ServiceInfo:
+        return ServiceInfo(
+            SERVICE_TYPE,
+            f"{self._instance}.{SERVICE_TYPE}",
+            port=self.rosbridge_port,
+            # Its own host record: the machine's .local name belongs to the OS responder.
+            server=f"{self._instance}.local.",
+            parsed_addresses=addresses,
+            properties={
+                "sim": "1",
                 "name": self._robot_name(),
-                "rosbridge_port": self.rosbridge_port,
-                "webapp_port": self.webapp_port,
+                "webapp_port": str(self.webapp_port),
                 "version": self.version,
-            }
-        ).encode()
+            },
+        )
 
     def _robot_name(self) -> str:
         if self.robot_info_path is None:
@@ -84,35 +98,24 @@ class SimBeacon:
         return f"{name} (sim)" if name else "Simulator"
 
     def _run(self) -> None:
-        next_broadcast = 0.0
+        announced: tuple[str, list[str]] | None = None
+        zeroconf: Zeroconf | None = None
         while True:
-            now = time.monotonic()
-            if now >= next_broadcast:
-                self._send(_BROADCAST)
-                next_broadcast = now + BEACON_INTERVAL_S
-            try:
-                data, sender = self._sock.recvfrom(512)
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            if b"innate_sim_probe" in data:
-                self._send(sender)
-                # The app may probe from an ephemeral port; it says where it listens.
-                listen_port = self._probe_port(data)
-                if listen_port is not None and listen_port != sender[1]:
-                    self._send((sender[0], listen_port))
+            name, addresses = current = (self._robot_name(), lan_addresses())
+            if current != announced:
+                # Rebuilt, not updated: zeroconf's sockets are bound to the
+                # addresses it started with, and those are what changed.
+                if zeroconf is not None:
+                    zeroconf.close()
+                zeroconf = self._announce(addresses) if addresses else None
+                announced = current if zeroconf is not None else None
+            time.sleep(REFRESH_S)
 
-    @staticmethod
-    def _probe_port(data: bytes) -> int | None:
+    def _announce(self, addresses: list[str]) -> Zeroconf | None:
         try:
-            port = json.loads(data).get("port")
-        except (ValueError, AttributeError):
+            zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
+            zeroconf.register_service(self.service_info(addresses), allow_name_change=True)
+        except OSError as error:  # no usable interface right now; the next tick retries
+            print(f"[world-server] discovery unavailable: {error}", flush=True)
             return None
-        return port if isinstance(port, int) and 0 < port < 65536 else None
-
-    def _send(self, target: tuple[str, int]) -> None:
-        try:
-            self._sock.sendto(self.payload(), target)
-        except OSError:
-            pass  # no route on this interface right now; the next tick retries
+        return zeroconf

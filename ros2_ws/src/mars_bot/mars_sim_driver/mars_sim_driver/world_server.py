@@ -474,7 +474,7 @@ class WorldServer:
                 "state_port": self.state_port,
                 "binds": self.binds,
                 "environment": environment.id if environment else None,
-                "beacon": self.beacon_port,
+                "mdns": self.beacon_port,
             }, None
         if op == "switch_environment":  # the launcher's `up --environment` on a running server
             self.switch_environment(str(req["id"]))
