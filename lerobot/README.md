@@ -255,8 +255,8 @@ offline, or when an upload failed halfway, push it by hand:
 uv run mars-push YOUR_HF_NAME/mars-tidy-up --private
 ```
 
-Leave out `--private` for a public dataset. To open up a private one later, change its visibility
-in the dataset's settings on the Hub. Public datasets also open in LeRobot's online
+Leave out `--private` for a public dataset. Visibility is set when the dataset is first created, and
+pushing again keeps it; to change it later, use the dataset's settings on the Hub. Public datasets also open in LeRobot's online
 [dataset visualizer](https://huggingface.co/spaces/lerobot/visualize_dataset); private ones do not.
 
 ## Recording with the web app instead
@@ -286,10 +286,12 @@ On the Datasets page, a training dataset has a **Publish to Hugging Face** butto
 1. Save a Hugging Face token with write permission under **Settings → Keys**.
 2. Press **Publish to Hugging Face**. The first time, the dialog offers to install the LeRobot
    environment on the robot: a one-time download of about 1.5 GB.
-3. Pick the account or organization, a repository name, and whether it is private.
+3. Pick the account or organization, a repository name, and, for a new dataset, whether it is private.
+   A dataset that already exists keeps the visibility it has on the Hub; the dialog shows which.
 
 The job runs in the background and survives closing the dialog; reopen it to see progress.
-Publishing again after recording more episodes converts only the new ones.
+Publishing again after recording more episodes converts only the new ones. After you delete an episode,
+or mark one as failed, the next publish rebuilds the dataset without it and replaces the one on the Hub.
 
 ### Publish from the command line
 

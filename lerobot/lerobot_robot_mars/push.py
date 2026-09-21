@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from huggingface_hub import get_token
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub import HfApi, get_token
+from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .hub import dataset_root, has_dataset, hub_refusal, hub_url
@@ -32,12 +32,24 @@ def main(argv: list[str] | None = None) -> int:
     if get_token() is None:
         parser.error("not logged in to Hugging Face; run `uv run hf auth login` first")
     try:
+        if args.private and _is_public(args.repo_id):
+            print(
+                f"{args.repo_id} is already public and stays so: --private only applies when the repository is created."
+            )
+            print(f"Change it at {hub_url(args.repo_id)}/settings")
         LeRobotDataset(args.repo_id, root=root).push_to_hub(private=args.private)
     except HfHubHTTPError as e:
         print(hub_refusal(e, args.repo_id), file=sys.stderr)
         return 1
     print(f"Published {hub_url(args.repo_id)}")
     return 0
+
+
+def _is_public(repo_id: str) -> bool:
+    try:
+        return not HfApi().repo_info(repo_id, repo_type="dataset").private
+    except RepositoryNotFoundError:
+        return False
 
 
 if __name__ == "__main__":

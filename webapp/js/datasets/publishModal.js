@@ -12,7 +12,7 @@ const POLL_MS = 1000;
  * @typedef {{ kind: string, dir: string, repo_id: string, stage: string, episode: number,
  *   total: number, progress: number, message: string, error: string, url: string, running: boolean }} HubJob
  * @typedef {{ readonly: boolean, token: boolean, env_ready: boolean, job: HubJob | null,
- *   published: { repo_id: string, episodes: number, pushed: boolean } | null }} HubStatus
+ *   published: { repo_id: string, episodes: number, pushed: boolean, removed: number } | null }} HubStatus
  */
 
 /**
@@ -162,13 +162,19 @@ export function openPublishModal(host, skill) {
     repoRow.append(owner, el("span", "hub-repo-slash", "/"), name);
 
     const isPrivate = checkbox("Private: only you and your organization can see it", true);
+    // Replaced by the repository's actual visibility once it turns out to exist: the box only applies at creation.
+    const visibility = el("div", "hub-visibility");
+    visibility.append(isPrivate.row);
     const failures = checkbox("Include episodes labelled failed", false);
     const note = el("p", "modal-warn");
     const button = /** @type {HTMLButtonElement} */ (el("button", "modal-start", "Publish"));
     button.type = "button";
     button.disabled = true;
 
-    const summary = status.published?.pushed
+    const removed = status.published?.removed || 0;
+    const summary = removed > 0
+      ? `Published before as ${status.published?.repo_id}. ${removed} of its episodes ${removed === 1 ? "has" : "have"} been deleted since, so the dataset is rebuilt from this skill's current episodes and replaces the one on Hugging Face.`
+      : status.published?.pushed
       ? `Published before as ${status.published.repo_id} (${status.published.episodes} episodes). Only new episodes are converted; the whole dataset is uploaded again.`
       : status.published
         ? `Converted for ${status.published.repo_id} before, but the upload did not finish. Publishing uploads it.`
@@ -176,7 +182,7 @@ export function openPublishModal(host, skill) {
 
     body.replaceChildren(
       field("Repository", repoRow),
-      isPrivate.row,
+      visibility,
       failures.row,
       el("p", "modal-hint", summary),
       note,
@@ -197,10 +203,41 @@ export function openPublishModal(host, skill) {
         if (owners.includes(previousOwner)) owner.value = previousOwner;
         owner.disabled = false;
         button.disabled = false;
+        checkVisibility();
       })
       .catch(() => {
         if (!closed) note.textContent = "Could not reach the robot to check the token.";
       });
+
+    let visibilityAsked = 0;
+    /** @type {number | undefined} */
+    let visibilityTimer;
+    async function checkVisibility() {
+      const repoId = `${owner.value}/${name.value.trim()}`;
+      const asked = ++visibilityAsked;
+      let answer = null;
+      try {
+        const res = await fetch(`/hub/repo?repo_id=${encodeURIComponent(repoId)}`, { cache: "no-store" });
+        answer = await res.json();
+      } catch {
+        answer = null;
+      }
+      if (closed || asked !== visibilityAsked) return; // a newer name is being checked
+      if (!answer?.ok || !answer.exists) return visibility.replaceChildren(isPrivate.row);
+      const settings = /** @type {HTMLAnchorElement} */ (el("a", "", "change it in the dataset's settings"));
+      settings.href = `https://huggingface.co/datasets/${repoId}/settings`;
+      settings.target = "_blank";
+      settings.rel = "noopener";
+      const line = el("p", "modal-hint", `${answer.private ? "Private" : "Public"} on Hugging Face. Publishing keeps that; `);
+      line.append(settings, ".");
+      visibility.replaceChildren(line);
+    }
+    const checkSoon = () => {
+      window.clearTimeout(visibilityTimer);
+      visibilityTimer = window.setTimeout(checkVisibility, 400);
+    };
+    name.addEventListener("input", checkSoon);
+    owner.addEventListener("change", checkVisibility);
 
     button.addEventListener("click", async () => {
       const repoName = name.value.trim();

@@ -25,6 +25,7 @@ from pathlib import Path
 _INNATE_OS_ROOT = os.environ.get("INNATE_OS_ROOT", os.path.expanduser("~/innate-os"))
 LEROBOT_DIR = Path(_INNATE_OS_ROOT) / "lerobot"
 VENV_ENV = "INNATE_LEROBOT_VENV"
+DATASET_METADATA = "dataset_metadata.json"
 EXPORT_FILE = "lerobot_export.json"
 REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w.\-]{0,95}/[A-Za-z0-9][\w.\-]{0,95}$")
 _TAIL_LINES = 12
@@ -79,14 +80,19 @@ def current_job() -> dict | None:
 
 
 def published(skill_dir: Path) -> dict | None:
-    """What an earlier publish of this skill recorded, if anything (the converter's data/lerobot_export.json)."""
+    """What an earlier publish of this skill recorded, if anything (the converter's data/lerobot_export.json),
+    and how many of those episodes have been deleted since, which makes the next publish a rebuild."""
     export = _json(skill_dir / "data" / EXPORT_FILE)
     if not export.get("repo_id"):
         return None
+    published_ids = set(export.get("episode_ids", []))
+    listed = _json(skill_dir / "data" / DATASET_METADATA).get("episodes")
+    present = {ep.get("episode_id") for ep in listed if isinstance(ep, dict)} if isinstance(listed, list) else None
     return {
         "repo_id": export["repo_id"],
-        "episodes": len(export.get("episode_ids", [])),
+        "episodes": len(published_ids),
         "pushed": bool(export.get("pushed")),
+        "removed": len(published_ids - present) if present is not None else 0,
     }
 
 

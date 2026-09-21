@@ -5860,6 +5860,11 @@ a.hub-action {
   text-decoration: none;
 }
 
+.hub-visibility a {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 /* training empty state (no local runs) */
 .training-empty {
   min-height: 100%;

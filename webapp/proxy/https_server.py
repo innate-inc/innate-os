@@ -49,7 +49,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
-from hub_routes import publish_start, publish_status, setup_start, whoami
+from hub_routes import publish_start, publish_status, repo_visibility, setup_start, whoami
 from keys_routes import keys_apply, keys_get
 from media_routes import (
     episode_response,
@@ -522,6 +522,7 @@ def build_app() -> web.Application:
     app.router.add_get("/keys.json", keys_get)
     app.router.add_get("/hub/publish", publish_status)
     app.router.add_get("/hub/whoami", whoami)
+    app.router.add_get("/hub/repo", repo_visibility)
     if not WEBAPP_READONLY:
         app.router.add_post("/hub/publish", publish_start)
         app.router.add_post("/hub/setup", setup_start)

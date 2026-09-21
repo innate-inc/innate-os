@@ -175,3 +175,18 @@ def test_a_second_skill_cannot_take_over_the_first_ones_dataset(skill_dir: Path,
     with pytest.raises(FileExistsError):
         convert_skill(other_skill, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
     assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2
+
+
+def test_a_deleted_episode_leaves_the_published_dataset(skill_dir: Path, tmp_path: Path) -> None:
+    root = tmp_path / "out"
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    # What the Datasets page's delete does: the entry and its files go; the id is never reused.
+    metadata = skill_dir / "data" / "dataset_metadata.json"
+    recorded = json.loads(metadata.read_text())
+    recorded["episodes"] = [ep for ep in recorded["episodes"] if ep["episode_id"] != 2]
+    metadata.write_text(json.dumps(recorded))
+    (skill_dir / "data" / "episode_2.h5").unlink()
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    dataset = LeRobotDataset("innate/mars-test", root=root)
+    assert dataset.num_episodes == 1 and dataset.num_frames == T
+    assert json.loads((skill_dir / "data" / EXPORT_FILE).read_text())["episode_ids"] == [0]

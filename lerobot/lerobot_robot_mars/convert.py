@@ -30,7 +30,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 from .dataset_meta import DEFAULT_HEAD_ANGLE_DEG, read_sidecar, write_sidecar
-from .hub import dataset_root, has_dataset, hub_refusal, hub_url
+from .hub import dataset_root, has_dataset, hub_refusal, hub_url, push_mirror
 from .schema import CAMERA_ORDER, CAMERA_SHAPE, FPS, ROBOT_TYPE, dataset_features, image_key
 
 DATASET_METADATA = "dataset_metadata.json"
@@ -283,17 +283,18 @@ def convert_skill(
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
     task_text = task or recording.task
-    exported = _episodes_in_copy(recording, repo_id, out, log)
+    eligible = recording.episodes(include_failures)
+    exported = _episodes_in_copy(recording, repo_id, out, {ref.episode_id for ref in eligible}, log)
     todo = [
         ref
-        for ref in recording.episodes(include_failures)
+        for ref in eligible
         if ref.episode_id not in exported and (episode_ids is None or ref.episode_id in episode_ids)
     ]
     if not todo:
         log(f"{recording.name}: nothing new to export to {repo_id}")
         if push and exported:
             progress({"event": "push"})
-            LeRobotDataset(repo_id, root=out).push_to_hub(private=private)
+            push_mirror(LeRobotDataset(repo_id, root=out), private=private)
             recording.record_export(repo_id, out, exported, pushed=True)
             progress({"event": "done", "url": hub_url(repo_id), "message": "Already converted; uploaded again"})
         else:
@@ -333,7 +334,7 @@ def convert_skill(
     log(f"{repo_id}: {dataset.num_episodes} episodes, {dataset.num_frames} frames at {out}")
     if push:
         progress({"event": "push"})
-        dataset.push_to_hub(private=private)
+        push_mirror(dataset, private=private)
         recording.record_export(repo_id, out, exported, pushed=True)
         log(f"pushed to {hub_url(repo_id)}")
     episodes = f"{len(todo)} episode{'s' if len(todo) != 1 else ''}"
@@ -341,7 +342,7 @@ def convert_skill(
     return out
 
 
-def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: Log) -> set[int]:
+def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, current: set[int], log: Log) -> set[int]:
     """The episode ids the converted copy at `out` already holds, after clearing a copy that cannot be trusted.
 
     Whatever already sits at `out` is touched, appended to or cleared, only if the folder itself says it
@@ -349,9 +350,10 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
     what is there may since have been replaced by a dataset someone recorded, or belong to another
     skill published under the same repository name, which a rebuild would wipe locally and on the Hub.
 
-    Our own copy is appended to only when it holds exactly the recorded episodes. One left by a run
-    killed before finalize() is unreadable, and one that lost episodes must not be topped up and uploaded
-    over the full dataset; both are rebuilt from every episode.
+    Our own copy is appended to only when it holds exactly the recorded episodes and every one of them is
+    still among the skill's `current` ones. One left by a run killed before finalize() is unreadable; one
+    that lost episodes must not be topped up and uploaded over the full dataset; one holding an episode
+    since deleted or relabelled a failure would keep publishing it. All three are rebuilt in full.
     """
     if not out.exists():
         return set()
@@ -361,9 +363,15 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, log: L
             f"{out} holds a dataset that is not this skill's; publish under another repository name or move it away"
         )
     exported = {int(i) for i in recording.export(repo_id).get("episode_ids", [])}
-    if exported and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
+    removed = exported - current
+    if exported and not removed and _read_json(out / "meta" / "info.json").get("total_episodes") == len(exported):
         return exported
-    log(f"{recording.name}: the copy at {out} does not match this skill's export record; rebuilding it in full")
+    reason = (
+        f"{len(removed)} published episode{'s are' if len(removed) != 1 else ' is'} no longer in the skill"
+        if removed
+        else "the copy does not match this skill's export record"
+    )
+    log(f"{recording.name}: {reason}; rebuilding {out} in full")
     shutil.rmtree(out)
     return set()
 
