@@ -8,6 +8,7 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+from lerobot.utils.errors import DeviceNotConnectedError
 
 from lerobot_robot_mars import Mars, MarsConfig, MarsPassthroughTeleop, MarsPassthroughTeleopConfig, wire
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_ORDER, CAMERA_SHAPE, STATE_NAMES
@@ -188,3 +189,23 @@ def test_passthrough_teleop_reads_the_commanded_target(bridge_module: ModuleType
     assert list(action) == list(ACTION_NAMES)
     assert [action[name] for name in STATE_NAMES] == pytest.approx(COMMANDED)
     assert (action["x.vel"], action["theta.vel"]) == pytest.approx(BASE)
+
+
+def test_a_bridge_that_goes_silent_is_a_disconnect_not_a_frozen_robot(bridge_module: ModuleType) -> None:
+    with FakeRobot(bridge_module) as robot:
+        mars = Mars(
+            MarsConfig(
+                remote_ip="127.0.0.1", port_actions=robot.port_actions, port_observations=robot.port_observations
+            )
+        )
+        mars.connect()
+        try:
+            mars.get_observation()
+            robot._stop_event.set()  # the robot reboots mid-recording
+            robot._thread.join(timeout=2)
+            with pytest.raises(DeviceNotConnectedError):  # not the last frame again, with a fresh timestamp
+                for _ in range(200):
+                    mars.get_observation()
+                    time.sleep(0.02)
+        finally:
+            mars.disconnect()

@@ -119,13 +119,22 @@ def test_gripper_target_is_held_to_the_safe_range() -> None:
 
 def test_malformed_actions_are_ignored() -> None:
     with Harness() as h:
-        h.send({"joint1.pos": 0.1})
-        h.send(dict(zip(JOINT_KEYS, [float("nan")] * 6, strict=True)))
         h.push.send(b"not json")
         time.sleep(0.05)
         h.bridge.poll(now=1.0)
+        assert not h.bridge.active(1.0)  # a stray byte on a reused port must not start the camera stream
+        h.send({"joint1.pos": 0.1})
+        h.send(dict(zip(JOINT_KEYS, [float("nan")] * 6, strict=True)))
+        h.bridge.poll(now=2.0)
         assert h.arm == [] and h.base == []
-        assert h.bridge.active(1.0)  # still counts as a live client
+
+
+def test_an_arm_only_action_leaves_the_base_to_navigation() -> None:
+    with Harness(watchdog_s=0.5) as h:
+        h.send(dict(zip(JOINT_KEYS, JOINTS, strict=True)))
+        h.bridge.poll(now=1.0)
+        h.bridge.poll(now=5.0)
+        assert h.arm and h.base == [] and h.stops == 0  # even a zero twist would outrank Nav2 in the mux
 
 
 def test_blocked_bridge_keeps_hands_off() -> None:

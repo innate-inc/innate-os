@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import aiohttp
 import hub_publish
 from aiohttp import ContentTypeError, web
-from media_routes import _resolve_under_root
+from media_routes import resolve_under_root
 
 HF_TOKEN = "HF_TOKEN"
 WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
@@ -33,7 +33,7 @@ def _token() -> str:
 
 
 async def publish_status(request: web.Request) -> web.Response:
-    skill_dir = _resolve_under_root(request.query.get("dir", ""))
+    skill_dir = resolve_under_root(request.query.get("dir", ""))
     token = await asyncio.to_thread(_token)
     return web.json_response(
         {
@@ -98,7 +98,7 @@ async def publish_start(request: web.Request) -> web.Response:
         return _refuse(403, "cross-site request refused")
     try:
         body = await request.json()
-        skill_dir = _resolve_under_root(str(body["dir"]))
+        skill_dir = resolve_under_root(str(body["dir"]))
         repo_id = str(body["repo_id"]).strip()
         private = bool(body.get("private", True))
         include_failures = bool(body.get("include_failures", False))
@@ -129,6 +129,8 @@ async def setup_start(request: web.Request) -> web.Response:
         hub_publish.start_setup()
     except hub_publish.Busy:
         return _refuse(409, "another job is still running")
+    except hub_publish.LockUnreadable as e:
+        return _refuse(500, f"{e}; update the robot and try again")
     return web.json_response({"ok": True}, status=202)
 
 

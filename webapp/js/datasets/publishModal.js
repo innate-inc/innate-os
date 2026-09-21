@@ -175,7 +175,7 @@ export function openPublishModal(host, skill) {
     const summary = removed > 0
       ? `Published before as ${status.published?.repo_id}. ${removed} of its episodes ${removed === 1 ? "has" : "have"} been deleted since, so the dataset is rebuilt from this skill's current episodes and replaces the one on Hugging Face.`
       : status.published?.pushed
-      ? `Published before as ${status.published.repo_id} (${status.published.episodes} episodes). Only new episodes are converted; the whole dataset is uploaded again.`
+      ? `Published before as ${status.published.repo_id} (${status.published.episodes} episodes). New episodes are added; if a published episode is now excluded, the dataset is rebuilt instead.`
       : status.published
         ? `Converted for ${status.published.repo_id} before, but the upload did not finish. Publishing uploads it.`
         : `${skill.episode_count} episode${skill.episode_count === 1 ? "" : "s"} recorded on this robot. Converting and uploading runs in the background; you can close this window.`;
@@ -202,13 +202,18 @@ export function openPublishModal(host, skill) {
         owner.replaceChildren(...owners.map((o) => new Option(o, o)));
         if (owners.includes(previousOwner)) owner.value = previousOwner;
         owner.disabled = false;
-        button.disabled = false;
+        accountReady = true;
         checkVisibility();
       })
       .catch(() => {
         if (!closed) note.textContent = "Could not reach the robot to check the token.";
       });
 
+    let accountReady = false;
+    let nameTaken = false;
+    const updateButton = () => {
+      button.disabled = !accountReady || nameTaken;
+    };
     let visibilityAsked = 0;
     /** @type {number | undefined} */
     let visibilityTimer;
@@ -223,6 +228,14 @@ export function openPublishModal(host, skill) {
         answer = null;
       }
       if (closed || asked !== visibilityAsked) return; // a newer name is being checked
+      // Publishing replaces the dataset on the Hub, so only a name this skill published to before is its to reuse.
+      nameTaken = Boolean(answer?.ok && answer.exists && repoId !== status.published?.repo_id);
+      updateButton();
+      if (nameTaken) {
+        return visibility.replaceChildren(
+          el("p", "modal-warn", `${repoId} already exists on Hugging Face and was not published from this skill. Choose another name.`),
+        );
+      }
       if (!answer?.ok || !answer.exists) return visibility.replaceChildren(isPrivate.row);
       const settings = /** @type {HTMLAnchorElement} */ (el("a", "", "change it in the dataset's settings"));
       settings.href = `https://huggingface.co/datasets/${repoId}/settings`;
@@ -256,7 +269,7 @@ export function openPublishModal(host, skill) {
       });
       if (answer.ok) return refresh();
       note.textContent = answer.message;
-      button.disabled = false;
+      updateButton();
     });
   }
 

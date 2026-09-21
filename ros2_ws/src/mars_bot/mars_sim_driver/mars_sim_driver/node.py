@@ -524,8 +524,8 @@ class VirtualMarsNode(Node):
                     next_jpeg[camera] = max(next_jpeg[camera], now - step) + step
                 self._publish_camera_frames(pub if jpeg_due else None, raw_pub, camera, jpeg)
             if not rendered:
-                # A 20 ms nap would eat most of a 30 fps period; poll finely while anyone is watching.
-                time.sleep(0.002 if any(wanted.values()) else 0.02)
+                # A 20 ms nap would eat most of the flag's 30 fps period; the default rates never need less.
+                time.sleep(0.002 if HARDWARE_CAMERA_RATES and any(wanted.values()) else 0.02)
 
     def _publish_camera_frames(self, pub, raw_pub, camera: str, jpeg: bytes) -> None:
         """Publish one camera frame; the server hands us a wire-res JPEG. `pub` is None on a

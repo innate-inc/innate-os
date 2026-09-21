@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import ModuleType
 
 import h5py
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+from lerobot_robot_mars import convert
 from lerobot_robot_mars.convert import EXPORT_FILE, convert_skill
 from lerobot_robot_mars.dataset_meta import read_sidecar
 from lerobot_robot_mars.schema import ACTION_NAMES, CAMERA_SHAPE, STATE_NAMES, dataset_features
@@ -144,6 +146,11 @@ def test_a_copy_left_by_a_killed_run_is_rebuilt(skill_dir: Path, tmp_path: Path)
     )
     dataset = LeRobotDataset("innate/mars-test", root=root)
     assert dataset.num_episodes == 3 and dataset.num_frames == 3 * T
+    # Killed earlier still, between lerobot creating the dataset and the converter marking it as its own.
+    (root / "meta" / "mars.json").unlink()
+    info.write_text(json.dumps({**json.loads(info.read_text()), "total_episodes": 0}))
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=root, vcodec="h264", log=lambda _m: None)
+    assert LeRobotDataset("innate/mars-test", root=root).num_episodes == 2
 
 
 def test_a_folder_the_converter_did_not_write_is_never_cleared(skill_dir: Path, tmp_path: Path) -> None:
@@ -190,3 +197,24 @@ def test_a_deleted_episode_leaves_the_published_dataset(skill_dir: Path, tmp_pat
     dataset = LeRobotDataset("innate/mars-test", root=root)
     assert dataset.num_episodes == 1 and dataset.num_frames == T
     assert json.loads((skill_dir / "data" / EXPORT_FILE).read_text())["episode_ids"] == [0]
+
+
+def test_a_hub_name_this_skill_never_published_to_is_refused(
+    skill_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(convert.HfApi, "repo_exists", lambda *_args, **_kwargs: True)
+    with pytest.raises(FileExistsError):  # publishing would replace someone else's dataset wholesale
+        convert_skill(skill_dir, repo_id="someone/their-data", root=tmp_path / "out", push=True, log=lambda _m: None)
+    assert not (tmp_path / "out").exists()  # refused before converting anything
+
+
+def test_the_webapp_reads_the_export_record_the_converter_writes(
+    skill_dir: Path, tmp_path: Path, publish_job_module: ModuleType
+) -> None:
+    convert_skill(skill_dir, repo_id="innate/mars-test", root=tmp_path / "out", vcodec="h264", log=lambda _m: None)
+    assert publish_job_module.published(skill_dir) == {
+        "repo_id": "innate/mars-test",
+        "episodes": 2,
+        "pushed": False,
+        "removed": 0,
+    }

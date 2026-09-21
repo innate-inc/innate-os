@@ -95,12 +95,15 @@ def head_angle_for_run(argv: Sequence[str]) -> tuple[float, str] | None:
     way that dataset's ``meta/mars.json`` says how the head was tilted when the frames were taken,
     which is how it must be tilted now.
     """
-    for repo_id, root in (_named_dataset(argv), _policy_dataset(argv)):
-        sidecar = _sidecar(repo_id, root)
-        angle = sidecar.get("head_angle_deg") if sidecar else None
-        if isinstance(angle, int | float):
-            return float(angle), repo_id or str(root)
-    return None
+    # lerobot-replay and lerobot-record load the named dataset before they connect, so it is on disk and
+    # never worth a Hub round trip, which for a dataset being created could only 404, or hang offline.
+    return _angle(*_named_dataset(argv), hub=False) or _angle(*_policy_dataset(argv), hub=True)
+
+
+def _angle(repo_id: str | None, root: Path | None, *, hub: bool) -> tuple[float, str] | None:
+    sidecar = _sidecar(repo_id, root, hub=hub)
+    angle = sidecar.get("head_angle_deg") if sidecar else None
+    return (float(angle), repo_id or str(root)) if isinstance(angle, int | float) else None
 
 
 def _named_dataset(argv: Sequence[str]) -> tuple[str | None, Path | None]:
@@ -124,11 +127,11 @@ def _policy_dataset(argv: Sequence[str]) -> tuple[str | None, Path | None]:
     return dataset.get("repo_id"), Path(root).expanduser() if root else None
 
 
-def _sidecar(repo_id: str | None, root: Path | None) -> dict | None:
+def _sidecar(repo_id: str | None, root: Path | None, *, hub: bool) -> dict | None:
     for local in (root, HF_LEROBOT_HOME / repo_id if repo_id else None):
         if local is not None and (found := read_sidecar(local)) is not None:
             return found
-    if not repo_id:
+    if not repo_id or not hub:
         return None
     path = _from_hub(repo_id, str(SIDECAR), "dataset")
     try:

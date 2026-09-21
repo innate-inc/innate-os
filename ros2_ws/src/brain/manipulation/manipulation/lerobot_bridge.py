@@ -9,7 +9,8 @@ this module against the client, so the two sides cannot drift apart.
 
 Sockets (bridge binds, clients connect):
 - PULL ``port_actions``: one JSON object per message. ``{"_hb": 1}`` is a heartbeat; an object
-  with the six ``jointN.pos`` keys is a command (``x.vel`` / ``theta.vel`` optional, default 0);
+  with the six ``jointN.pos`` keys is a command, which drives the base only if it carries ``x.vel`` /
+  ``theta.vel``;
   ``{"_head": deg}`` tilts the head. The header reports the measured tilt as ``head.deg``.
 - PUB ``port_observations``: every message is one frame, ``<topic> <json header>\n<payload>``.
   Topic ``state`` has no payload. Topic ``obs`` carries the JPEGs of the cameras listed in
@@ -101,16 +102,16 @@ class LeRobotBridge:
         self.commands_blocked = False
 
     def bind(self) -> None:
-        context = zmq.Context()
-        pull = context.socket(zmq.PULL)
-        pull.setsockopt(zmq.LINGER, 0)
-        pull.setsockopt(zmq.RCVHWM, 64)
-        pull.bind(f"tcp://{self._bind_address}:{self._port_actions}")
-        pub = context.socket(zmq.PUB)
-        pub.setsockopt(zmq.LINGER, 0)
-        pub.setsockopt(zmq.SNDHWM, 8)
-        pub.bind(f"tcp://{self._bind_address}:{self._port_observations}")
-        self._context, self._pull, self._pub = context, pull, pub
+        """Raises zmq.ZMQError when a port is taken; whatever was opened is held, so close() releases it."""
+        self._context = zmq.Context()
+        self._pull = self._context.socket(zmq.PULL)
+        self._pull.setsockopt(zmq.LINGER, 0)
+        self._pull.setsockopt(zmq.RCVHWM, 64)
+        self._pull.bind(f"tcp://{self._bind_address}:{self._port_actions}")
+        self._pub = self._context.socket(zmq.PUB)
+        self._pub.setsockopt(zmq.LINGER, 0)
+        self._pub.setsockopt(zmq.SNDHWM, 8)
+        self._pub.bind(f"tcp://{self._bind_address}:{self._port_observations}")
 
     def close(self) -> None:
         for socket in (self._pull, self._pub):
@@ -133,10 +134,10 @@ class LeRobotBridge:
                 raw = self._pull.recv(zmq.NOBLOCK)
             except zmq.Again:
                 break
-            self._last_seen = now
             payload = _parse(raw)
             if payload is None:
-                continue
+                continue  # a stray byte on a widely reused port is not a client
+            self._last_seen = now
             self._apply_head(payload)
             if any(key in payload for key in JOINT_KEYS):
                 newest = payload
@@ -209,10 +210,14 @@ class LeRobotBridge:
             return
         if self.commands_blocked:
             return
-        self._last_action = now
-        self._base_stopped = False
         joints[5] = min(max(joints[5], GRIPPER_RANGE[0]), GRIPPER_RANGE[1])
         self._on_arm(joints)
+        # The skills channel outranks navigation in the velocity mux, so even zeros would block Nav2
+        # for as long as an arm-only client stays connected: only an action that names the base drives it.
+        if not any(key in payload for key in BASE_KEYS):
+            return
+        self._last_action = now
+        self._base_stopped = False
         self._on_base(base[0], base[1])
 
     def _watchdog(self, now: float) -> None:

@@ -37,6 +37,10 @@ class Busy(Exception):
     """Another publish or setup job is still running."""
 
 
+class LockUnreadable(Exception):
+    """lerobot/uv.lock does not say which torch to install, so setup must not start."""
+
+
 @dataclass
 class Job:
     kind: str  # "publish" | "setup"
@@ -82,7 +86,8 @@ def current_job() -> dict | None:
 def published(skill_dir: Path) -> dict | None:
     """What an earlier publish of this skill recorded, if anything (the converter's data/lerobot_export.json),
     and how many of those episodes have been deleted since, which makes the next publish a rebuild."""
-    export = _json(skill_dir / "data" / EXPORT_FILE)
+    data_dir = skill_dir / "data"
+    export = _json((data_dir if data_dir.is_dir() else skill_dir) / EXPORT_FILE)  # where the converter writes it
     if not export.get("repo_id"):
         return None
     published_ids = set(export.get("episode_ids", []))
@@ -121,6 +126,10 @@ def start_setup() -> None:
         steps.append([sys.executable, "-m", "pip", "install", "--user", "--quiet", "uv"])
         uv = [sys.executable, "-m", "uv"]
     locked = _locked_versions(LEROBOT_DIR / "uv.lock")
+    if not all(name in locked for name in _TORCH):
+        # Without the versions the sync below would pull PyPI's torch, 3.5 GB of CUDA a Jetson cannot
+        # use, and the CPU install after it would then fail on an empty package list.
+        raise LockUnreadable(f"could not read the torch versions from {LEROBOT_DIR / 'uv.lock'}")
     skipped = [name for name in locked if _GPU_ONLY.match(name) or name in _TORCH]
     sync = [*uv, "sync", "--frozen", "--no-default-groups", "--project", str(LEROBOT_DIR)]
     for name in skipped:
@@ -166,7 +175,7 @@ async def _run(job: Job, steps: list[list[str]], env: dict[str, str]) -> None:
         if job.stage != "done":
             job.stage, job.progress = "done", 1.0
             job.message = "Ready" if job.kind == "setup" else job.message
-    except OSError as e:
+    except Exception as e:  # noqa: BLE001 — a background job must end in a state the dialog can show
         job.stage, job.error = "error", str(e)
     finally:
         job.running = False

@@ -387,8 +387,13 @@ picks the angle and holds the head there:
 - Commands are ignored while the robot runs a recorded or learned behavior of its own. Code skills and
   the agent are not covered: the base is safe behind the velocity mux, where app teleop always wins, but
   the arm has no such arbiter, so do not run a LeRobot policy while a skill or the agent moves the arm.
-- The base stops if a commanding client goes silent for half a second.
-- Gripper targets are held to the safe range: a policy cannot squeeze hard enough to trip the servo.
+- The base moves only for actions that carry `x.vel` and `theta.vel`. An arm-only source, such as a
+  leader arm or an arm-only policy, leaves the base to navigation. While a client does drive the base,
+  it outranks navigation, as a running skill does.
+- The base stops if a client that drives it goes silent for half a second.
+- Gripper targets are held to -0.6 to 0.85 rad, so a policy cannot squeeze hard enough to trip the servo.
+  LeRobot records the action as the teleoperator or policy produced it, so a source that commands
+  beyond that range records the unclamped value.
 - Speed and joint limits are enforced by the robot's own drivers, as for every other command source.
 - The bridge has no login, like the rest of the robot's local network interfaces. Settings live
   under `lerobot_bridge:` in `manipulation_server.yaml`: `bind_address: "127.0.0.1"` keeps it to
@@ -411,6 +416,9 @@ Swap `lawam` for the extra of the policy you want. `uv sync` puts the released v
 | Symptom | Cause and fix |
 |---|---|
 | `No 'obs' messages from the MARS bridge` | The robot is not reachable at `MARS_HOST`. Use its IP address, check you are on the same network, and look for the `LeRobot bridge listening` log line. |
+| `The MARS bridge sends no [...] frames` | That camera is not running on the robot. Check the camera drivers in `innate view`; recording now would store blank frames. |
+| `The MARS bridge ... stopped answering` | The robot rebooted, the network dropped, or innate-os restarted mid-session. Episodes saved before that are intact; reconnect and resume. |
+| `... already exists on Hugging Face and was not published from this skill` | Publishing replaces the dataset on the Hub, so it only reuses a name this skill published to before. Choose another name. |
 | Log says `LeRobot bridge disabled: …` | The line names the reason. `innate update reinstall` installs a missing dependency and rebuilds. |
 | Replay or a policy moves the arm oddly and the base not at all | The phone app or the web app is still teleoperating. Leave teleop first. |
 | The robot ignores actions | The robot is running a recorded or learned behavior of its own. Wait for it to finish. |

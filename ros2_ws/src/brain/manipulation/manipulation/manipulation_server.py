@@ -19,6 +19,7 @@ from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
 from mars_msgs.srv import GotoJS
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -879,7 +880,11 @@ class ManipulationServer(Node):
             return None
         self._follow_operator_commands()
         rate_hz = float(self._bridge_param("rate_hz", 30.0))
-        self.create_timer(1.0 / max(rate_hz, 1.0), self._lerobot_bridge_tick)
+        # Its own group: the JPEG encode must not hold the default group's single slot against the
+        # camera and joint callbacks that feed it.
+        self.create_timer(
+            1.0 / max(rate_hz, 1.0), self._lerobot_bridge_tick, callback_group=MutuallyExclusiveCallbackGroup()
+        )
         return bridge
 
     def _bridge_param(self, name: str, default: bool | int | float | str) -> bool | int | float | str:
@@ -889,6 +894,8 @@ class ManipulationServer(Node):
         if not self._bridge_param("enabled", True):
             return None
         try:
+            import zmq
+
             from manipulation.lerobot_bridge import LeRobotBridge  # lazy like act_trt: pyzmq may be missing
         except ImportError as e:
             self.get_logger().warn(f"LeRobot bridge disabled: {e}")
@@ -906,7 +913,12 @@ class ManipulationServer(Node):
             on_head=self._bridge_head,
             log=lambda message: self.get_logger().warn(message, throttle_duration_sec=2.0),
         )
-        bridge.bind()
+        try:
+            bridge.bind()
+        except zmq.ZMQError as e:  # a taken port must not take poses, replay and policies down with it
+            bridge.close()
+            self.get_logger().warn(f"LeRobot bridge disabled: cannot bind {port_actions}/{port_observations}: {e}")
+            return None
         self.get_logger().info(
             f"LeRobot bridge listening on :{port_actions} (actions) and :{port_observations} (observations)"
         )

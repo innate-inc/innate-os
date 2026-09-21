@@ -24,6 +24,7 @@ from pathlib import Path
 import cv2
 import h5py
 import numpy as np
+from huggingface_hub import HfApi
 from huggingface_hub.errors import HfHubHTTPError
 from lerobot.configs.video import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -283,6 +284,8 @@ def convert_skill(
     recording = SkillRecording(Path(skill_dir).expanduser())
     out = dataset_root(repo_id, root)
     task_text = task or recording.task
+    if push:
+        _refuse_foreign_hub_dataset(recording, repo_id)
     eligible = recording.episodes(include_failures)
     exported = _episodes_in_copy(recording, repo_id, out, {ref.episode_id for ref in eligible}, log)
     todo = [
@@ -357,6 +360,12 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, curren
     """
     if not out.exists():
         return set()
+    if _holds_no_episodes(out):
+        # Nothing to lose. It is also what a run killed between lerobot creating the dataset and this
+        # converter marking it leaves behind: lerobot refuses to create into an existing folder, so the
+        # mark cannot come first, and refusing here would wedge the repository name for good.
+        shutil.rmtree(out)
+        return set()
     sidecar = read_sidecar(out) or {}
     if sidecar.get("source") != CONVERTER or sidecar.get("skill") != recording.skill_id:
         raise FileExistsError(
@@ -374,6 +383,30 @@ def _episodes_in_copy(recording: SkillRecording, repo_id: str, out: Path, curren
     log(f"{recording.name}: {reason}; rebuilding {out} in full")
     shutil.rmtree(out)
     return set()
+
+
+def _holds_no_episodes(out: Path) -> bool:
+    """An empty folder, or a lerobot dataset that has not saved an episode yet. Anything else, even a
+    folder with no dataset in it at all, may be someone's and is not ours to clear."""
+    if not any(out.iterdir()):
+        return True
+    return has_dataset(out) and _read_json(out / "meta" / "info.json").get("total_episodes") == 0
+
+
+def _refuse_foreign_hub_dataset(recording: SkillRecording, repo_id: str) -> None:
+    """Publishing replaces the Hub dataset wholesale, so the name must be this skill's to replace.
+
+    The local marker cannot tell: on a robot that never converted for this name there is no local copy
+    at all, yet the name may be another robot's publish, a lerobot-record upload, or another skill's.
+    Only this skill's export record naming the repository shows it published there before; a skill
+    that lost its local copy keeps the record, so its rebuild still goes through. Checked before
+    converting, so nobody waits through an encode to be refused.
+    """
+    if recording.export(repo_id) or not HfApi().repo_exists(repo_id, repo_type="dataset"):
+        return
+    raise FileExistsError(
+        f"{repo_id} already exists on Hugging Face and was not published from this skill; choose another name"
+    )
 
 
 def _print_event(event: dict) -> None:

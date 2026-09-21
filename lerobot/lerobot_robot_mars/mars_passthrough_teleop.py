@@ -63,6 +63,7 @@ class MarsPassthroughTeleop(Teleoperator):
         message = self._link.latest(self.config.poll_timeout_ms)
         if message is not None:
             self._command = _command_from(message[0])
+        self._link.ensure_alive()
         return dict(self._command)
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:

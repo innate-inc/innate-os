@@ -29,6 +29,8 @@ HEAD_KEY = "_head"
 HEAD_STATE_KEY = "head.deg"
 COMMAND_PREFIX = "cmd."
 HEARTBEAT_S = 0.5
+# The bridge streams at 30 Hz; asking this long with no answer means it is gone, not slow.
+SILENT_AFTER_S = 1.0
 
 
 def default_host() -> str:
@@ -76,6 +78,7 @@ class Link:
         self._push: zmq.Socket | None = None
         self._sub: zmq.Socket | None = None
         self._last_send = 0.0
+        self._asking_since: float | None = None
 
     @property
     def is_open(self) -> bool:
@@ -118,8 +121,24 @@ class Link:
         """The newest message, waiting up to *timeout_ms* for one; None if nothing arrived."""
         sub = self._require(self._sub)
         if not sub.poll(timeout_ms, zmq.POLLIN):
+            self._asking_since = self._asking_since or time.monotonic()
             return None
+        self._asking_since = None
         return parse_message(sub.recv(zmq.NOBLOCK))  # CONFLATE keeps one message: the newest
+
+    def ensure_alive(self) -> None:
+        """Raise once the bridge has not answered for SILENT_AFTER_S of asking.
+
+        Counted from the first unanswered ask, not from the last message, so a long pause on this
+        side (lerobot saving an episode) is not mistaken for a dead robot. Without it a rebooted
+        robot or a dropped network reads as a frozen but healthy one, and a recording keeps writing
+        the last frame with fresh timestamps.
+        """
+        if self._asking_since is not None and time.monotonic() - self._asking_since > SILENT_AFTER_S:
+            raise DeviceNotConnectedError(
+                f"The MARS bridge at {self._remote_ip} stopped answering for over {SILENT_AFTER_S:.0f} s: "
+                "the robot rebooted, the network dropped, or innate-os restarted."
+            )
 
     def send(self, payload: dict[str, float]) -> None:
         self._send(payload)

@@ -25,7 +25,6 @@ from .schema import (
     ACTION_NAMES,
     BASE_NAMES,
     CAMERA_ORDER,
-    CAMERA_SHAPE,
     STATE_NAMES,
     action_features,
     camera_features,
@@ -81,16 +80,17 @@ class Mars(Robot):
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
-        deadline = time.monotonic() + self.config.connect_timeout_s
         self._absorb(self._link.open(self.config.connect_timeout_s))
+        deadline = time.monotonic() + self.config.connect_timeout_s
         while self._missing_cameras() and time.monotonic() < deadline:
             message = self._link.latest(timeout_ms=200)
             if message is not None:
                 self._absorb(message)
         if self._missing_cameras():
-            logger.warning(
-                "MARS bridge is not sending %s frames yet; recording blank frames until it does",
-                self._missing_cameras(),
+            self._link.close()
+            raise DeviceNotConnectedError(
+                f"The MARS bridge sends no {self._missing_cameras()} frames: that camera is not running on the robot. "
+                "Recording now would store blank frames for it."
             )
         self._head_target = self._resolve_head_target()
         self._set_head()
@@ -109,10 +109,11 @@ class Mars(Robot):
         message = self._link.latest(self.config.poll_timeout_ms)
         if message is not None:
             self._absorb(message)
+        self._link.ensure_alive()
         self._hold_head()
         observation: RobotObservation = dict(self._state)
         for camera in CAMERA_ORDER:
-            observation[camera] = self._frames.get(camera, _blank_frame())
+            observation[camera] = self._frames[camera]  # connect() refuses to return without every camera
         return observation
 
     @check_if_not_connected
@@ -121,12 +122,14 @@ class Mars(Robot):
         if missing:
             raise ValueError(f"MARS action needs all six joint targets; missing {missing}")
         payload = {name: float(action[name]) for name in STATE_NAMES}
-        payload.update({name: float(action.get(name, 0.0)) for name in BASE_NAMES})
+        # An arm-only source (a leader arm, an arm-only policy) sends no base keys, and the bridge then
+        # leaves the base, and navigation, alone.
+        payload.update({name: float(action[name]) for name in BASE_NAMES if name in action})
         if self.config.external_commands:
             self._link.heartbeat_if_due()
         else:
             self._link.send(payload)
-        return {name: payload[name] for name in ACTION_NAMES}
+        return {name: payload[name] for name in ACTION_NAMES if name in payload}
 
     def _resolve_head_target(self) -> float | None:
         if not self.config.hold_head:
@@ -202,7 +205,3 @@ def _decode(jpeg: bytes) -> np.ndarray | None:
     if bgr is None:
         return None
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-
-def _blank_frame() -> np.ndarray:
-    return np.zeros(CAMERA_SHAPE, dtype=np.uint8)
