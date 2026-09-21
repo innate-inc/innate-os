@@ -1,14 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""LAN discovery for the simulator.
-
-The controller app finds real robots over Bluetooth; a sim has none, and the
-container sits on a Docker bridge that multicast does not cross. So the world
-server -- the one always-alive host process -- advertises the sim over
-mDNS/DNS-SD: the one LAN discovery both phone platforms browse without a
-special entitlement. The SRV port is rosbridge's, so a checkout on its own
-port block, or several sims on one host, each resolve to the right socket.
-"""
+"""mDNS advertisement of the simulator, for the controller app. It runs in the
+world server because the container's Docker bridge does not pass multicast;
+mDNS because iOS delivers no UDP broadcast to an app without a restricted
+entitlement. The SRV port is rosbridge's, so each port block resolves."""
 
 from __future__ import annotations
 
@@ -39,9 +34,8 @@ def lan_addresses() -> list[str]:
 
 
 class SimBeacon:
-    """Advertise this sim. The robot name and the host's addresses are
-    re-read every REFRESH_S, so a rename from the app or a laptop that changed
-    networks shows up without a restart."""
+    """Advertise this sim, re-registering when the robot is renamed or the
+    host changes network."""
 
     def __init__(self, robot_info_path: Path | None, rosbridge_port: int, webapp_port: int, version: str):
         self.robot_info_path = robot_info_path

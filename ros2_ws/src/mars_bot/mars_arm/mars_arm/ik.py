@@ -83,9 +83,8 @@ class KDLIKNode(Node):
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
 
-        # LMA knows nothing about joint limits: from a folded posture it returns
-        # solutions past the range, which the driver then clamps silently, so the
-        # arm lands somewhere nobody asked for. Reject those here instead.
+        # LMA ignores joint limits, and the driver clamps an overrun silently:
+        # the arm would land somewhere nobody asked for.
         self.joint_limits = [
             (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
             for name in self.joint_names
@@ -231,9 +230,8 @@ class KDLIKNode(Node):
 
         start_time = time.perf_counter()
 
-        # Multi-start IK: the current posture first, and only if that lands
-        # short, a zero-seeded solve as well. A streamed target hops between
-        # elbow branches if both seeds get a vote on every step.
+        # The zero seed only votes when the current posture lands short, or a
+        # streamed target hops between elbow branches.
         seeds = [
             ("current", self.current_q),
             ("zeros", kdl.JntArray(self.chain.getNrOfJoints())),  # initialized to zeros
@@ -300,9 +298,8 @@ class KDLIKNode(Node):
         # cmd_msg.data = ik_positions
         # self.command_pub.publish(cmd_msg)
 
-        # Seed the next solve with the solution that was published. Not q_out:
-        # that is the last seed tried, which is None when its solve failed —
-        # seeding with None crashed the node on the next joint-state message.
+        # Not q_out: that is the last seed tried, None when its solve failed,
+        # and a None seed crashed the node on the next joint state.
         self.current_q = best_solution
 
 

@@ -63,11 +63,9 @@ last_request = time.monotonic()
 
 
 def touch():
-    """Mark activity and make sure the state feeds are live (idempotent).
-
-    Waking from parked, wait for the first joint-state sample: the gripper and
-    joint-space commands read the measured arm and would refuse the very
-    command that woke the feeds."""
+    """Mark activity and wake the state feeds. Waking waits for the first
+    joint state: commands read the measured arm, and would otherwise refuse
+    the very command that woke the feeds."""
     global last_request
     last_request = time.monotonic()
     if manip._executor is not None:
@@ -247,11 +245,9 @@ def execute_goal(goal_handle):
 
 
 class PoseSample(TypedDict):
-    """One /armsdk/stream_pose message: an end-effector delta in base_link
-    axes (metres, unit quaternion) relative to the pose the arm had when
-    ``session`` began, plus an optional gripper opening (0 closed … 1 open)
-    that follows the operator's thumb. A new session re-anchors on the live
-    pose."""
+    """One /armsdk/stream_pose message: a base_link delta from the pose the arm
+    had when ``session`` began, and an optional gripper opening (0 closed … 1
+    open). A new session re-anchors on the live pose."""
 
     session: str
     x: float
@@ -272,15 +268,9 @@ class FollowState(StrEnum):
 
 
 class PoseFollower:
-    """Latest-wins follower for /armsdk/stream_pose.
-
-    The subscription only records the newest sample; a tick thread at the
-    stream rate solves and streams it, so a burst of messages can't queue up
-    behind slow solves and the arm always chases the freshest target. The
-    anchor is read from the live FK pose the first time a session is seen,
-    which is what makes the phone's delta land relative to wherever the arm
-    stopped last time.
-    """
+    """Latest-wins follower for /armsdk/stream_pose: the subscription only keeps
+    the newest sample and a tick thread solves it, so messages never queue
+    behind a slow solve. Each new session anchors on the live FK pose."""
 
     STATUS_HZ = 5.0
 
@@ -289,6 +279,8 @@ class PoseFollower:
         self._sample: PoseSample | None = None
         self._stamp = 0.0
         self._anchor: tuple[str, Arm] | None = None
+        # The stream being answered: a refused one never gets an anchor.
+        self._session: str | None = None
         self._state = FollowState.IDLE
         self._detail = ""
         self._status_pub = node.create_publisher(String, "/armsdk/stream_pose/status", 10)
@@ -324,9 +316,11 @@ class PoseFollower:
             with self._lock:
                 sample, fresh = self._sample, time.monotonic() - self._stamp < Manipulation.STREAM_IDLE_S
             if sample is None or not fresh:
+                self._session = None
                 self._set(FollowState.IDLE)
                 self._anchor = None
                 continue
+            self._session = sample["session"]
             self._step(sample)
             self._publish_status()
 
@@ -367,8 +361,7 @@ class PoseFollower:
         if not force and now - self._last_status < 1.0 / self.STATUS_HZ:
             return
         self._last_status = now
-        session = self._anchor[0] if self._anchor is not None else None
-        body = {"session": session, "state": self._state.value, "detail": self._detail}
+        body = {"session": self._session, "state": self._state.value, "detail": self._detail}
         self._status_pub.publish(String(data=json.dumps(body)))
 
 

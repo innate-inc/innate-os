@@ -583,14 +583,10 @@ class Manipulation:
         yaw: float,
         grip: float | None = None,
     ) -> bool:
-        """One step of cartesian streaming: solve IK for the pose and hand
-        the arm joints to :meth:`stream_joints`. ``grip`` is a j6 target in
-        radians streamed alongside (it becomes the standing grip when the
-        stream ends); None keeps the standing grip. Returns False, moving
-        nothing, when the pose has no solution — a follower loop skips the
-        step and waits for the next target. Fast by design: the IK timeout is
-        one stream tick, not a motion's patience.
-        """
+        """One cartesian streaming step: solve IK and hand the joints to
+        :meth:`stream_joints`, with ``grip`` (j6 radians; None keeps the
+        standing grip). False, moving nothing, when the pose has no solution
+        within one stream tick."""
         joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
         if joints is None:
             return False

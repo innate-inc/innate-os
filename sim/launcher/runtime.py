@@ -2639,7 +2639,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
-            and reply.get("mdns") == _beacon_port_wanted()
+            and reply.get("mdns") == _beacon_ports_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2784,12 +2784,12 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _beacon_port_wanted() -> int | None:
-    """The rosbridge port the world server's beacon should announce; None when
-    the beacon is switched off (INNATE_SIM_BEACON=0)."""
+def _beacon_ports_wanted() -> list[int] | None:
+    """The [rosbridge, webapp] ports the world server should advertise; None
+    when advertising is switched off (INNATE_SIM_BEACON=0)."""
     if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
         return None
-    return SIM_ROSBRIDGE_PORT
+    return [SIM_ROSBRIDGE_PORT, SIM_HTTPS_PORT]
 
 
 def _beacon_env(repo_root: Path) -> dict[str, str]:
