@@ -600,6 +600,10 @@ class PickAnyObject(Skill):
                 streak = 0
                 centered = 0  # view shifted — re-confirm centering
 
+        if not descended:
+            # Nudges toward a blob never confirmed in the box can walk the arm off a
+            # target the approach had already put under it.
+            return self._wrist_done(tx, ty, z, f"{reason}, never centred — back to the approach target")
         return self._wrist_done(x, y, z, reason, axis)
 
     def _goto_search_pose(self, bearing):

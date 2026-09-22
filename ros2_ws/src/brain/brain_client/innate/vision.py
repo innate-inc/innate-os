@@ -63,14 +63,19 @@ def _norm1k(v):
 
 
 def _box_corners_px(det):
-    """box_2d [ymin,xmin,ymax,xmax] 0-1000 -> (x0,y0,x1,y1) px. bbox_2d is Qwen-VL's
-    own name for the same field, and the model reverts to it whenever the asked schema
-    doesn't pin the key — 2 of 5 replies to the wrist prompt, which asks for box_2d
-    alone, against 0 of 4 to the head prompt, which asks for two more fields."""
-    b = det.get("box_2d") or det.get("bbox_2d")
+    """box_2d [ymin,xmin,ymax,xmax] 0-1000 -> (x0,y0,x1,y1) px. Qwen-VL often answers in
+    its own bbox_2d instead, and the key names the order: bbox_2d is x-first, as Qwen
+    trains it, whatever order the prompt asked for (18 of 18 replies on recorded wrist
+    frames). Read as y-first it lands the box across the diagonal, on bare floor."""
+    b = det.get("box_2d")
+    x_first = b is None
+    if x_first:
+        b = det.get("bbox_2d")
     if not isinstance(b, (list, tuple)) or len(b) < 4:
         return None
     y0, x0, y1, x1 = (_norm1k(v) for v in b[:4])
+    if x_first:
+        x0, y0, x1, y1 = y0, x0, y1, x1
     if y0 is None or x0 is None or y1 is None or x1 is None:
         return None
     y0, y1 = sorted((y0, y1))
