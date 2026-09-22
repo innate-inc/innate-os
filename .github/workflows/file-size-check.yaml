@@ -1,0 +1,29 @@
+name: File size check
+
+# Guards against accidentally committing large files (build artifacts,
+# datasets, notebooks with saved outputs, ...) into git. Any file changed in
+# a pull request that exceeds the limit fails the check. To intentionally
+# allow a large file, add it to .sizelimitignore (gitignore-style patterns)
+# in the same PR — that edit is reviewed like any other change.
+#
+# Powered by innate-inc/git-file-size-limit, a standalone open-source
+# action: https://github.com/innate-inc/git-file-size-limit
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check-file-size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Need the base commit available locally to diff against.
+          fetch-depth: 0
+
+      - name: Check changed files against the size limit
+        uses: innate-inc/git-file-size-limit@main
+        with:
+          max_size: 100KB
