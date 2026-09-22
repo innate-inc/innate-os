@@ -10,11 +10,16 @@ from pathlib import Path
 
 from config import (
     CLI_SIM,
+    DEFAULT_LLM_MODEL,
     ENV_PATH,
     GEMINI_API_KEY,
     INNATE_SERVICE_KEY,
     SECRET_ENV_KEYS,
+    SETTINGS_PATH,
+    VENDOR_API_KEYS,
+    VENDOR_ENV_KEYS,
     is_configured_secret_value,
+    llm_vendor,
     success,
     warn,
 )
@@ -271,42 +276,42 @@ def _prompt_choice(question: str, options: dict[str, str], *, default: str) -> s
         print(f"{YELLOW}Please choose one of: {', '.join(options)}.{NC}")
 
 
-def _save_gemini_key(config: dict[str, object], gemini_key: str) -> None:
-    write_env_value(ENV_PATH, GEMINI_API_KEY, gemini_key)
+def _save_vendor_key(config: dict[str, object], key_name: str, vendor_key: str) -> None:
+    write_env_value(ENV_PATH, key_name, vendor_key)
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    raw_env[GEMINI_API_KEY] = gemini_key
-    user_env[GEMINI_API_KEY] = gemini_key
-    success(f"Saved {GEMINI_API_KEY} to {ENV_PATH}.")
+    raw_env[key_name] = vendor_key
+    user_env[key_name] = vendor_key
+    success(f"Saved {key_name} to {ENV_PATH}.")
 
 
-def _configure_gemini_key(config: dict[str, object]) -> None:
+def _configure_vendor_key(config: dict[str, object], key_name: str) -> None:
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    if is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY)):
-        if not _prompt_yes_no(f"{GEMINI_API_KEY} is already set. Replace it?", default=False):
+    if is_configured_secret_value(key_name, user_env.get(key_name)):
+        if not _prompt_yes_no(f"{key_name} is already set. Replace it?", default=False):
             return
     else:
-        restored = uncomment_env_key(ENV_PATH, GEMINI_API_KEY)
+        restored = uncomment_env_key(ENV_PATH, key_name)
         if restored is not None:
             raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
-            raw_env[GEMINI_API_KEY] = restored
-            user_env[GEMINI_API_KEY] = restored
-            success(f"Re-enabled {GEMINI_API_KEY} in {ENV_PATH.name}.")
+            raw_env[key_name] = restored
+            user_env[key_name] = restored
+            success(f"Re-enabled {key_name} in {ENV_PATH.name}.")
             return
 
-        shell_value = os.environ.get(GEMINI_API_KEY, "").strip()
-        if is_configured_secret_value(GEMINI_API_KEY, shell_value) and _prompt_yes_no(
-            f"Found {GEMINI_API_KEY} in your shell. Save it to {ENV_PATH.name}?", default=True
+        shell_value = os.environ.get(key_name, "").strip()
+        if is_configured_secret_value(key_name, shell_value) and _prompt_yes_no(
+            f"Found {key_name} in your shell. Save it to {ENV_PATH.name}?", default=True
         ):
-            _save_gemini_key(config, shell_value)
+            _save_vendor_key(config, key_name, shell_value)
             return
 
     while True:
-        gemini_key = _prompt_secret(f"Paste {GEMINI_API_KEY}")
-        if is_configured_secret_value(GEMINI_API_KEY, gemini_key):
-            _save_gemini_key(config, gemini_key)
+        vendor_key = _prompt_secret(f"Paste {key_name}")
+        if is_configured_secret_value(key_name, vendor_key):
+            _save_vendor_key(config, key_name, vendor_key)
             return
-        warn("Gemini key cannot be empty. Press Ctrl+C to cancel.")
+        warn("API key cannot be empty. Press Ctrl+C to cancel.")
 
 
 def _configure_service_key(config: dict[str, object]) -> None:
@@ -376,14 +381,43 @@ def _disable_keys(config: dict[str, object], keys: list[str]) -> None:
 def report_configured_keys(config: dict[str, object]) -> None:
     """Print which brain keys are currently active in .env."""
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    active = [key for key in SECRET_ENV_KEYS if is_configured_secret_value(key, user_env.get(key))]
+    active = [key for key in (*SECRET_ENV_KEYS, *VENDOR_ENV_KEYS) if is_configured_secret_value(key, user_env.get(key))]
     if active:
         success(f"Keys set in {ENV_PATH.name}: {', '.join(active)}")
     else:
         warn(f"No brain keys set in {ENV_PATH.name}.")
 
 
-BRAIN_BACKENDS = ("gemini", "innate", "none")
+BRAIN_BACKENDS = ("gemini", "openai", "innate", "none")
+
+
+def _select_vendor_model(config: dict[str, object], backend: str) -> None:
+    """Set the launch default; explicit Settings overrides remain the user's."""
+    vendor = "google" if backend == "gemini" else "openai"
+    default = DEFAULT_LLM_MODEL if backend == "gemini" else "openai:gpt-5.4-mini"
+    user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
+    current = user_env.get("LLM_MODEL", "")
+    model = current if current and llm_vendor(current) == vendor else default
+    write_env_value(ENV_PATH, "LLM_MODEL", model)
+    raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
+    raw_env["LLM_MODEL"] = model
+    user_env["LLM_MODEL"] = model
+    success(f"Default model: {model}.")
+    print("In the web app, open Settings → Agent → Model to select or change the model.")
+    print(f"A model already saved in {SETTINGS_PATH} takes precedence over this default.")
+
+
+def _finish_backend_selection(config: dict[str, object], backend: str) -> None:
+    if backend in ("gemini", "openai"):
+        _disable_keys(config, [INNATE_SERVICE_KEY])
+        _select_vendor_model(config, backend)
+    elif backend == "innate":
+        _disable_keys(config, [GEMINI_API_KEY, "OPENAI_API_KEY"])
+    else:
+        _disable_keys(config, [INNATE_SERVICE_KEY, *dict.fromkeys(VENDOR_API_KEYS.values()), "LLM_API_KEY"])
+        warn("No brain backend selected. The sim will run without an agent.")
+    report_configured_keys(config)
+    print(f"If the simulator is running, restart it with `{CLI_SIM} down` then `{CLI_SIM} up`.")
 
 
 def apply_brain_backend(config: dict[str, object], backend: str, key: str) -> None:
@@ -394,39 +428,37 @@ def apply_brain_backend(config: dict[str, object], backend: str, key: str) -> No
     collects the answer only -- which key goes in .env, and which get commented
     out, stays here, so there is one implementation of that.
     """
-    if backend == "gemini":
-        _save_gemini_key(config, key)
-        _disable_keys(config, [INNATE_SERVICE_KEY])
+    if backend not in BRAIN_BACKENDS:
+        raise ValueError(f"Unknown brain backend: {backend}")
+    if backend != "none" and not is_configured_secret_value(
+        INNATE_SERVICE_KEY if backend == "innate" else VENDOR_API_KEYS["google" if backend == "gemini" else backend],
+        key,
+    ):
+        raise ValueError("API key cannot be empty or a placeholder")
+    if backend in ("gemini", "openai"):
+        _save_vendor_key(config, GEMINI_API_KEY if backend == "gemini" else "OPENAI_API_KEY", key)
     elif backend == "innate":
         _save_service_key(config, key)
-        _disable_keys(config, [GEMINI_API_KEY])
-    else:
-        _disable_keys(config, [GEMINI_API_KEY, INNATE_SERVICE_KEY])
-        warn("No brain backend selected. The sim will run without an agent.")
-    report_configured_keys(config)
+    _finish_backend_selection(config, backend)
 
 
 def configure_brain_backend(config: dict[str, object]) -> None:
-    """Pick how the robot's brain reaches Gemini, and collect the matching key.
-
-    The agent loop itself always runs on the robot (brain_client); the key only
-    decides which way out it takes -- straight to Google with a Gemini key, or
-    through the Innate proxy with a service key. Switching just uncomments the
-    relevant key and comments out the others, so you can toggle back and forth
-    without re-pasting. Non-interactively, just report what the robot will pick.
-    """
+    """Choose a provider and collect its key, preserving keys for later reuse."""
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
     has_gemini = is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY))
+    has_openai = is_configured_secret_value("OPENAI_API_KEY", user_env.get("OPENAI_API_KEY"))
     has_service_key = is_configured_secret(user_env.get(INNATE_SERVICE_KEY))
 
     if not is_interactive_terminal():
         if has_service_key:
             success("Innate proxy selected (INNATE_SERVICE_KEY detected).")
+        elif has_openai:
+            success("OpenAI key detected. Select an OpenAI model in Settings → Agent → Model.")
         elif has_gemini:
             success("Direct Gemini access selected (GEMINI_API_KEY detected).")
         else:
             warn(
-                f"No brain key configured. Add GEMINI_API_KEY (your own Gemini key) or "
+                f"No brain key configured. Add OPENAI_API_KEY, GEMINI_API_KEY, or "
                 f"INNATE_SERVICE_KEY (Innate proxy) to {ENV_PATH}."
             )
         report_configured_keys(config)
@@ -439,29 +471,26 @@ def configure_brain_backend(config: dict[str, object]) -> None:
         f"Choose how it reaches one:\n"
         f"  - Your own Gemini key: the agent calls Google directly. Everything\n"
         f"    works except voice.\n"
-        f"  - Innate service key (ships with a MARS robot): the agent calls Gemini\n"
+        f"  - Your own OpenAI key: the agent calls OpenAI directly. No voice.\n"
+        f"  - Innate service key (ships with a MARS robot): Gemini or OpenAI\n"
         f"    through Innate's proxy. Full experience, including the robot's voice.\n"
         f"  - None: drive, navigate, and trigger skills manually, with no agent.{NC}"
     )
     print()
-    default_choice = "2" if has_service_key else "1"
+    default_choice = "3" if has_service_key else "2" if has_openai and not has_gemini else "1"
     choice = _prompt_choice(
         "How would you like to access the cloud LLM?",
         {
             "1": "Your own Gemini key (get one at https://aistudio.google.com/api-keys)",
-            "2": "Innate service key (from your robot)",
-            "3": "None (run the sim without an agent)",
+            "2": "Your own OpenAI key (get one at https://platform.openai.com/api-keys)",
+            "3": "Innate service key (from your robot)",
+            "4": "None (run the sim without an agent)",
         },
         default=default_choice,
     )
-    if choice == "1":
-        _configure_gemini_key(config)
-        _disable_keys(config, [INNATE_SERVICE_KEY])
-    elif choice == "2":
+    backend = {"1": "gemini", "2": "openai", "3": "innate", "4": "none"}[choice]
+    if backend in ("gemini", "openai"):
+        _configure_vendor_key(config, GEMINI_API_KEY if backend == "gemini" else "OPENAI_API_KEY")
+    elif backend == "innate":
         _configure_service_key(config)
-        _disable_keys(config, [GEMINI_API_KEY])
-    else:
-        _disable_keys(config, [GEMINI_API_KEY, INNATE_SERVICE_KEY])
-        warn("No brain backend selected. The sim will run without an agent.")
-
-    report_configured_keys(config)
+    _finish_backend_selection(config, backend)
