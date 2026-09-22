@@ -260,6 +260,8 @@ class KDLIKNode(Node):
                 f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
                 throttle_duration_sec=1.0,
             )
+            # An empty reply, not silence: the client's only other failure signal is its 2 s timeout.
+            self.joint_pub.publish(JointState())
             return
 
         self.get_logger().debug(
