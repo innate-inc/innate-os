@@ -24,8 +24,6 @@ class KDLIKNode(Node):
     # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
     # as-is instead of being outvoted by another seed's marginally better fit.
     CONTINUITY_SCORE = 0.005
-    # Radians past a URDF limit still accepted: solver noise, not a real overrun.
-    LIMIT_SLACK = 0.01
 
     def __init__(self):
         super().__init__("kdl_ik_from_file")
@@ -82,13 +80,6 @@ class KDLIKNode(Node):
             )
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
-
-        # LMA ignores joint limits, and the driver clamps an overrun silently:
-        # the arm would land somewhere nobody asked for.
-        self.joint_limits = [
-            (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
-            for name in self.joint_names
-        ]
 
         # Calculate and store initial FK pose (corresponding to q=0)
         self.initial_frame = kdl.Frame()
@@ -193,12 +184,6 @@ class KDLIKNode(Node):
             return True, q_out, score
         return False, None, float("inf")
 
-    def _within_limits(self, q: kdl.JntArray) -> bool:
-        return all(
-            lower - self.LIMIT_SLACK <= self._normalize_angle(q[i]) <= upper + self.LIMIT_SLACK
-            for i, (lower, upper) in enumerate(self.joint_limits)
-        )
-
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
         while angle > math.pi:
@@ -243,9 +228,6 @@ class KDLIKNode(Node):
 
         for seed_name, seed in seeds:
             success, q_out, score = self._try_ik_with_seed(seed, target_frame)
-            if success and not self._within_limits(q_out):
-                self.get_logger().debug(f"IK ({seed_name} seed) solution violates joint limits — rejected")
-                success = False
             if success and score < best_score:
                 best_solution = q_out
                 best_score = score
@@ -257,7 +239,7 @@ class KDLIKNode(Node):
 
         if best_solution is None:
             self.get_logger().warning(
-                f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
+                f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)",
                 throttle_duration_sec=1.0,
             )
             return
