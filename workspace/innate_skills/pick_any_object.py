@@ -10,6 +10,7 @@ No depth camera — URDF + pinhole model.
 import math
 import re
 import time
+from typing import NoReturn
 
 from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box, metres
 
@@ -118,7 +119,14 @@ WRIST_ALIGN_TIMEOUT_S = 60.0
 WRIST_JUMP_PX = 40.0
 WRIST_JUMP_CONFIRM = 3
 WRIST_MAX_JUMP_PX = 80.0
-WRIST_SEG_MIN_SCORE = 25.0
+# A model's box carries a floor margin that dilutes the colour model: a small dark
+# piece seeded from the whole box scored at the old 25 threshold and tracked on 4 of 8
+# recorded seeds; from the box's central 60%, at 20, on 8 of 8, with no carpet lock-ons.
+WRIST_SEG_MIN_SCORE = 20.0
+WRIST_SEED_CORE = 0.6
+# A wrist stage that never centred re-approaches instead of descending blind from
+# hover, which misses most grasps; after this many approaches the run fails.
+WRIST_APPROACHES = 3
 WRIST_CAM_ABOVE_EE = 0.07
 # Half-length of the blob's drawn long axis, wrist-image px.
 AXIS_HALF_PX = 45
@@ -148,12 +156,19 @@ MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
 
 
+class _NotCentred(Exception):
+    """The wrist stage never centred the object, so there is nothing to grasp at."""
+
+
 class _BlobTracker:
-    """CamShift color-blob tracker seeded from a Gemini box."""
+    """CamShift color-blob tracker seeded from the core of a model's box."""
 
     def __init__(self, hsv, box, px):
-        self.model = vision.seg_model(hsv, box)
-        self.window = box
+        x, y, w, h = box
+        cw, ch = max(8, round(w * WRIST_SEED_CORE)), max(8, round(h * WRIST_SEED_CORE))
+        core = (round(x + (w - cw) / 2), round(y + (h - ch) / 2), cw, ch)
+        self.model = vision.seg_model(hsv, core)
+        self.window = core
         self.guess = px
         self.observed = False  # guess is an expectation until a frame confirms it
         self.pending = None
@@ -418,6 +433,11 @@ class PickAnyObject(Skill):
         self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
 
+    def _not_centred(self, z: float, reason: str) -> NoReturn:
+        self.logger.info(f"[PickAnyObject] wrist stage: {reason} before centring (z={z:.3f}) — not grasping blind")
+        self.overlay.readout(f"wrist align: {reason}")
+        raise _NotCentred(reason)
+
     def _draw_hop(self, pending):
         if pending is None:
             self.overlay.clear("hop")
@@ -497,15 +517,15 @@ class PickAnyObject(Skill):
 
         px, box = self._wrist_seed(prompt)
         if px is None:
-            return self._wrist_done(tx, ty, z, "not seen")
+            self._not_centred(z, "not seen")
         x, y = (ee[0], ee[1]) if ee else (tx, ty)
 
         hsv, raw = self._next_wrist_hsv(None)
         if hsv is None:
-            return self._wrist_done(tx, ty, z, "no wrist frames")
+            self._not_centred(z, "no wrist frames")
         tracker = _BlobTracker(hsv, box, px)
         if not tracker.ok:
-            return self._wrist_done(tx, ty, z, "not seen")
+            self._not_centred(z, "not seen")
 
         deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
         top = z
@@ -601,6 +621,8 @@ class PickAnyObject(Skill):
                 streak = 0
                 centered = 0  # view shifted — re-confirm centering
 
+        if not descended:
+            self._not_centred(z, reason)
         return self._wrist_done(x, y, z, reason, axis)
 
     def _goto_search_pose(self, bearing):
@@ -802,6 +824,23 @@ class PickAnyObject(Skill):
         self.overlay.readout("closing the gripper")
         self._close_twist_lift(x, y, roll, pitch, yaw)
 
+    def _approach_and_grasp(self, prompt: str, approach: FloorApproach, xy: tuple[float, float]) -> None:
+        for attempt in range(1, WRIST_APPROACHES + 1):
+            xy = approach.position_above(prompt, xy)
+            self.overlay.readout("parked over it")
+            self.say("Picking it up." if attempt == 1 else "Lining up again.")
+            try:
+                self._grasp_at(prompt, xy)
+                return
+            except _NotCentred as e:
+                if attempt == WRIST_APPROACHES:
+                    raise SkillFailed(
+                        f"Couldn't centre '{prompt}' in the wrist camera ({e}) after {attempt} approaches"
+                        " — not grasping blind"
+                    ) from e
+                # Fold clear of the head camera: the re-approach re-detects with it.
+                self.manipulation.move_joints(NAV_ARM, duration=3.0)
+
     def _grasp_verified(self, prompt, approach: FloorApproach):
         """Back up, then check floor clear + gripper not open. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
@@ -891,10 +930,7 @@ class PickAnyObject(Skill):
             self.overlay.begin(prompt, stages=self._stages(), frame=(IMG_W, IMG_H))
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
-            xy = approach.position_above(prompt, xy)
-            self.overlay.readout("parked over it")
-            self.say("Picking it up.")
-            self._grasp_at(prompt, xy)
+            self._approach_and_grasp(prompt, approach, xy)
             # _close_twist_lift latched self._holding the moment the fingers
             # committed — only a verified miss clears it.
             if not self._grasp_verified(prompt, approach):
