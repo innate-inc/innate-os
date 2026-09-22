@@ -2639,6 +2639,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
+            and reply.get("mdns") == _beacon_ports_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2664,11 +2665,13 @@ def ensure_world_server(config: dict[str, object]) -> str:
             )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
-        else:
+        elif set(actual_binds) != expected_binds:
             log(
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
+        else:
+            log("Host world server announces a different simulator (or none) to the app -- restarting it...")
         _stop_stale_world_server()
     else:
         # Silence on this block's port says nothing about the last run: a
@@ -2781,6 +2784,33 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
+def _beacon_ports_wanted() -> list[int] | None:
+    """The [rosbridge, webapp] ports the world server should advertise; None
+    when advertising is switched off (INNATE_SIM_BEACON=0)."""
+    if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
+        return None
+    return [SIM_ROSBRIDGE_PORT, SIM_HTTPS_PORT]
+
+
+def _beacon_env(repo_root: Path) -> dict[str, str]:
+    """What the world server's LAN discovery beacon announces (mars_sim_driver
+    beacon.py): the ports the controller app needs, the robot's name file, and
+    the checkout's version. Empty when advertising is switched off."""
+    if _beacon_ports_wanted() is None:
+        return {}
+    described = subprocess.run(
+        ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "INNATE_SIM_BEACON_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
+        "INNATE_SIM_BEACON_WEBAPP_PORT": str(SIM_HTTPS_PORT),
+        "INNATE_SIM_BEACON_ROBOT_INFO": str(repo_root / "data" / "robot_info.json"),
+        "INNATE_SIM_BEACON_VERSION": described.stdout.strip() if described.returncode == 0 else "",
+    }
+
+
 def _start_world_server(
     uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
 ) -> bool:
@@ -2789,8 +2819,11 @@ def _start_world_server(
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
         "from mars_sim_driver.world_server import main; main()"
     )
-    env = os.environ.copy()
+    # The beacon's settings come only from this launcher: one inherited from the
+    # shell would advertise after an opt-out, and every later up would restart.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("INNATE_SIM_BEACON_")}
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    env.update(_beacon_env(sim_repo.parent))
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
