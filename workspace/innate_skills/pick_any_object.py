@@ -11,6 +11,7 @@ import math
 import re
 import time
 
+from innate_llm import Thinking
 from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box, metres
 
 from innate import (
@@ -232,7 +233,7 @@ class PickAnyObject(Skill):
     _p = PARAMS
 
     # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
-    llm: Llm = Llm("google:gemini-3.5-flash")
+    llm: Llm = Llm("google:gemini-3.8-flash", thinking=Thinking.LOW)
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
