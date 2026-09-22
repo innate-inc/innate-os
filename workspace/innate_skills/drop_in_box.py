@@ -393,9 +393,11 @@ class DropInBox(Skill):
             images,
             f"The robot just dropped an object into '{prompt}'. {' '.join(labels)} "
             "Can you SEE the dropped object OUTSIDE the container — lying on the floor "
-            "next to it, or still between the gripper fingers? A successful drop leaves "
-            "the object hidden inside the container, so if you cannot see it anywhere, "
-            "answer NO. Answer only YES or NO.",
+            "right against it, or still between the gripper fingers? Similar objects lying "
+            "elsewhere on the floor were there before the drop and do not count, and the "
+            "object seen inside the container — through a clear wall or over the rim — "
+            "counts as inside. A successful drop usually leaves the object hidden inside "
+            "the container, so if you cannot see it outside, answer NO. Answer only YES or NO.",
             logger=self.logger,
         )
         missed = _yes_no(text)
