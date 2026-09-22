@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "seconds": 8,
+  "clips": [
+    {"id": "empty", "title": "No hand", "instruction": "Keep both hands completely outside the picture. Leave the background visible."},
+    {"id": "hold", "title": "Hold still", "instruction": "Show one open palm in the middle of the picture. Rest your elbow on something and hold still."},
+    {"id": "left", "title": "Move left", "instruction": "Start with your palm in the center. Move slowly to YOUR left for the full recording. Keep the hand visible and at the same distance."},
+    {"id": "right", "title": "Move right", "instruction": "Start with your palm in the center. Move slowly to YOUR right for the full recording. Keep the hand visible and at the same distance."},
+    {"id": "toward", "title": "Move toward the camera", "instruction": "Start at arm’s length. Move your open palm slowly toward the webcam. Keep the palm facing it; stop before it leaves the picture."},
+    {"id": "away", "title": "Move away from the camera", "instruction": "Start with your palm close enough to fill about half the picture. Move slowly away. Keep your palm facing the webcam."},
+    {"id": "up", "title": "Move up", "instruction": "Start in the lower half of the picture. Move slowly upward, keeping the same distance from the webcam."},
+    {"id": "down", "title": "Move down", "instruction": "Start in the upper half of the picture. Move slowly downward, keeping the same distance from the webcam."},
+    {"id": "rotate", "title": "Rotate without approaching", "instruction": "Keep your wrist in one place. Turn your palm slowly sideways and back, then tilt it up and down. This tests false depth motion."},
+    {"id": "occlusion", "title": "Partly hide your hand", "instruction": "Hold your palm still. Use a mug or book to cover half of it for two seconds, then uncover it. Repeat once."},
+    {"id": "reenter", "title": "Leave and return", "instruction": "Show your palm for two seconds, remove it for two seconds, then bring it back and hold still."},
+    {"id": "fast", "title": "Move quickly", "instruction": "Move your palm quickly left and right, then toward and away. Keep it in view as much as possible."}
+  ]
+}
