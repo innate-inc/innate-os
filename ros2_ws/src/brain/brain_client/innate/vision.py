@@ -62,11 +62,16 @@ def _norm1k(v):
     return min(1000.0, max(0.0, float(v)))
 
 
+def box_field(model: str) -> str:
+    """The box field to ask `model` for, in the order it was trained to write. Asked for
+    Gemini's y-first box_2d, Qwen-VL writes about half its boxes x-first anyway (19 of 34
+    on target on recorded wrist frames); asked for its own bbox_2d, 34 of 34."""
+    return '"bbox_2d":[x1,y1,x2,y2]' if "qwen" in model.lower() else '"box_2d":[ymin,xmin,ymax,xmax]'
+
+
 def _box_corners_px(det):
-    """box_2d [ymin,xmin,ymax,xmax] 0-1000 -> (x0,y0,x1,y1) px. Qwen-VL often answers in
-    its own bbox_2d instead, and the key names the order: bbox_2d is x-first, as Qwen
-    trains it, whatever order the prompt asked for (18 of 18 replies on recorded wrist
-    frames). Read as y-first it lands the box across the diagonal, on bare floor."""
+    """box_2d [ymin,xmin,ymax,xmax] or bbox_2d [x1,y1,x2,y2], 0-1000 -> (x0,y0,x1,y1) px.
+    bbox_2d is Qwen-VL's own field and it always writes it x-first; see box_field."""
     b = det.get("box_2d")
     x_first = b is None
     if x_first:

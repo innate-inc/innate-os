@@ -64,8 +64,9 @@ PARAMS = {
     # of 0.235, which sits 1.5 cm off REACH_X's near wall — close enough that a
     # backward wrist nudge is eaten by the clamp and the servo stalls out.
     "sweet_x": 0.315,
-    # WRIST ALIGN (0 wrist_steps = blind grasp)
-    "wrist_steps": 2.0,
+    # WRIST ALIGN (0 wrist_steps = blind grasp). wrist_steps - 1 re-seeds after a lost
+    # track: each costs ~2 s of the 60 s align budget, a blind descent misses most grasps.
+    "wrist_steps": 4.0,
     "wrist_stop_z": 0.05,
     "wrist_z_step": 0.01,
     "wrist_move_s": 0.5,
@@ -358,7 +359,7 @@ class PickAnyObject(Skill):
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
     def _wrist_seed(self, prompt):
-        """Wrist Gemini box -> (center_px, box) or (None, None)."""
+        """Wrist camera box from the model -> (center_px, box) or (None, None)."""
         self.sleep(self._p["wrist_settle_s"])
         img = self.wrist_image
         text = (
@@ -367,7 +368,7 @@ class PickAnyObject(Skill):
                 f"Wrist camera on a robot gripper, looking down at the floor. "
                 f"Find '{prompt}' on the floor. Ignore the gripper fingers "
                 "themselves. Return ONLY a JSON list of ALL matches, each "
-                '{"box_2d":[ymin,xmin,ymax,xmax]} normalized 0-1000, best first, '
+                f"{{{vision.box_field(self.llm.model)}}} normalized 0-1000, best first, "
                 "each box TIGHT around its object. Empty list if not visible.",
                 logger=self.logger,
             )
@@ -600,10 +601,6 @@ class PickAnyObject(Skill):
                 streak = 0
                 centered = 0  # view shifted — re-confirm centering
 
-        if not descended:
-            # Nudges toward a blob never confirmed in the box can walk the arm off a
-            # target the approach had already put under it.
-            return self._wrist_done(tx, ty, z, f"{reason}, never centred — back to the approach target")
         return self._wrist_done(x, y, z, reason, axis)
 
     def _goto_search_pose(self, bearing):
