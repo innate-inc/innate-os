@@ -41,7 +41,10 @@ try:
 except ImportError:  # view-only feature; the sim must not die without it
     ws_serve = None
 
-from .beacon import SimBeacon
+try:
+    from .beacon import SimBeacon
+except ImportError:  # zeroconf is host-side only: the demo image lacks it and never advertises
+    SimBeacon = None
 from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 from .environments import DEFAULT_ENVIRONMENT_ID, Environment, NavMapBridge
@@ -646,7 +649,7 @@ def main() -> None:
         print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)
 
     threading.Thread(target=server.physics_loop, daemon=True).start()
-    beacon = SimBeacon.from_env()
+    beacon = SimBeacon.from_env() if SimBeacon is not None else None
     server.beacon_ports = [beacon.rosbridge_port, beacon.webapp_port] if beacon is not None else None
     if beacon is not None:
         beacon.start()

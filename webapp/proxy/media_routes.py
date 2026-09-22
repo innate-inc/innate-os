@@ -45,7 +45,7 @@ def _plain(status: int, reason: str, text: str) -> web.Response:
     return web.Response(status=status, reason=reason, body=text.encode(), content_type="text/plain")
 
 
-def _resolve_under_root(rel: str):
+def resolve_under_root(rel: str):
     """Resolve a client-supplied skill directory, refusing anything that escapes
     the skills root (path-traversal guard, mirrors static_response)."""
     if not rel:
@@ -73,7 +73,7 @@ async def episode_response(request: web.Request) -> web.StreamResponse:
     bytes), so a scrubbing <video> never slurps the whole multi-MB file. Cheap
     (just a fenced lookup), so it stays on the loop rather than a thread."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     eid = (qs.get("id") or [""])[0]
     cam = (qs.get("camera") or [""])[0]
     if base is None or not eid or not cam:
@@ -125,7 +125,7 @@ async def thumb_response(request: web.Request) -> web.Response:
     """GET /episode/thumb?dir=<skill_dir>&id=<n>&camera=<cam> → cached JPEG of a
     frame from the episode MP4 (generated on first request, then served static)."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     eid = (qs.get("id") or [""])[0]
     cam = (qs.get("camera") or ["camera_1"])[0]
     if base is None or not eid:
@@ -244,7 +244,7 @@ def joints_response(request: web.Request) -> web.Response:
     """GET /episode/joints?dir=<skill_dir>&id=<n> → qpos/qvel/timestamps JSON,
     read straight from the (possibly image-stripped) HDF5 — joints are kept."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     eid = (qs.get("id") or [""])[0]
     if base is None or not eid:
         return _plain(404, "Not Found", "not found")
@@ -280,7 +280,7 @@ def profile_response(request: web.Request) -> web.Response:
     HDF5): one context line, then one per-step sample per line. 404 when the
     episode predates profile recording or wasn't a learned-skill rollout."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     eid = (qs.get("id") or [""])[0]
     if base is None or not eid:
         return _plain(404, "Not Found", "not found")
@@ -345,7 +345,7 @@ def run_info_response(request: web.Request) -> web.Response:
     A run is 'successful' if its downloaded results contain a *_step_*.pth — the
     same check the training node uses to activate a checkpoint."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     rid = (qs.get("id") or [""])[0]
     if base is None or not rid:
         return _plain(404, "Not Found", "not found")
@@ -392,7 +392,7 @@ def run_log_response(request: web.Request) -> web.Response:
     """GET /run/log?dir=<skill_dir>&id=<run_id>&file=<relpath> → a run log file
     as text/plain. Sandboxed to the run directory."""
     qs = parse_qs(request.query_string)
-    base = _resolve_under_root((qs.get("dir") or [""])[0])
+    base = resolve_under_root((qs.get("dir") or [""])[0])
     rid = (qs.get("id") or [""])[0]
     rel = (qs.get("file") or [""])[0]
     if base is None or not rid or not rel:

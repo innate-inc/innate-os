@@ -89,3 +89,7 @@ to `self.sleep` and reintroduces the bug. Everywhere else, `self.sleep`.
 | `mars_nav` | Nav2 navigation, SLAM, mode manager |
 | `brain_client` | Cloud brain bridge (STT/TTS, skills action server) |
 | `manipulation` | Records/replays and runs manipulation policies |
+
+Outside the ROS workspace, `lerobot/` is the LeRobot plugin (`lerobot_robot_mars`): a client for the
+ZMQ bridge inside `manipulation_server`, a passthrough teleoperator, and `mars2lerobot`, which exports
+recorded skills to LeRobotDataset v3. It has its own Python 3.12 uv environment; see `lerobot/README.md`.
