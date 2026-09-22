@@ -47,7 +47,6 @@ VERIFY_BACKUP_M = 0.15
 # A detection touching the frame top has its rim cropped: any height read off
 # it is meaningless.
 CLIP_MARGIN_PX = 3.0
-RELEASE_X_STEP_M = 0.01
 
 PARAMS = {
     **APPROACH_PARAMS,
@@ -62,8 +61,8 @@ PARAMS = {
     # 12 px — a 16 mm accept band the servo cannot resolve: the feed is 7.5 Hz
     # and drive_v_min 0.04 m/s, so its smallest blind step is ~6 mm and it
     # limit-cycled instead of parking. 25 px gives a 34 mm deadband (~6 steps)
-    # and a 57 mm hold band; _release_xy absorbs the park error by searching
-    # back toward the near wall for a pose the wrist can hold.
+    # and a 57 mm hold band, both well inside the 0.15-0.30 m park that
+    # _release_x tolerates at every rim in the band.
     "box_half_px": 50.0,
     "box_half_v_px": 25.0,
     "accept_frac": 0.6,
@@ -290,32 +289,27 @@ class DropInBox(Skill):
         except (ArmFailed, ArmUnhealthy) as e:
             self.logger.warning(f"[DropInBox] could not lift clear of the rim ({e}); reaching from where it is")
 
-    def _release_xy(self, near_x: float, near_y: float, z: float) -> tuple[float, float]:
-        """The furthest point over the interior the arm can hold at height `z`, or
-        raise if the rim is high enough that none is in reach. IK decides, not
-        reach_x_max alone: at arm_pitch the wrist overruns its joint4 limit in a band
-        around x=0.30 that widens with height, and the sphere passes straight over it."""
+    def _release_x(self, near_x: float, z: float) -> float:
+        """How far forward the gripper may hover at height `z`, or raise if the
+        rim is high enough that nothing over the interior is still in reach."""
         p = self._p
         limit = reach_x_max(z)
+        limit = None if limit is None else limit - p["reach_margin"]
         floor = near_x + p["drop_inset_min"]
-        x = min(near_x + p["drop_inset"], limit - p["reach_margin"]) if limit is not None else floor - 1.0
-        while x > floor - 1e-6:
-            self.check_cancelled()
-            cx, cy = self.manipulation.clamp_reach(x, near_y)
-            if self.manipulation.reachable(cx, cy, z, pitch=p["arm_pitch"]):
-                return cx, cy
-            x -= RELEASE_X_STEP_M
-        raise SkillFailed(
-            f"'{self._label}' is too tall to reach over — at z={z:.2f} m the arm cannot hold "
-            f"the gripper anywhere past the container's near wall at x={near_x:.2f} m"
-        )
+        if limit is None or limit < floor:
+            raise SkillFailed(
+                f"'{self._label}' is too tall to reach over — its rim needs the gripper at "
+                f"z={z:.2f} m, where the arm only reaches x={limit or 0.0:.2f} m and the "
+                f"container's near wall is already at x={near_x:.2f} m"
+            )
+        return min(near_x + p["drop_inset"], limit)
 
     def _release_at(self, near_x: float, near_y: float) -> tuple[float, float, float]:
         """Hover over the container interior and open the claw."""
         p = self._p
         rim = self._rim_height(near_x)
         z = rim + p["release_clear_m"]
-        x, y = self._release_xy(near_x, near_y, z)
+        x, y = self.manipulation.clamp_reach(self._release_x(near_x, z), near_y)
 
         self.overlay.stage("release")
         self.overlay.readout(f"reaching over the rim · {round(z * 100)} cm up")

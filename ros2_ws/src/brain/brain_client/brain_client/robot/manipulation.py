@@ -818,7 +818,7 @@ class Manipulation:
                 if self._ik_solution is not None:
                     joint_positions = list(self._ik_solution.position)
                     if len(joint_positions) == 0:
-                        self.logger.debug("[Manipulation] IK found no solution within joint limits")
+                        self.logger.error("[Manipulation] IK solver returned empty solution (IK failed)")
                         return None
                     # Callers append j6 unconditionally, so anything but the
                     # 5 arm joints would build a malformed 6-joint command.
