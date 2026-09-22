@@ -4,12 +4,15 @@
 // Servo-protection alert — a discrete amber card pinned top-right on every
 // page while /mars/arm/status reports a latched servo hardware error
 // (overcurrent/overload protection). The servo stays tripped until a reboot,
-// so the card carries the reboot button; it hides on its own once the status
-// clears. Dismissing suppresses the card until the error changes or clears.
+// so the card carries targeted and full-arm reboot buttons. It hides once
+// the status clears. Dismissing suppresses the card until the error changes or clears.
 
 import { rebootArmAndEnableTorque } from "./armReboot.js";
 import {
+  ARM_FIX_ERROR_CONFIRM,
+  ARM_FIX_ERROR_SERVICE,
   ARM_REBOOT_CONFIRM,
+  ARM_REBOOT_TIMEOUT_MS,
   ARM_STATUS_TOPIC,
 } from "./constants.js";
 
@@ -41,17 +44,23 @@ export function createArmAlert(rosClient) {
   const text = document.createElement("p");
   text.className = "arm-alert-text";
 
+  const servoBtn = document.createElement("button");
+  servoBtn.type = "button";
+  servoBtn.className = "arm-button";
+  servoBtn.title = "Reboot only servos with hardware errors, then re-enable their torque";
+
   const rebootBtn = document.createElement("button");
   rebootBtn.type = "button";
   rebootBtn.className = "arm-button";
   rebootBtn.title = "Reboot the arm's servos, then torque back on";
 
-  card.append(head, text, rebootBtn);
+  card.append(head, text, servoBtn, rebootBtn);
   document.body.appendChild(card);
 
   let currentError = ""; // live hardware-error string ("" = none)
   let dismissedError = ""; // suppressed until the error changes or clears
-  let rebooting = false;
+  /** @type {"servos" | "arm" | null} */
+  let rebooting = null;
   let flash = ""; // reboot-failure line, shown until the next status
 
   function render() {
@@ -62,8 +71,9 @@ export function createArmAlert(rosClient) {
     // IS that advice, so show just the fault itself.
     text.textContent = flash || currentError.split(" — ")[0];
     text.classList.toggle("warn", flash !== "");
-    rebootBtn.disabled = rebooting;
-    rebootBtn.textContent = rebooting ? "Rebooting…" : "Reboot arm";
+    servoBtn.disabled = rebootBtn.disabled = rebooting !== null;
+    servoBtn.textContent = rebooting === "servos" ? "Rebooting…" : "Reboot servo(s)";
+    rebootBtn.textContent = rebooting === "arm" ? "Rebooting…" : "Reboot arm";
   }
 
   dismissBtn.addEventListener("click", () => {
@@ -71,16 +81,29 @@ export function createArmAlert(rosClient) {
     render();
   });
 
-  rebootBtn.addEventListener("click", async () => {
-    if (rebooting || !window.confirm(ARM_REBOOT_CONFIRM)) return;
-    rebooting = true;
+  /** @param {"servos" | "arm"} scope */
+  async function reboot(scope) {
+    if (rebooting || rosClient.state !== "connected" || !currentError) return;
+    if (!window.confirm(scope === "servos" ? ARM_FIX_ERROR_CONFIRM : ARM_REBOOT_CONFIRM)) return;
+    const errorAtStart = currentError;
+    rebooting = scope;
     flash = "";
     render();
     try {
-      const res = await rebootArmAndEnableTorque(rosClient);
+      // fix_error scans the hardware at request time (the status text only
+      // reports the first fault) and restores torque on those servos itself.
+      // Never follow it with a global torque-on or a full-arm fallback.
+      const res = scope === "arm"
+        ? await rebootArmAndEnableTorque(rosClient)
+        : await rosClient.callService(ARM_FIX_ERROR_SERVICE, {}, ARM_REBOOT_TIMEOUT_MS)
+          .then((result) => ({
+            ok: result?.success === true,
+            torqueOn: result?.success === true,
+            message: result?.message || "Servo reboot failed",
+          }));
       if (!res.ok || !res.torqueOn) {
         flash = res.message;
-      } else {
+      } else if (currentError === errorAtStart) {
         // Cleared optimistically; a still-faulty servo re-latches and the
         // next status (~5 s) brings the card back.
         currentError = "";
@@ -89,10 +112,13 @@ export function createArmAlert(rosClient) {
     } catch (err) {
       flash = err instanceof Error ? err.message : "Reboot failed";
     } finally {
-      rebooting = false;
+      rebooting = null;
       render();
     }
-  });
+  }
+
+  servoBtn.addEventListener("click", () => reboot("servos"));
+  rebootBtn.addEventListener("click", () => reboot("arm"));
 
   const unsubStatus = rosClient.subscribe(
     ARM_STATUS_TOPIC,
