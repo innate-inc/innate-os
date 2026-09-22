@@ -29,7 +29,8 @@ One rule covers interfaces, cameras and robot state: annotate what you read.
 ``head_position: HeadState``, ``image: MainImage`` / ``WristImage`` /
 ``DepthMap``, ``mobility: Mobility``, ``head: Head``,
 ``memory: SpatialMemory`` (recall over the robot's spatial memory), ``llm: Llm`` (the robot's
-model, for asking about a frame; ``llm: Llm = Llm("google:gemini-3.5-flash")`` pins one). A plain annotation is
+model, for asking about a frame; ``Llm(thinking=Thinking.MINIMAL)`` sets this skill's reasoning
+effort, ``Llm("google:gemini-3.5-flash")`` pins one model). A plain annotation is
 guaranteed inside execute() — the server waits for the first value and fails
 the run up front if none arrives — so no None guards are needed; ``| None``
 (``head: Head | None``) makes it best effort instead, injected when available
@@ -70,6 +71,8 @@ may list.
 """
 
 from typing import TYPE_CHECKING
+
+from innate_llm.types import Thinking
 
 from brain_client.agents.types import Agent, InputRef, SkillRef
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
@@ -130,6 +133,7 @@ __all__ = [
     "SkillResult",
     "SkillReturn",
     "SpatialMemory",
+    "Thinking",
     "TrainedSkill",
     "Waypoint",
     "WristImage",

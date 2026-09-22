@@ -23,6 +23,7 @@ from innate import (
     Odometry,
     Skill,
     SkillReturn,
+    Thinking,
     Waypoint,
     WristImage,
     vision,
@@ -231,8 +232,11 @@ class PickAnyObject(Skill):
 
     _p = PARAMS
 
-    # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
-    llm: Llm = Llm("google:gemini-3.5-flash")
+    # The thresholds below are calibrated to Gemini, but any model that answers the box_2d
+    # 0-1000 convention drives this skill — so it follows the robot's setting rather than pinning.
+    # Locating a box needs no reasoning, and the approach pays for every token: one detect
+    # costs the drive a full stop, and there are box_steps of them before the grasp.
+    llm: Llm = Llm(thinking=Thinking.MINIMAL)
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
@@ -867,8 +871,9 @@ class PickAnyObject(Skill):
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
+        # Declaring a default opts out of injection, so nothing has checked the route yet.
         if not self.llm.available:
-            self.fail(f"No way to reach {self.llm.model}: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
+            self.fail(f"No way to reach {self.llm.model}: set a vendor key or INNATE_SERVICE_KEY")
 
         # Per-run reset: don't carry the last run's object or grip rating.
         self._grip_strength = None

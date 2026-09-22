@@ -75,15 +75,21 @@ def _box_corners_px(det):
     return (x0 / 1000.0 * IMG_W, y0 / 1000.0 * IMG_H, x1 / 1000.0 * IMG_W, y1 / 1000.0 * IMG_H)
 
 
-def _grasp_px(det):
-    """grasp_point [y,x] 0-1000 -> (u, v) px, or None."""
+def _grasp_px(det, corners):
+    """grasp_point [y,x] 0-1000 -> (u, v) px, or None when it lands outside
+    `corners`. Models transpose it to [x,y] often enough (~1 reply in 5 from
+    qwen) that an unchecked grasp point back-projects metres off the object
+    while the box beside it is right."""
     gp = det.get("grasp_point")
     if not isinstance(gp, (list, tuple)) or len(gp) < 2:
         return None
     y, x = _norm1k(gp[0]), _norm1k(gp[1])
     if x is None or y is None:
         return None
-    return (x / 1000.0 * IMG_W, y / 1000.0 * IMG_H)
+    u, v = x / 1000.0 * IMG_W, y / 1000.0 * IMG_H
+    if corners and not (corners[0] <= u <= corners[2] and corners[1] <= v <= corners[3]):
+        return None
+    return (u, v)
 
 
 def _grip(det):
@@ -94,21 +100,22 @@ def _grip(det):
     return float(g)
 
 
-def _center_px(det):
-    c = _box_corners_px(det)
-    return ((c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0) if c else None
+def _center_px(corners):
+    return ((corners[0] + corners[2]) / 2.0, (corners[1] + corners[3]) / 2.0) if corners else None
 
 
 def parse_det_cands_boxed(text):
     """All detections -> [(u, v, grip_strength | None, box | None)], best
-    first. (u, v) is the grasp_point when given, else the box center; box is
-    the (x0, y0, x1, y1) px corners when the reply carried one."""
+    first. (u, v) is the grasp_point when it lands inside its own box, else
+    the box center; box is the (x0, y0, x1, y1) px corners when the reply
+    carried one."""
     cands = []
     for det in parse_dets(text):
-        px = _grasp_px(det) or _center_px(det)
+        corners = _box_corners_px(det)
+        px = _grasp_px(det, corners) or _center_px(corners)
         if px is None:
             continue
-        cands.append((px[0], px[1], _grip(det), _box_corners_px(det)))
+        cands.append((px[0], px[1], _grip(det), corners))
     return cands
 
 
