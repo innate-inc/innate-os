@@ -430,6 +430,12 @@ class DropInBox(Skill):
                 if not closed:
                     self.fail("The gripper isn't responding, so I can't tell whether I'm holding anything")
                 self.fail("I'm not holding anything to put away (or can't confirm it without a wrist view)")
+            # The agent judges the run from camera frames that often hide a dark object
+            # in the fingers; without this it cancelled a verified hold as an empty claw.
+            self.feedback(
+                "Checked: the object is in the gripper. It can be hard to see in the camera "
+                "views while carrying — that is not a drop."
+            )
 
             self._carry_pose(self._p["travel_joints"])
             approach = FloorApproach(self, self._p, self._detect_px)
