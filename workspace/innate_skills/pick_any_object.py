@@ -126,8 +126,11 @@ PARAMS = {
     "close_settle_max_s": 4.0,
     "lift_s": 1.5,
     # Un-press before closing: the descent parks the fingers pressed into the
-    # floor; a small lift lets them close around the object, not drag it.
-    "close_lift_m": 0.01,
+    # floor, and pads on fabric on carpet cannot slide shut (measured: the
+    # close stalls at j6 0.62 with the fingers still open). 1 cm over 0.5 s
+    # rose 2 mm on a real arm at the floor; this rises clear of the pile.
+    "close_lift_m": 0.015,
+    "close_lift_s": 1.0,
     "twist_rad": 0.6,
     "lift_rad": 0.6,
 }
@@ -805,24 +808,41 @@ class PickAnyObject(Skill):
         Closing on air reaches ~GRIPPER_EMPTY_J6, which _grasp_verified's j6
         check catches."""
         p = self._p
-        if p["close_lift_m"] > 0:
-            try:
-                ee_z = self.manipulation.pose.z
-                self.manipulation.move_to(
-                    x,
-                    y,
-                    ee_z + p["close_lift_m"],
-                    roll=roll,
-                    pitch=pitch,
-                    yaw=yaw,
-                    duration=0.5,
-                    tolerance_xy=None,
-                    tolerance_z=None,
-                )
-            except ArmFailed:
-                pass  # best-effort pre-close lift; the grasp decides below
+        grip = -p["close_strength"]
         try:
-            self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
+            z_close = self.manipulation.pose.z + p["close_lift_m"]
+        except ArmFailed:
+            z_close = p["floor_z"] + p["close_lift_m"]
+        try:
+            self.manipulation.move_to(
+                x,
+                y,
+                z_close,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                duration=p["close_lift_s"],
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+        except ArmFailed:
+            pass  # best-effort pre-close lift; the grasp decides below
+        # Close as a move to the same lifted pose with the grip set, not a
+        # gripper command: that one re-sends the arm's MEASURED joints, which
+        # on a sagging arm at the floor puts the fingertips back into the pile.
+        try:
+            self.manipulation.move_to(
+                x,
+                y,
+                z_close,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                duration=p["close_s"],
+                grip=grip,
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
         except ArmFailed as e:
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
         # Fingers have committed: from here teardown must fold with the grip
@@ -835,7 +855,6 @@ class PickAnyObject(Skill):
         self._fingers_still(p["close_settle_max_s"])
         self.overlay.readout("lifting")
 
-        grip = -p["close_strength"]
         # The twist winds FABRIC onto the fingers; on a rigid shell it helps
         # eject the object. Gemini's grip_strength doubles as the hardness signal.
         lifted = False
