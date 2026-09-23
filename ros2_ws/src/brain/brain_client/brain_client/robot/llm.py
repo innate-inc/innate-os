@@ -5,6 +5,7 @@
     class PickAnyObject(Skill):
         llm: Llm                                   # the model the robot is set to
         llm: Llm = Llm("google:gemini-3.5-flash")  # a skill tuned to one model pins it
+        llm: Llm = Llm("google:gemini-3.5-flash", thinking="minimal")  # ...and its reasoning effort
 
 The robot's default is what the skills server was launched with (the brain's
 ``llm_model`` setting), else the environment; a pinned one is reached the
@@ -14,10 +15,11 @@ same way — the Innate proxy, a vendor key, or an ``llm_base_url`` server.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from innate_llm import Image, Message, Request, Role, Text, configure
+from innate_llm import Image, Message, Request, Role, Text, Thinking, configure
 from innate_llm.configure import DEFAULT_MODEL, KEY_ENVS
 from mars_bringup.config_loader import keys_env_path, parse_key_value_env
 
@@ -31,10 +33,14 @@ _TIMEOUT_SECS = 60.0
 
 
 class Llm:
-    def __init__(self, model: str | None = None, *, base_url: str = "", extra_body: str = ""):
+    def __init__(self, model: str | None = None, *, base_url: str = "", extra_body: str = "", thinking: str = ""):
+        """``thinking`` is a rung of the vendor-neutral ladder ("minimal" .. "max"); empty leaves the
+        model's own default. One-shot perception (a box, a yes/no) reads the same at "minimal" and
+        comes back in a third of the time: Gemini 3.5 Flash spends ~300 thought tokens per look otherwise."""
         self.model = model or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
         self._base_url = base_url
         self._extra_body = extra_body
+        self.thinking = Thinking(thinking)
         self._route: Route | None = None  # configured on first use: a pinned class default must not dial at import
 
     @property
@@ -54,11 +60,18 @@ class Llm:
         if isinstance(images_b64, str):
             images_b64 = [images_b64]
         message = Message(Role.USER, (Text(question), *(Image(_jpeg(b)) for b in images_b64)))
-        request = Request(system="", messages=(message,), temperature=0.0)
+        request = Request(system="", messages=(message,), temperature=0.0, thinking=self.thinking)
         for attempt in range(retries):
             cancellable_sleep(0)
+            t0 = time.monotonic()
             try:
-                return provider.run(request, timeout=_TIMEOUT_SECS).message.text()
+                reply = provider.run(request, timeout=_TIMEOUT_SECS)
+                if logger:
+                    u = reply.usage
+                    logger.info(
+                        f"[llm] {self.model} {time.monotonic() - t0:.2f}s ({u.output} out, {u.thinking} thought)"
+                    )
+                return reply.message.text()
             except Exception as e:  # noqa: BLE001 — a failed attempt is retried, the last one reported
                 if logger:
                     logger.warning(f"[llm] {self.model} vision call failed (try {attempt + 1}/{retries}): {e}")

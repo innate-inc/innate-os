@@ -11,7 +11,15 @@ import math
 import re
 import time
 
-from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box, metres
+from innate_skills.approach import (
+    APPROACH_PARAMS,
+    FloorApproach,
+    ask_head,
+    base_to_odom,
+    inside_box,
+    metres,
+    settled_frame,
+)
 
 from innate import (
     Head,
@@ -59,6 +67,12 @@ PARAMS = {
     # range, so a flat gate would reject the very object it is protecting.
     "mem_gate_m": 0.35,
     "mem_gate_frac": 0.4,
+    # Every look waits for a frame taken after the stop (settled_frame), so
+    # the settle only has to outlast the base's sway, not the camera pipeline.
+    "settle_s": 0.6,
+    # 0.06 held the flow servo at half speed the whole way in: the row error
+    # is small in perspective (~80 px at 0.76 m), and v_max already caps it.
+    "follow_gain_lin": 0.12,
     # Parking 3 cm short of the shared 0.285 puts the grasp at x=0.265 instead
     # of 0.235, which sits 1.5 cm off REACH_X's near wall — close enough that a
     # backward wrist nudge is eaten by the clamp and the servo stalls out.
@@ -66,7 +80,13 @@ PARAMS = {
     # WRIST ALIGN (0 wrist_steps = blind grasp)
     "wrist_steps": 2.0,
     "wrist_stop_z": 0.05,
-    "wrist_z_step": 0.01,
+    # Hop sizes: coarse while the fingers are still clear of the object,
+    # fine once they straddle it (below roll_z). Each hop shifts the blob by
+    # parallax — a ~5 cm hop high up and a ~2.5 cm one low read ~50 px — so a
+    # hop that carries the blob out of the box is re-centred on the way down
+    # rather than in a separate stop.
+    "wrist_z_step": 0.025,
+    "wrist_z_step_high": 0.05,
     "wrist_move_s": 0.5,
     "wrist_pitch": 0.82,
     "wrist_box_u": 320.0,
@@ -77,7 +97,6 @@ PARAMS = {
     "wrist_kx": -0.04,
     "wrist_ky": -0.04,
     "wrist_step_max": 0.04,
-    "wrist_settle_s": 0.8,
     # GRASP
     "grasp_x_off": 0.05,
     "hover_z": 0.15,
@@ -99,8 +118,9 @@ PARAMS = {
     # close_strength is close depth, not force (servo 6 runs current-based
     # position control); above 0.6 the servo trips and needs a reboot.
     "close_strength": 0.60,
-    "close_s": 1.5,
-    "close_settle_s": 0.8,
+    "close_s": 1.0,
+    "close_settle_s": 0.5,
+    "lift_s": 1.5,
     # Un-press before closing: the descent parks the fingers pressed into the
     # floor; a small lift lets them close around the object, not drag it.
     "close_lift_m": 0.01,
@@ -110,6 +130,13 @@ PARAMS = {
 
 FOLLOW_TIMEOUT_S = 20.0
 WRIST_ALIGN_TIMEOUT_S = 60.0
+# Cartesian speed cap for one wrist-servo move; wrist_move_s is the floor.
+WRIST_SPEED_MPS = 0.08
+# A descent rung this close below where the arm already is would be a
+# descend_s pause, not a descent.
+RUNG_MIN_M = 0.01
+# One fold of the arm to CARRY_ARM or REST.
+FOLD_S = 3.0
 # A CamShift centre further than WRIST_JUMP_PX from the followed point is a
 # window hop until it repeats in place WRIST_JUMP_CONFIRM frames running;
 # beyond WRIST_MAX_JUMP_PX it is a miss, which after 3 frames re-seeds.
@@ -137,6 +164,11 @@ ROLL_SIGN = 1.0
 # 1.30 a 90 deg roll drops one fingertip 3 cm below the other, which lands on
 # the object and stalls the descent with the other pad above it.
 ROLLED_PITCH = math.pi / 2
+# Tool pitches a rolled descent may use, steepest first. Joint 4 tops out
+# before the tool is vertical at 10 cm height past x~0.29, while the vertical
+# tool reaches the floor across the whole box: each waypoint takes the
+# steepest pitch it can, so the fingers are level where they meet the object.
+ROLLED_PITCHES = (ROLLED_PITCH, 1.50, 1.45, 1.40, 1.35, 1.30)
 # Gate rejections before the memory is treated as stale and re-anchored. At 2,
 # the first rejection still coasts — that is the case the gate exists for (the
 # target missed for one frame while a twin is detected) — and _localize_retry's
@@ -232,10 +264,11 @@ class PickAnyObject(Skill):
     _p = PARAMS
 
     # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
-    llm: Llm = Llm("google:gemini-3.5-flash")
+    llm: Llm = Llm("google:gemini-3.5-flash", thinking="minimal")
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
+    _carried = False  # the fold to CARRY_ARM completed this run
     # (odom x, odom y, range from the base at that sighting)
     _last_seen: tuple[float, float, float] | None = None
     _coasts = 0  # consecutive looks the memory gate rejected
@@ -345,18 +378,18 @@ class PickAnyObject(Skill):
         floor, and the zero posture would sweep the gripper through it."""
         joints = CARRY_ARM + [-self._p["close_strength"]] if keep_grip else list(self.manipulation.REST)
         try:
-            self.manipulation.move_joints(joints, duration=3.0)
-            # Committed teardown (runs after cancel): time.sleep on purpose,
-            # then re-command so the servos settle under the shifted load.
-            time.sleep(0.3)
-            self.manipulation.move_joints(joints, duration=3.0)
+            if not (keep_grip and self._carried):
+                self.manipulation.move_joints(joints, duration=FOLD_S)
+                # Committed teardown (runs after cancel): time.sleep on purpose.
+                time.sleep(0.3)
+            # Re-command so the servos settle under the shifted load.
+            self.manipulation.move_joints(joints, duration=0.5)
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
     def _wrist_seed(self, prompt):
         """Wrist Gemini box -> (center_px, box) or (None, None)."""
-        self.sleep(self._p["wrist_settle_s"])
-        img = self.wrist_image
+        img = self._settled_wrist()
         text = (
             self.llm.ask(
                 img,
@@ -382,6 +415,10 @@ class PickAnyObject(Skill):
         else:
             self.overlay.readout("wrist camera can't see it")
         return px, box
+
+    def _settled_wrist(self):
+        """The first wrist frame published after the arm came to rest."""
+        return settled_frame(self, 0.0, read=lambda: self.wrist_image)
 
     def _wrist_aim_dist(self, box):
         u, v = box[0] + box[2] / 2.0, box[1] + box[3] / 2.0
@@ -476,12 +513,15 @@ class PickAnyObject(Skill):
         return tracker, raw, ""
 
     def _wrist_descend(self, prompt, tx, ty):
-        """Wrist CamShift servo down to wrist_stop_z: nudge toward the wrist
-        box, or step down once the object has been seen inside it twice.
-        A miss gets 2 frames of patience, then a Gemini re-seed (budget =
-        wrist_steps - 1). Color model, not LK: the object grows/deforms
-        during the descent and optical flow slides off.
-        Returns (x, y, z, roll); falls back to (tx, ty, roll 0) if never seen."""
+        """Wrist CamShift servo down to wrist_stop_z. Seen inside the wrist
+        box twice, the arm hops down; seen near it, the arm hops and
+        re-centres in one move while the fingers are still clear of the
+        object (above roll_z), and only re-centres once they straddle it;
+        far off, it re-centres in place. A miss gets 2 frames of patience,
+        then a Gemini re-seed (budget = wrist_steps - 1). Color model, not
+        LK: the object grows/deforms during the descent and optical flow
+        slides off. Returns (x, y, z, roll); falls back to (tx, ty, roll 0)
+        if never seen."""
         p = self._p
         try:
             ee = self.manipulation.pose.position
@@ -560,15 +600,12 @@ class PickAnyObject(Skill):
             if inside and centered < 2:
                 continue  # just entered the box — confirm it stays
 
-            stepped_down = centered >= 2
-            if stepped_down:
-                descended = True
-                z = max(p["wrist_stop_z"], z - p["wrist_z_step"])
-                # Descending IS progress: only consecutive clamped nudges count
-                # as stalled, or three clamps spread across a long tracking
-                # descent would abort a servo that is working.
-                stalled = 0
-            else:
+            clear = z > p["roll_z"] + 1e-6  # fingers still above the object
+            near = inside_box(px, aim[0], aim[1], 2 * p["wrist_half_px"])
+            hop = centered >= 2 or (near and clear)
+            nudge = not inside
+            start = (x, y, z)
+            if nudge:
                 # Gains tuned at z=0.15; scale with camera height.
                 s = (z + WRIST_CAM_ABOVE_EE) / (0.15 + WRIST_CAM_ABOVE_EE)
                 cap = p["wrist_step_max"]
@@ -584,17 +621,27 @@ class PickAnyObject(Skill):
                         reason = "reach limit"
                         break
                     continue
-                stalled = 0
                 x, y = nx, ny
-                tracker.expect(aim)
-            self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
-            if stepped_down:
-                # A pure z-hop barely shifts the view: one fresh confirming
-                # frame is enough, so hops chain instead of re-earning 2+2.
-                streak = 1
-            else:
+            # Only consecutive clamped nudges count as stalled: a nudge that
+            # moved or a hop is progress, or three clamps spread across a
+            # long descent would abort a servo that is working.
+            stalled = 0
+            if hop:
+                descended = True
+                z = max(p["wrist_stop_z"], z - p["wrist_z_step_high" if clear else "wrist_z_step"])
+            duration = max(p["wrist_move_s"], math.dist(start, (x, y, z)) / WRIST_SPEED_MPS)
+            self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=duration)
+            # After a nudge the blob is back at the aim; after a hop its parallax
+            # shift stays inside the follow radius. Either way, it is expected
+            # there — not held as a suspicious jump for three frames.
+            tracker.expect(aim)
+            if nudge:
                 streak = 0
                 centered = 0  # view shifted — re-confirm centering
+            else:
+                # A pure hop keeps the view: one fresh confirming frame is
+                # enough, so hops chain instead of re-earning 2+2.
+                streak = 1
 
         return self._wrist_done(x, y, z, reason, axis)
 
@@ -607,27 +654,38 @@ class PickAnyObject(Skill):
         a = WRIST_SEARCH_ARM
         pose = [bearing, a[1], a[2], self._p["wrist_pitch"] - a[1] - a[2], a[4], self.manipulation.GRIPPER_OPEN]
         self.manipulation.move_joints(pose, duration=self._p["hover_s"])
-        self.sleep(0.3)
+
+    def _claw_open(self) -> None:
+        """The claw was commanded open with the last move; this re-issues
+        the open as a short verified command, which reboots and retries a
+        servo that tripped shut and raises ArmUnhealthy if it stays shut."""
+        self.manipulation.gripper_open(duration=0.3)
 
     def _grasp_orientation(self, x: float, y: float, roll: float) -> tuple[float, float, float]:
-        """(roll, pitch, yaw) for the descent and close. Unrolled is the
-        hardware-tuned grasp. Rolled needs the tool vertical, and then the
+        """(roll, pitch, yaw) at the floor for the close. Unrolled is the
+        hardware-tuned grasp. Rolled wants the tool vertical, and then the
         yaw must be the arm's own bearing: RPY is gimbal-locked at pitch
         pi/2, and a yaw-0 target makes the solver dump the whole base
-        rotation into j5 (j5 = roll + j1). Out of the vertical pitch's
-        reach, the tuned grasp is kept rather than a descent that never
+        rotation into j5 (j5 = roll + j1). With no rolled pitch in reach at
+        the floor, the tuned grasp is kept rather than a descent that never
         starts (follow's IK failure reads as a contact stall)."""
         p = self._p
         if roll == 0.0:
             return 0.0, p["arm_pitch"], 0.0
         yaw = arm_bearing(x, y)
-        for z in (p["roll_z"], p["floor_z"]):
-            if not self.manipulation.reachable(x, y, z, roll=roll, pitch=ROLLED_PITCH, yaw=yaw):
-                self.logger.warning(
-                    f"[PickAnyObject] rolled grasp unreachable at ({x:.2f}, {y:.2f}, {z:.2f}); grasping unrolled"
-                )
-                return 0.0, p["arm_pitch"], 0.0
-        return roll, ROLLED_PITCH, yaw
+        pitch = self._steepest_pitch(x, y, p["floor_z"], roll, yaw)
+        if pitch is None:
+            self.logger.warning(f"[PickAnyObject] rolled grasp unreachable at ({x:.2f}, {y:.2f}); grasping unrolled")
+            return 0.0, p["arm_pitch"], 0.0
+        return roll, pitch, yaw
+
+    def _steepest_pitch(self, x: float, y: float, z: float, roll: float, yaw: float) -> float | None:
+        """The most vertical of ROLLED_PITCHES the arm reaches at (x, y, z)
+        with this roll, or None."""
+        for pitch in ROLLED_PITCHES:
+            if self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw):
+                return pitch
+        return None
 
     def _push_to_floor(self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float) -> None:
         """Blind descent to floor as ONE multi-waypoint trajectory — the
@@ -638,10 +696,15 @@ class PickAnyObject(Skill):
         self.overlay.readout("reaching to the floor")
         waypoints = self._turn_at_height(x, y, z_from, roll, pitch, yaw) if roll != 0.0 else []
         z_top = waypoints[-1].z if waypoints else z_from
-        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_top - 1e-6]
+        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_top - RUNG_MIN_M]
         # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
         # shut during the wrist descent (never re-seed from measured).
-        waypoints += [Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["descend_s"]) for z in rungs]
+        waypoints += [
+            Waypoint(
+                x, y, z, roll=roll, pitch=self._rung_pitch(x, y, z, roll, pitch, yaw), yaw=yaw, duration=p["descend_s"]
+            )
+            for z in rungs
+        ]
         if waypoints:
             try:
                 self.manipulation.follow(waypoints, grip=self.manipulation.GRIPPER_OPEN)
@@ -668,17 +731,29 @@ class PickAnyObject(Skill):
     def _turn_at_height(
         self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float
     ) -> list[Waypoint]:
-        """Go straight (still in the servo's unrolled pose) to roll_z — the
-        one turn height _grasp_orientation reach-checked, whether the servo
-        stopped below it or bailed above — then turn in place; the descent
-        below is straight and already aligned."""
+        """Go straight (still in the servo's unrolled pose) to roll_z, whether
+        the servo stopped below it or bailed above, then turn in place at the
+        steepest pitch in reach there; the rungs below straighten the tool
+        the rest of the way."""
         p = self._p
         z = p["roll_z"]
         wps: list[Waypoint] = []
         if abs(z - z_from) > 1e-6:
             wps.append(Waypoint(x, y, z, pitch=p["wrist_pitch"], duration=p["orient_s"]))
-        wps.append(Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["orient_s"]))
+        wps.append(
+            Waypoint(
+                x, y, z, roll=roll, pitch=self._rung_pitch(x, y, z, roll, pitch, yaw), yaw=yaw, duration=p["orient_s"]
+            )
+        )
         return wps
+
+    def _rung_pitch(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float) -> float:
+        """A rolled waypoint's pitch: the steepest in reach at its height,
+        else the floor's, which follow() then rejects as unreachable."""
+        if roll == 0.0:
+            return pitch
+        steepest = self._steepest_pitch(x, y, z, roll, yaw)
+        return pitch if steepest is None else steepest
 
     def _arm_joints(self):
         """The 6 current joint positions; raises LookupError when joint
@@ -737,13 +812,12 @@ class PickAnyObject(Skill):
                 j[4] = max(-1.4, min(1.4, j[4] + twist))
                 j[5] = grip
                 self.manipulation.move_joints(j, duration=1.0)
-                time.sleep(0.3)
+                time.sleep(0.1)  # joint_states lags the move by a tick
             j = self._arm_joints()
             j[1] = max(-1.4, j[1] - p["lift_rad"])
             j[5] = grip
-            self.manipulation.move_joints(j, duration=2.0)
+            self.manipulation.move_joints(j, duration=p["lift_s"])
             lifted = True
-            time.sleep(0.3)
         except LookupError:
             pass
         except ArmFailed as e:
@@ -776,19 +850,20 @@ class PickAnyObject(Skill):
         self._aim(x, y)
 
         self.manipulation.torque_on()
-        # gripper_open reboots + retries a tripped servo, raising ArmUnhealthy
-        # if the claw stays shut.
-        self.manipulation.gripper_open(duration=1.0)
         if p["wrist_steps"] >= 1:
             self.overlay.stage("align")
             self.overlay.readout("aligning the wrist camera")
             self._goto_search_pose(arm_bearing(x, y))
+            self._claw_open()
             x, y, z, roll = self._wrist_descend(prompt, x, y)
             self.overlay.clear(view="arm")  # the arm moves on, the view with it
             self._aim(x, y)
         else:
             z, roll = p["hover_z"], 0.0
-            self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
+            self.manipulation.move_to(
+                x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"], grip=self.manipulation.GRIPPER_OPEN
+            )
+            self._claw_open()
 
         self.overlay.stage("grasp")
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
@@ -803,12 +878,16 @@ class PickAnyObject(Skill):
         object isn't mistaken for a dropped one."""
         self.overlay.stage("verify")
         self.overlay.clear("grasp")
-        approach.drive(-VERIFY_BACKUP_M)
-        self.sleep(self._p["settle_s"])
+        approach.drive(-VERIFY_BACKUP_M, brisk=True)
+        main_img = settled_frame(self, self._p["settle_s"])
         js = self.joint_states
         j6 = js.position[5] if js is not None and len(js.position) > 5 else None
-        main_img, wrist_img = self.main_image, self.wrist_image
+        wrist_img = self.wrist_image
         images = [img for img in (main_img, wrist_img) if img]
+        # The verdict only needs the frames already in hand: fold to the
+        # carry pose under the model call instead of after it. A miss folds
+        # on to REST in teardown; a cancel supersedes the pending motion.
+        self._fold_to_carry()
         labels = []
         if main_img:
             labels.append(f"Image {len(labels) + 1} is the head camera looking at the floor.")
@@ -836,6 +915,7 @@ class PickAnyObject(Skill):
             if images
             else None
         )
+        self._join_fold()
         j6_ok = j6 is not None and j6 > GRIPPER_EMPTY_J6 + 0.02
         # Token scan, not a prefix match: replies like "The object is not on
         # the floor." answer correctly without leading with the word, and the
@@ -861,6 +941,19 @@ class PickAnyObject(Skill):
         self.overlay.readout("holding it" if held else "missed it")
         return held
 
+    def _fold_to_carry(self) -> None:
+        try:
+            self.manipulation.move_joints(CARRY_ARM + [-self._p["close_strength"]], duration=FOLD_S, block=False)
+        except ArmFailed as e:  # best effort: teardown folds again either way
+            self.logger.warning(f"[PickAnyObject] carry fold not accepted ({e})")
+
+    def _join_fold(self) -> None:
+        try:
+            self.manipulation.wait()
+            self._carried = True
+        except ArmFailed as e:
+            self.logger.warning(f"[PickAnyObject] carry fold did not complete ({e})")
+
     def _stages(self) -> list[str]:
         align = ["align"] if self._p["wrist_steps"] >= 1 else []
         return ["search", "approach", *align, "grasp", "verify"]
@@ -873,13 +966,14 @@ class PickAnyObject(Skill):
         # Per-run reset: don't carry the last run's object or grip rating.
         self._grip_strength = None
         self._holding = False
+        self._carried = False
         self._last_seen = None
         self._coasts = 0
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
             # Fold clear of the head camera before searching
             # (5-joint move: the claw keeps whatever it currently holds).
-            self.manipulation.move_joints(NAV_ARM, duration=3.0)
+            self.manipulation.move_joints(NAV_ARM, duration=2.0)
 
             approach = FloorApproach(self, self._p, self._detect_px)
             self.overlay.begin(prompt, stages=self._stages(), frame=(IMG_W, IMG_H))
