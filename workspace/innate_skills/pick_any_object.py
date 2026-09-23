@@ -185,10 +185,16 @@ class _BlobTracker:
         self.model = vision.seg_model(hsv, box)
         self.window = box
         self.guess = px
+        # Until a frame confirms the seed, the object is anywhere in the
+        # model's box, not within WRIST_MAX_JUMP_PX of its centre: a folded
+        # sock's mask splits at the seam and the half under the window sits
+        # 100+ px from the centre of a box that spans both halves.
+        self.seed_box = box
         self.observed = False  # guess is an expectation until a frame confirms it
         self.pending = None
         self.hits = 0
         self.misses = 0
+        self.flooded = False  # the last miss was the window filling the frame
         self.axis: vision.Axis | None = None
 
     @property
@@ -197,7 +203,7 @@ class _BlobTracker:
 
     def expect(self, px):
         """The arm moved: follow from px and forget any half-confirmed hop."""
-        self.guess, self.observed, self.pending, self.hits = px, False, None, 0
+        self.guess, self.seed_box, self.observed, self.pending, self.hits = px, None, False, None, 0
 
     def update(self, hsv):
         """Followed blob center, or None when this frame gives no
@@ -207,16 +213,24 @@ class _BlobTracker:
         followed once it has repeated WRIST_JUMP_CONFIRM frames running; a
         miss or a frame back home breaks the run."""
         pt, window, _score, axis = vision.seg_track(hsv, self.model, self.window, min_score=WRIST_SEG_MIN_SCORE)
-        if pt is None or _dist(pt, self.guess) > WRIST_MAX_JUMP_PX:
+        if pt is None or self._strayed(pt):
             self.misses += 1
+            self.flooded = pt is None and window[2] * window[3] > 0.9 * IMG_W * IMG_H
             self.pending, self.hits = None, 0
             return None
         self.misses = 0
+        self.seed_box = None
         if self.observed and _dist(pt, self.guess) > WRIST_JUMP_PX and not self._hop_confirmed(pt):
             return None
         self.window, self.guess, self.axis, self.observed = window, pt, axis, True
         self.pending, self.hits = None, 0
         return pt
+
+    def _strayed(self, pt):
+        if self.seed_box is not None:
+            x, y, w, h = self.seed_box
+            return not (x <= pt[0] <= x + w and y <= pt[1] <= y + h)
+        return _dist(pt, self.guess) > WRIST_MAX_JUMP_PX
 
     def _hop_confirmed(self, pt):
         if self.pending is not None and _dist(pt, self.pending) <= WRIST_JUMP_PX:
@@ -567,6 +581,11 @@ class PickAnyObject(Skill):
             self._draw_hop(tracker.pending)
             if px is None:
                 streak = centered = 0
+                if tracker.flooded and descended:
+                    # Not a lost object but one the camera is now inside of:
+                    # the fingers are over it, so grasp here.
+                    reason = "fills the view"
+                    break
                 if tracker.misses < 3:
                     continue  # transient (blur / mid-move / held hop) — wait
                 if looks <= 0:
