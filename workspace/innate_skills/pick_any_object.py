@@ -145,6 +145,10 @@ WRIST_JUMP_CONFIRM = 3
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
+# A tracked blob at least this wide (wrist px) with the fingers straddling
+# it (below roll_z) already fills the 81 mm jaw: centring its centroid any
+# further only drags the arm toward the far end of a sock.
+JAW_SPAN_PX = 320
 # Half-length of the blob's drawn long axis, wrist-image px.
 AXIS_HALF_PX = 45
 # Wrist roll to the blob's minor axis (the gripper's 81 mm jaw is narrower
@@ -456,10 +460,15 @@ class PickAnyObject(Skill):
             self.sleep(0.04)
         return None, last_b64
 
+    @property
+    def _soft_object(self) -> bool:
+        return self._grip_strength is None or self._grip_strength >= SOFT_GRIP_MIN
+
     def _wrist_done(
         self, x: float, y: float, z: float, reason: str, axis: vision.Axis | None = None
     ) -> tuple[float, float, float, float]:
-        roll = self._grasp_roll(axis)
+        # The roll turns the jaw across a rigid object's short side; fabric has no side.
+        roll = 0.0 if self._soft_object else self._grasp_roll(axis)
         self.logger.info(f"[PickAnyObject] wrist stage: {reason} (z={z:.3f}, roll={math.degrees(roll):+.0f} deg)")
         self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
@@ -597,6 +606,9 @@ class PickAnyObject(Skill):
                     reason = fail
                     break
                 px = tracker.guess
+            if z <= p["roll_z"] + 1e-6 and tracker.window[2] >= JAW_SPAN_PX:
+                reason = "spans the jaw"
+                break
             # Until the first z-step nothing has been centred, so a biased
             # centroid still beats a blind grasp.
             clip_u, clip_v = _clipped_axes(tracker.window)
@@ -821,10 +833,9 @@ class PickAnyObject(Skill):
         grip = -p["close_strength"]
         # The twist winds FABRIC onto the fingers; on a rigid shell it helps
         # eject the object. Gemini's grip_strength doubles as the hardness signal.
-        soft = self._grip_strength is None or self._grip_strength >= SOFT_GRIP_MIN
         lifted = False
         try:
-            if soft:
+            if self._soft_object:
                 j = self._arm_joints()
                 # A rolled wrist can already sit near the +1.4 stop: twist the way that has room.
                 twist = p["twist_rad"] if j[4] + p["twist_rad"] <= 1.4 else -p["twist_rad"]
