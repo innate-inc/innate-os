@@ -119,7 +119,11 @@ PARAMS = {
     # position control); above 0.6 the servo trips and needs a reboot.
     "close_strength": 0.60,
     "close_s": 1.0,
-    "close_settle_s": 0.5,
+    # The close command returns when its trajectory time is up, not when the
+    # fingers stop: on a bunched sock the current-limited servo needs ~3 s
+    # to compress the fabric, and a lift that starts before then slides the
+    # sock out. So the lift waits for joint 6 to hold still, up to this long.
+    "close_settle_max_s": 4.0,
     "lift_s": 1.5,
     # Un-press before closing: the descent parks the fingers pressed into the
     # floor; a small lift lets them close around the object, not drag it.
@@ -827,8 +831,9 @@ class PickAnyObject(Skill):
         # in the twist/lift below (e.g. ArmUnhealthy from the LookupError
         # fallback) must not release a just-grasped object on the way home.
         self._holding = True
+        self.overlay.readout("closing on it")
+        self._fingers_still(p["close_settle_max_s"])
         self.overlay.readout("lifting")
-        time.sleep(p["close_settle_s"])
 
         grip = -p["close_strength"]
         # The twist winds FABRIC onto the fingers; on a rigid shell it helps
@@ -866,6 +871,25 @@ class PickAnyObject(Skill):
             self.manipulation.move_to(
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
+
+    def _fingers_still(self, timeout: float, hold: float = 0.3, tol: float = 0.01) -> None:
+        """Block until joint 6 has held within tol for `hold` seconds (or
+        timeout). Committed: time.sleep on purpose, the fingers are closing."""
+        deadline = time.monotonic() + timeout
+        last, since = None, time.monotonic()
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            try:
+                j6 = self._arm_joints()[5]
+            except LookupError:
+                time.sleep(timeout)  # no joint states: only time can tell
+                return
+            if last is None or abs(j6 - last) > tol:
+                last, since = j6, time.monotonic()
+            elif time.monotonic() - since >= hold:
+                self.logger.info(f"[PickAnyObject] fingers settled at j6={j6:.3f}")
+                return
+        self.logger.info(f"[PickAnyObject] fingers still moving after {timeout:.1f}s (j6={last})")
 
     def _aim(self, x: float, y: float) -> None:
         """Show where the fingers will close, on the head camera."""
