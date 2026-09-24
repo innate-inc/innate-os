@@ -63,11 +63,12 @@ COPY workspace /root/innate-os/workspace
 # Python source; only proxy/ is required (not the JS frontend / node_modules).
 COPY webapp/proxy /root/innate-os/webapp/proxy
 
+# Copied rather than inherited: until a main build republishes the base, it does
+# not carry this yet.
+COPY ci/build_workspace.sh /usr/local/bin/build_workspace
+
 # Incremental rebuild. ccache (warm from the base) turns unchanged translation
 # units into cache hits; only changed packages truly recompile.
-# --parallel-workers is capped at 3: E2_HIGHCPU_8 has 8 vCPUs but only 8 GB RAM,
-# and >3 concurrent C++ link jobs can OOM with no useful error.
-#
 # Before building, prune build/ + install/ dirs of packages that no longer exist
 # in src — otherwise a deleted package's stale artifacts could keep dependents
 # linking and CI would pass while the post-merge main build breaks. Residual
@@ -90,10 +91,7 @@ RUN . /opt/ros/humble/setup.sh && \
     rm /tmp/current-pkgs.txt && \
     { rosdep install --from-paths src --ignore-src -r -y || \
         echo "WARNING: rosdep install exited non-zero; if the build below fails on a missing system dep, check the rosdep output above." >&2; } && \
-    colcon build --parallel-workers "$(( $(nproc) < 3 ? $(nproc) : 3 ))" --cmake-args \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    build_workspace
 
 # Shared test entrypoint script (used by docker-compose.test.yml and Cloud Build).
 # Placed after the build so editing it does not invalidate the colcon build cache.

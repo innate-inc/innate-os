@@ -18,6 +18,7 @@ ros2_ws/log/
 !workspace/**
 !ci/
 !ci/run_integration_tests.sh
+!ci/build_workspace.sh
 
 # The webapp front-door proxy (Python) runs its no-ROS pytest bucket in
 # run_integration_tests.sh. Re-include webapp/ whole (1.3M, no node_modules):

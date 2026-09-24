@@ -104,20 +104,17 @@ RUN cd /root/innate-os/ros2_ws/src && \
         vcs import --input dependencies.repos; \
     fi
 
+COPY ci/build_workspace.sh /usr/local/bin/build_workspace
+
 # Full build with ccache. ccache writes to /root/.ccache (a REAL dir, NOT a
 # --mount=type=cache) so the populated cache is baked into the image layer and
-# carried into ci/Dockerfile.test via FROM. --parallel-workers is capped at 3:
-# E2_HIGHCPU_8 has 8 vCPUs but only 8 GB RAM, and >3 concurrent C++ link jobs
-# (mars_cam etc.) can OOM with no useful error.
+# carried into ci/Dockerfile.test via FROM.
 # mars_cam/nav/control build fine on non-Jetson: cam's VPI stereo component is
 # guarded by if(VPI_FOUND), nav's only Jetson dep (python3-cupy) is runtime-only.
 WORKDIR /root/innate-os/ros2_ws
 RUN . /opt/ros/humble/setup.sh && \
-    rosdep install --from-paths src --ignore-src -r -y || true && \
-    colcon build --parallel-workers "$(( $(nproc) < 3 ? $(nproc) : 3 ))" --cmake-args \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    { rosdep install --from-paths src --ignore-src -r -y || true; } && \
+    build_workspace
 
 WORKDIR /root/innate-os
 CMD ["bash"]
