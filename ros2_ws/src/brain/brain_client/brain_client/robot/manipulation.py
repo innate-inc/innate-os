@@ -198,6 +198,7 @@ class Manipulation:
         # Standing j1-j5 target, like _grip_target for the claw: a gripper command
         # holds it. Re-sending the MEASURED pose instead sinks a loaded arm by
         # its sag each time (fingertips pressed into carpet could not close).
+        # None once a motion has failed: the arm is then wherever it stopped.
         self._arm_target: list[float] | None = None
         self._pending: _PendingMotion | None = None
 
@@ -683,6 +684,7 @@ class Manipulation:
         if pending is not None:
             budget = timeout if timeout is not None else max(0.0, pending.deadline - time.monotonic())
             if not self._await_motion_result(pending.future, pending.name, budget):
+                self._arm_target = None
                 raise ArmFailed(f"{pending.name} motion failed or did not complete in time")
 
     # --- gripper ---
@@ -866,11 +868,13 @@ class Manipulation:
             future = self._goto_js_client.call_async(request)
             if wait:
                 if not self._await_motion_result(future, "GotoJS v2", duration + self._MOTION_SLACK_S):
+                    self._arm_target = None
                     return False
             else:
                 self._pending = _PendingMotion(future, "GotoJS v2", time.monotonic() + duration + self._MOTION_SLACK_S)
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJS v2: {e}")
+            self._arm_target = None
             return False
 
         self._grip_target = float(joint_positions[5])
@@ -909,6 +913,7 @@ class Manipulation:
             future = self._goto_js_traj_client.call_async(request)
             if wait:
                 if not self._await_motion_result(future, "GotoJSTrajectory", total_time + self._MOTION_SLACK_S):
+                    self._arm_target = None
                     return False
             else:
                 self._pending = _PendingMotion(
@@ -916,6 +921,7 @@ class Manipulation:
                 )
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJSTrajectory: {e}")
+            self._arm_target = None
             return False
 
         self._grip_target = float(waypoint_joints[-1][5])

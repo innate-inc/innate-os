@@ -131,6 +131,9 @@ PARAMS = {
     # on a 3 cm bar; a real arm at the floor needs the full second to rise.
     "close_lift_m": 0.01,
     "close_lift_s": 1.0,
+    # Rise the lift must show on FK before the claw closes; short of it the
+    # lift is re-commanded once (a loaded servo converges slowly).
+    "close_lift_min_m": 0.004,
     "twist_rad": 0.6,
     "lift_rad": 0.6,
 }
@@ -809,28 +812,7 @@ class PickAnyObject(Skill):
         check catches."""
         p = self._p
         grip = -p["close_strength"]
-        try:
-            z_close = self.manipulation.pose.z + p["close_lift_m"]
-        except ArmFailed:
-            z_close = p["floor_z"] + p["close_lift_m"]
-        # A vertical tool that reached the floor can be out of reach a
-        # centimetre up (joint 4's limit): the lift takes the steepest pitch
-        # in reach there.
-        pitch_close = self._rung_pitch(x, y, z_close, roll, pitch, yaw)
-        try:
-            self.manipulation.move_to(
-                x,
-                y,
-                z_close,
-                roll=roll,
-                pitch=pitch_close,
-                yaw=yaw,
-                duration=p["close_lift_s"],
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-        except ArmFailed as e:
-            self.logger.warning(f"[PickAnyObject] pre-close lift skipped ({e}); closing at the floor")
+        self._lift_before_close(x, y, roll, pitch, yaw)
         # gripper_close holds the arm's standing target — the lifted pose —
         # while the claw shuts.
         try:
@@ -882,6 +864,44 @@ class PickAnyObject(Skill):
             self.manipulation.move_to(
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
+
+    def _lift_before_close(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
+        """Un-press the fingertips (close_lift_m) and confirm the rise on FK,
+        re-commanding once if the loaded servo fell short. Closing at the
+        floor is the tuned baseline, so a lift that cannot be commanded (no
+        IK a centimetre up, no pose) is logged, not fatal; the verify stage
+        judges the grasp either way."""
+        p = self._p
+        try:
+            z0 = self.manipulation.pose.z
+        except ArmFailed:
+            self.logger.warning("[PickAnyObject] no arm pose for the pre-close lift; closing where it is")
+            return
+        z_close = z0 + p["close_lift_m"]
+        # A vertical tool that reached the floor can be out of reach a
+        # centimetre up (joint 4's limit): the lift takes the steepest pitch
+        # in reach there.
+        pitch_close = self._rung_pitch(x, y, z_close, roll, pitch, yaw)
+        for attempt in (1, 2):
+            try:
+                settled = self.manipulation.move_to(
+                    x,
+                    y,
+                    z_close,
+                    roll=roll,
+                    pitch=pitch_close,
+                    yaw=yaw,
+                    duration=p["close_lift_s"],
+                    tolerance_xy=None,
+                    tolerance_z=None,
+                )
+            except ArmFailed as e:
+                self.logger.warning(f"[PickAnyObject] pre-close lift skipped ({e}); closing at the floor")
+                return
+            rise = (settled.z - z0) if settled is not None else 0.0
+            if rise >= p["close_lift_min_m"]:
+                return
+            self.logger.info(f"[PickAnyObject] pre-close lift rose {rise * 1000:.0f} mm (try {attempt})")
 
     def _fingers_still(self, timeout: float, hold: float = 0.3, tol: float = 0.01) -> None:
         """Block until joint 6 has held within tol for `hold` seconds (or
