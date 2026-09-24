@@ -802,6 +802,7 @@ class Manipulation:
         """
         with self._ik_lock:
             self._ik_solution = None
+            key = f"{x:.4f} {y:.4f} {z:.4f} {roll:.4f} {pitch:.4f} {yaw:.4f}"  # as mars_arm/ik.py echoes it
 
             target = Twist()  # /ik_delta is an ABSOLUTE pose despite the name
             target.linear.x = x
@@ -815,8 +816,12 @@ class Manipulation:
             start_time = time.time()
             while time.time() - start_time < timeout:
                 self._settle(0.01)
-                if self._ik_solution is not None:
-                    joint_positions = list(self._ik_solution.position)
+                reply = self._ik_solution
+                if reply is not None:
+                    if reply.header.frame_id and reply.header.frame_id != key:
+                        self._ik_solution = None  # another client's reply on the shared topic
+                        continue
+                    joint_positions = list(reply.position)
                     if len(joint_positions) == 0:
                         return None  # the IK node's "unreachable" reply
                     # Callers append j6 unconditionally, so anything but the

@@ -127,9 +127,9 @@ PARAMS = {
     "lift_s": 1.5,
     # Un-press before closing: the descent parks the fingers pressed into the
     # floor, and pads on fabric on carpet cannot slide shut (measured: the
-    # close stalls at j6 0.62 with the fingers still open). 1 cm over 0.5 s
-    # rose 2 mm on a real arm at the floor; this rises clear of the pile.
-    "close_lift_m": 0.015,
+    # close stalls at j6 0.62 with the fingers still open). Higher costs grip
+    # on a 3 cm bar; a real arm at the floor needs the full second to rise.
+    "close_lift_m": 0.01,
     "close_lift_s": 1.0,
     "twist_rad": 0.6,
     "lift_rad": 0.6,
@@ -205,7 +205,7 @@ class _BlobTracker:
         self.pending = None
         self.hits = 0
         self.misses = 0
-        self.flooded = False  # the last miss was the window filling the frame
+        self.flooded = False  # this frame's window filled the frame
         self.axis: vision.Axis | None = None
 
     @property
@@ -224,9 +224,9 @@ class _BlobTracker:
         followed once it has repeated WRIST_JUMP_CONFIRM frames running; a
         miss or a frame back home breaks the run."""
         pt, window, _score, axis = vision.seg_track(hsv, self.model, self.window, min_score=WRIST_SEG_MIN_SCORE)
+        self.flooded = pt is None and window[2] * window[3] > 0.9 * IMG_W * IMG_H
         if pt is None or self._strayed(pt):
             self.misses += 1
-            self.flooded = pt is None and window[2] * window[3] > 0.9 * IMG_W * IMG_H
             self.pending, self.hits = None, 0
             return None
         self.misses = 0
@@ -597,9 +597,9 @@ class PickAnyObject(Skill):
             self._draw_hop(tracker.pending)
             if px is None:
                 streak = centered = 0
-                if tracker.flooded and descended:
-                    # Not a lost object but one the camera is now inside of:
-                    # the fingers are over it, so grasp here.
+                if tracker.flooded and z <= p["roll_z"] + 1e-6:
+                    # With the fingers already straddling it, a frame the
+                    # window floods is the object, not the floor: grasp here.
                     reason = "fills the view"
                     break
                 if tracker.misses < 3:
@@ -813,38 +813,20 @@ class PickAnyObject(Skill):
             z_close = self.manipulation.pose.z + p["close_lift_m"]
         except ArmFailed:
             z_close = p["floor_z"] + p["close_lift_m"]
-        try:
-            self.manipulation.move_to(
-                x,
-                y,
-                z_close,
-                roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-                duration=p["close_lift_s"],
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-        except ArmFailed:
-            pass  # best-effort pre-close lift; the grasp decides below
+        # A vertical tool that reached the floor can be out of reach a
+        # centimetre up (joint 4's limit): the lifted pose takes the
+        # steepest pitch in reach there.
+        pitch_close = self._rung_pitch(x, y, z_close, roll, pitch, yaw)
+        lifted = self._move_quietly(x, y, z_close, roll, pitch_close, yaw, p["close_lift_s"])
         # Close as a move to the same lifted pose with the grip set, not a
         # gripper command: that one re-sends the arm's MEASURED joints, which
         # on a sagging arm at the floor puts the fingertips back into the pile.
-        try:
-            self.manipulation.move_to(
-                x,
-                y,
-                z_close,
-                roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-                duration=p["close_s"],
-                grip=grip,
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-        except ArmFailed as e:
-            raise ArmUnhealthy(f"gripper would not close: {e}") from e
+        closed = lifted and self._move_quietly(x, y, z_close, roll, pitch_close, yaw, p["close_s"], grip=grip)
+        if not closed:
+            try:
+                self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
+            except ArmFailed as e:
+                raise ArmUnhealthy(f"gripper would not close: {e}") from e
         # Fingers have committed: from here teardown must fold with the grip
         # kept, not open over the floor mid-carry — only a verified miss
         # clears the flag. Set here, not after _grasp_at returns: an exception
@@ -890,6 +872,26 @@ class PickAnyObject(Skill):
             self.manipulation.move_to(
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
+
+    def _move_quietly(self, x, y, z, roll, pitch, yaw, duration, grip=None) -> bool:
+        """An unverified move_to that reports failure instead of raising."""
+        try:
+            self.manipulation.move_to(
+                x,
+                y,
+                z,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                duration=duration,
+                grip=grip,
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+        except ArmFailed as e:
+            self.logger.warning(f"[PickAnyObject] move to ({x:.2f}, {y:.2f}, {z:.3f}) skipped: {e}")
+            return False
+        return True
 
     def _fingers_still(self, timeout: float, hold: float = 0.3, tol: float = 0.01) -> None:
         """Block until joint 6 has held within tol for `hold` seconds (or
@@ -988,7 +990,6 @@ class PickAnyObject(Skill):
             if images
             else None
         )
-        self._join_fold()
         j6_ok = j6 is not None and j6 > GRIPPER_EMPTY_J6 + 0.02
         # Token scan, not a prefix match: replies like "The object is not on
         # the floor." answer correctly without leading with the word, and the
@@ -1012,6 +1013,8 @@ class PickAnyObject(Skill):
             f"({len(images)} cams) -> {'HELD' if held else 'NOT HELD'}"
         )
         self.overlay.readout("holding it" if held else "missed it")
+        if held:
+            self._join_fold()  # a miss leaves the fold in flight: teardown's REST supersedes it
         return held
 
     def _fold_to_carry(self) -> None:
