@@ -188,6 +188,12 @@ void MarsArmNode::syncTargetToMotorPositions() {
 
 // ========== HEALTH MONITORING ==========
 
+// Auto-recovery of latched overloads: at most this many reboots per servo
+// within the window. A joint pressed against an obstacle re-latches within
+// seconds of recovery, and grinding into it indefinitely would strip the gear.
+static constexpr int kAutoRecoverMaxAttempts = 3;
+static constexpr std::chrono::minutes kAutoRecoverWindow{5};
+
 void MarsArmNode::healthMonitorCallback() {
     mars_msgs::msg::ArmStatus status_msg;
     status_msg.is_ok = true;
@@ -200,14 +206,40 @@ void MarsArmNode::healthMonitorCallback() {
         for (const auto& config : joint_configs_) {
             const int servo_id = config.servo_id;
 
+            // A previous auto-recovery rebooted this servo but threw before
+            // reconfiguring it. The reboot cleared the error bit, so the check
+            // below sees a nominal servo the control loop is driving with an
+            // unknown configuration. Retry here; a manual /mars/arm/reboot
+            // reconfigures it too, and this retry then succeeds and clears it.
+            if (auto_recovery_incomplete_[servo_id]) {
+                try {
+                    configureServoByIdLocked(servo_id, servo_id == 7 || arm_torque_enabled_.load());
+                    auto_recovery_incomplete_[servo_id] = false;
+                    RCLCPP_WARN(this->get_logger(), "Servo %d reconfigured after an incomplete auto-recovery",
+                                servo_id);
+                } catch (const std::exception& e) {
+                    status_msg.is_ok = false;
+                    status_msg.error = "Servo " + std::to_string(servo_id) +
+                                       " was rebooted but could not be reconfigured (" + e.what() +
+                                       ") — use 'Reboot arm' (/mars/arm/reboot) or power-cycle the arm";
+                    break;
+                }
+            }
+
             uint8_t hw_status = dynamixel_->readHardwareErrorStatus(servo_id);
             if (hw_status != 0) {
                 status_msg.is_ok = false;
                 status_msg.error = describeHardwareError(hw_status, servo_id);
                 // The servo latches this bit until a reboot/power cycle, so a
-                // low present load means the flag outlived its cause.
+                // low present load means the flag outlived its cause. Overload
+                // is the one error a reboot genuinely fixes then — the others
+                // (overheating, electrical, encoder) keep their cause, so they
+                // stay manual.
                 int16_t load_now = dynamixel_->readPresentLoad(servo_id);
-                if (std::abs(static_cast<int>(load_now)) < kLoadWarningThreshold) {
+                const bool load_is_low = std::abs(static_cast<int>(load_now)) < kLoadWarningThreshold;
+                if (load_is_low && hw_status == 0x20 && autoRecoverServoLocked(servo_id)) {
+                    status_msg.error += " — auto-recovered (rebooted and reconfigured)";
+                } else if (load_is_low) {
                     status_msg.error +=
                         " — present load is low, so this flag is likely latched from a past event;"
                         " use 'Reboot arm' (/mars/arm/reboot) or power-cycle the arm to clear it";
@@ -246,6 +278,58 @@ void MarsArmNode::healthMonitorCallback() {
             RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.error.c_str());
         }
         last_arm_status_ = status_msg;
+    }
+}
+
+bool MarsArmNode::autoRecoverServoLocked(int servo_id) {
+    auto& history = auto_recovery_history_[servo_id];
+    const auto now = std::chrono::steady_clock::now();
+    while (!history.empty() && now - history.front() > kAutoRecoverWindow) {
+        history.pop_front();
+    }
+    if (history.size() >= kAutoRecoverMaxAttempts) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 60000,
+                             "Servo %d hit the auto-recovery limit (%d in %ld min) — something keeps overloading it; "
+                             "leaving it for manual recovery",
+                             servo_id, kAutoRecoverMaxAttempts, static_cast<long>(kAutoRecoverWindow.count()));
+        return false;
+    }
+    history.push_back(now);
+
+    // Set before the reboot and cleared only once everything below succeeded:
+    // a throw partway leaves the servo rebooted (latch gone) but not fully
+    // configured, and the attempt is already spent. The health check retries
+    // the configuration and keeps the arm unhealthy until it lands.
+    auto_recovery_incomplete_[servo_id] = true;
+    try {
+        RCLCPP_WARN(this->get_logger(), "Auto-recovering servo %d: rebooting to clear the latched overload", servo_id);
+        dynamixel_->reboot(servo_id);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        const bool enable_torque = servo_id == 7 || arm_torque_enabled_.load();
+        configureServoByIdLocked(servo_id, enable_torque);
+
+        // Re-seed the recovered joint's target at its measured position:
+        // without this the control loop immediately drives it back toward the
+        // pre-error goal, which may be the very collision that tripped it.
+        if (servo_id >= 1 && servo_id <= 6) {
+            const int idx = servo_id - 1;
+            double rad = ((dynamixel_->readPosition(servo_id) - 2048) * 2 * M_PI) / 4096.0;
+            if (idx == 1 || idx == 2 || idx == 3 || idx == 5) {
+                rad = -rad;
+            }
+            std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+            latest_target_[idx] = rad;
+        }
+        auto_recovery_incomplete_[servo_id] = false;
+        RCLCPP_WARN(this->get_logger(), "Auto-recovered servo %d (rebooted, reconfigured, torque %s)", servo_id,
+                    enable_torque ? "on" : "off");
+        return true;
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "Auto-recovery of servo %d failed: %s — it may be rebooted but not fully configured; "
+                     "the health check will retry and report the arm unhealthy until it is",
+                     servo_id, e.what());
+        return false;
     }
 }
 
