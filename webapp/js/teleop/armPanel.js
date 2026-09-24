@@ -12,7 +12,7 @@
 // pose the moment data flows. Auto-disengage on tab hide, rosbridge loss,
 // or serial failure.
 
-import { DynamixelLeader } from "../dynamixel.js";
+import { DynamixelLeader, LEADER_SERVO_IDS } from "../dynamixel.js";
 import { copyToButton, ICON_COPY } from "../clipboard.js";
 import {
   LEADER_POSITIONS_TOPIC,
@@ -22,10 +22,24 @@ import {
   ARM_STATUS_TOPIC,
 } from "../constants.js";
 import { rebootArmAndEnableTorque } from "../armReboot.js";
+import { LeaderGuard } from "../leaderGuard.js";
+import { clampTick, proximity } from "../leaderLimits.js";
 
 const PUBLISH_MIN_GAP_MS = 15;
 const TICK_CENTER = 2048;
 const TICK_SPAN = 2048; // ±half a revolution shown on the joint dots
+// Amber warning band before the wall, ~10°.
+const WARN_TICKS = 120;
+
+/**
+ * Where a tick sits on a joint track, as a percentage down from the top.
+ * @param {number} tick
+ * @returns {number}
+ */
+function topPct(tick) {
+  const frac = Math.max(-1, Math.min(1, (tick - TICK_CENTER) / TICK_SPAN));
+  return (1 - (frac + 1) / 2) * 100;
+}
 
 /**
  * @param {HTMLElement} parent
@@ -124,14 +138,25 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   joints.title = "Live leader-arm joint positions (Dynamixel ticks, ±half turn)";
   /** @type {HTMLElement[]} */
   const dots = [];
+  /** @type {{ lo: HTMLElement, hi: HTMLElement }[]} */
+  const zones = [];
   for (let i = 0; i < 6; i++) {
     const joint = document.createElement("div");
     joint.className = "arm-joint";
+    // Shaded caps mark travel the follower cannot reach, so the wall is visible
+    // before it is felt. Hidden until mars_arm reports that joint's limits.
+    const lo = document.createElement("div");
+    lo.className = "arm-joint-zone lo";
+    lo.hidden = true;
+    const hi = document.createElement("div");
+    hi.className = "arm-joint-zone hi";
+    hi.hidden = true;
     const dot = document.createElement("div");
     dot.className = "arm-joint-dot";
-    joint.appendChild(dot);
+    joint.append(lo, hi, dot);
     joints.appendChild(joint);
     dots.push(dot);
+    zones.push({ lo, hi });
   }
 
   const connectBtn = document.createElement("button");
@@ -153,6 +178,13 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   copyBtn.setAttribute("aria-label", "Copy joint positions");
   copyBtn.innerHTML = ICON_COPY;
 
+  // Holds the leader inside the follower's reach. Defeatable: a limit read from
+  // a mistuned robot must never be the reason an operator cannot move the arm.
+  const limitsBtn = document.createElement("button");
+  limitsBtn.className = "arm-button arm-limits";
+  limitsBtn.type = "button";
+  limitsBtn.title = "Hold the leader inside the follower's reachable range";
+
   // Engage + copy share a row; the row (not the button) is what hides when
   // there's nothing to read.
   const engageRow = document.createElement("div");
@@ -162,7 +194,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   const note = document.createElement("p");
   note.className = "arm-note microlabel";
 
-  wrap.append(status, joints, connectBtn, engageRow, note, ...(armSvc ? [divider(), armSvc.el] : []));
+  wrap.append(status, joints, connectBtn, engageRow, limitsBtn, note, ...(armSvc ? [divider(), armSvc.el] : []));
 
   // ---- state ------------------------------------------------------------
 
@@ -170,12 +202,29 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   let lastPublishAt = 0;
   let destroyed = false;
   const leader = new DynamixelLeader();
+  const guard = new LeaderGuard({ leader, rosClient }, LEADER_SERVO_IDS);
 
   /** @param {boolean} on */
   function setEngaged(on) {
     if (engaged === on) return;
     engaged = on;
     render(leader.state);
+  }
+
+  /**
+   * What actually goes on the wire. While the guard is on, ticks are clamped
+   * into the follower's band even for joints it is not currently holding: the
+   * servo wall can slip or be overpowered, and the follower must never be handed
+   * a goal it cannot reach just because the physical hold lost.
+   * @param {number[]} positions
+   * @returns {number[]}
+   */
+  function reachable(positions) {
+    if (!guard.enabled) return positions;
+    return positions.map((tick, i) => {
+      const band = guard.band(LEADER_SERVO_IDS[i]);
+      return band ? clampTick(tick, band) : tick;
+    });
   }
 
   /** @param {number[]} positions */
@@ -185,7 +234,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     lastPublishAt = now;
     rosClient.publish(LEADER_POSITIONS_TOPIC, {
       layout: { dim: [], data_offset: 0 },
-      data: positions,
+      data: reachable(positions),
     });
   }
 
@@ -193,22 +242,47 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   function render(state) {
     const reading = state.connected && state.positions !== null;
 
-    if (state.error) {
-      status.textContent = state.error;
+    const g = guard.state;
+    if (state.error || g.error) {
+      status.textContent = state.error || g.error;
       status.classList.add("warn");
     } else if (!state.connected) {
       status.textContent = "no arm connected";
       status.classList.remove("warn");
-    } else {
-      status.textContent = reading ? `${state.rate} Hz` : "listening…";
+    } else if (!reading) {
+      status.textContent = "listening…";
       status.classList.remove("warn");
+    } else {
+      // Draw is only worth showing once the guard can actually spend it.
+      // Divergence is the headline when it happens: the arm is not where the
+      // operator put it, and that matters more than the rate.
+      if (g.blockedJoint) {
+        // Clearance is the number to tune BODY_MARGIN_M against, so show it.
+        const room = g.clearanceMm >= 0 ? ` · ${g.clearanceMm} mm` : "";
+        status.textContent = `joint ${g.blockedJoint} blocked${room} · ${g.drawMa} mA`;
+        status.classList.add("warn");
+      } else {
+        status.textContent = g.armed ? `${state.rate} Hz · ${g.drawMa} mA` : `${state.rate} Hz`;
+        status.classList.remove("warn");
+      }
     }
 
     joints.hidden = !reading;
     if (state.positions) {
       state.positions.forEach((tick, i) => {
-        const frac = Math.max(-1, Math.min(1, (tick - TICK_CENTER) / TICK_SPAN));
-        dots[i].style.top = `${(1 - (frac + 1) / 2) * 100}%`;
+        dots[i].style.top = `${topPct(tick)}%`;
+
+        const band = guard.enabled ? guard.band(LEADER_SERVO_IDS[i]) : undefined;
+        const held = g.holding.includes(LEADER_SERVO_IDS[i]);
+        dots[i].classList.toggle("danger", held);
+        dots[i].classList.toggle("warn", !held && !!band && proximity(tick, band, WARN_TICKS) > 0);
+
+        const { lo, hi } = zones[i];
+        lo.hidden = hi.hidden = !band;
+        if (band) {
+          hi.style.height = `${topPct(band.max)}%`;
+          lo.style.top = `${topPct(band.min)}%`;
+        }
       });
     }
 
@@ -219,6 +293,17 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     engageRow.hidden = !reading;
     engageBtn.textContent = engaged ? "Live — click to stop" : "Engage follow";
     engageBtn.classList.toggle("active", engaged);
+
+    limitsBtn.hidden = !reading;
+    limitsBtn.textContent = !guard.enabled
+      ? "Limits off"
+      : g.blockedJoint
+        ? "Not following"
+        : g.armed
+          ? `Limits on${g.holding.length ? " — holding" : ""}`
+          : "Limits — no robot";
+    limitsBtn.classList.toggle("active", guard.enabled && g.armed);
+    limitsBtn.classList.toggle("holding", g.holding.length > 0 || g.blockedJoint > 0);
 
     note.hidden = !reading || engaged;
     note.textContent = "follower snaps to leader pose";
@@ -258,14 +343,32 @@ export function createArmPanel(parent, rosClient, opts = {}) {
 
   engageBtn.addEventListener("click", () => setEngaged(!engaged));
 
+  // Arming needs both links: the limits come from the robot, and the mode write
+  // that precedes any hold can only be queued once the serial port is open.
+  function maybeArm() {
+    if (destroyed || !guard.enabled) return;
+    if (rosClient.state !== "connected" || !leader.state.connected) return;
+    void guard.arm();
+  }
+
+  limitsBtn.addEventListener("click", () => {
+    guard.setEnabled(!guard.enabled);
+    maybeArm();
+    render(leader.state);
+  });
+
   copyBtn.addEventListener("click", () => {
     const positions = leader.state.positions;
     if (!positions) return; // row is hidden without a read, but be safe
     void copyToButton(`[${positions.join(", ")}]`, copyBtn, "copied");
   });
 
+  let wasConnected = false;
   const unsubLeader = leader.onChange((state) => {
     if (destroyed) return;
+    if (state.connected && !wasConnected) maybeArm();
+    wasConnected = state.connected;
+    guard.update(state);
     if (engaged && (!state.connected || state.error)) {
       engaged = false;
     } else if (engaged && state.positions && rosClient.state === "connected") {
@@ -274,12 +377,27 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     render(state);
   });
 
+  const unsubGuard = guard.onChange(() => {
+    if (!destroyed) render(leader.state);
+  });
+
   const unsubRos = rosClient.onStateChange((rosState) => {
-    if (rosState !== "connected") setEngaged(false);
+    if (rosState === "connected") {
+      maybeArm();
+      return;
+    }
+    setEngaged(false);
+    // Nothing reaches the follower with the socket down, so a hold would burn
+    // current for no one.
+    guard.releaseAll();
   });
 
   const onVisibility = () => {
-    if (document.visibilityState === "hidden") setEngaged(false);
+    if (document.visibilityState !== "hidden") return;
+    setEngaged(false);
+    // Background tabs are timer-throttled, so a hold would keep pushing against
+    // stale positions. Let go instead.
+    guard.releaseAll();
   };
   document.addEventListener("visibilitychange", onVisibility);
 
@@ -299,7 +417,9 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     destroy() {
       destroyed = true;
       setEngaged(false);
+      guard.destroy();
       unsubLeader();
+      unsubGuard();
       unsubRos();
       document.removeEventListener("visibilitychange", onVisibility);
       serial.removeEventListener("connect", onSerialConnect);

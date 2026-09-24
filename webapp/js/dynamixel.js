@@ -17,10 +17,24 @@
 
 const HEADER = [0xff, 0xff, 0xfd, 0x00];
 const BROADCAST_ID = 0xfe;
+const INSTR_WRITE = 0x03;
 const INSTR_SYNC_READ = 0x82;
+const INSTR_SYNC_WRITE = 0x83;
 const INSTR_STATUS = 0x55;
-const PRESENT_POSITION_ADDR = 132;
-const PRESENT_POSITION_LEN = 4;
+
+// Control table (X-series), mirroring mars_control/dynamixel.py — the robot-side
+// driver for the same servo family.
+export const ADDR_OPERATING_MODE = 11; // EEPROM: rejects writes while torqued
+export const ADDR_TORQUE_ENABLE = 64;
+export const ADDR_GOAL_CURRENT = 102;
+export const ADDR_GOAL_POSITION = 116;
+export const OPERATING_MODE_CURRENT_POSITION = 5;
+
+// Present Current(126,2), Velocity(128,4) and Position(132,4) are contiguous, so
+// one 10-byte read carries all three — the guard needs draw and angle together,
+// and splitting them would double the traffic on a half-duplex bus.
+const PRESENT_BLOCK_ADDR = 126;
+const PRESENT_BLOCK_LEN = 10;
 
 export const LEADER_BAUD = 1_000_000;
 export const LEADER_SERVO_IDS = [1, 2, 3, 4, 5, 6];
@@ -91,6 +105,39 @@ export function buildSyncRead(ids, addr, len) {
     (len >> 8) & 0xff,
     ...ids,
   ]);
+}
+
+/**
+ * Write one register block on a single servo.
+ * @param {number} id
+ * @param {number} addr
+ * @param {number[]} bytes Little-endian value bytes.
+ * @returns {Uint8Array}
+ */
+export function buildWrite(id, addr, bytes) {
+  return buildPacket(id, INSTR_WRITE, [addr & 0xff, (addr >> 8) & 0xff, ...bytes]);
+}
+
+/**
+ * Write the same register block on several servos in one packet, each with its
+ * own value.
+ * @param {number} addr
+ * @param {number} len Bytes per servo.
+ * @param {Map<number, number[]>} valuesById Little-endian value bytes per servo id.
+ * @returns {Uint8Array}
+ */
+export function buildSyncWrite(addr, len, valuesById) {
+  /** @type {number[]} */
+  const params = [addr & 0xff, (addr >> 8) & 0xff, len & 0xff, (len >> 8) & 0xff];
+  for (const [id, bytes] of valuesById) params.push(id, ...bytes);
+  return buildPacket(BROADCAST_ID, INSTR_SYNC_WRITE, params);
+}
+
+/** @param {number} value @param {number} len @returns {number[]} Little-endian bytes. */
+export function toBytes(value, len) {
+  const bytes = [];
+  for (let i = 0; i < len; i++) bytes.push((value >> (8 * i)) & 0xff);
+  return bytes;
 }
 
 /**
@@ -178,13 +225,24 @@ export class DynamixelLeader {
   /** @type {WritableStreamDefaultWriter<Uint8Array> | null} */ #writer = null;
   /** @type {ReadableStreamDefaultReader<Uint8Array> | null} */ #reader = null;
   /** @type {Set<(state: LeaderArmState) => void>} */ #listeners = new Set();
-  /** @type {LeaderArmState} */ #state = { connected: false, positions: null, rate: 0, error: null };
+  /** @type {LeaderArmState} */ #state = {
+    connected: false,
+    positions: null,
+    currents: null,
+    rate: 0,
+    error: null,
+  };
   /** @type {number[]} */ #ids;
   #running = false;
   #opening = false;
-  /** @type {Map<number, number>} */ #round = new Map();
+  /** @type {Map<number, { position: number, current: number }>} */ #round = new Map();
   /** @type {(() => void) | null} */ #roundComplete = null;
   /** @type {number[]} */ #emitTimes = [];
+  // The bus is half-duplex: a packet sent while servos are answering the round's
+  // SyncRead collides with their status packets. Writes therefore queue here and
+  // the poll loop flushes them between rounds, never mid-round.
+  /** @type {Uint8Array[]} */ #pending = [];
+  /** @type {Set<number>} */ #torqued = new Set();
 
   /** @param {number[]} [ids] */
   constructor(ids = LEADER_SERVO_IDS) {
@@ -242,6 +300,27 @@ export class DynamixelLeader {
   async close() {
     this.#running = false;
     this.#roundComplete?.();
+    // committed: the arm must never be left energized behind a closed port, so
+    // this torque-off is not cancellable and not conditional on a clean loop.
+    // The poll loop is already stopped; one round timeout is long enough for its
+    // last SyncRead to have been answered, so this cannot collide with it.
+    if (this.#writer && this.#torqued.size) {
+      await sleep(ROUND_TIMEOUT_MS + 5);
+      const off = buildSyncWrite(
+        ADDR_TORQUE_ENABLE,
+        1,
+        new Map([...this.#torqued].map((id) => [id, [0]])),
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await this.#writer.write(off);
+        } catch {
+          break; // port already gone — the servos lost power with it
+        }
+      }
+      this.#torqued.clear();
+    }
+    this.#pending.length = 0;
     const reader = this.#reader;
     const writer = this.#writer;
     const port = this.#port;
@@ -261,7 +340,60 @@ export class DynamixelLeader {
     }
     await port?.close().catch(() => {});
     if (this.#state.connected) {
-      this.#patch({ connected: false, positions: null, rate: 0 });
+      this.#patch({ connected: false, positions: null, currents: null, rate: 0 });
+    }
+  }
+
+  /** @returns {ReadonlySet<number>} Servo ids currently torqued by this driver. */
+  get torqued() {
+    return this.#torqued;
+  }
+
+  /**
+   * Torque on/off. Queued, so it lands between rounds.
+   * @param {number[]} ids
+   * @param {boolean} on
+   */
+  writeTorque(ids, on) {
+    if (!ids.length) return;
+    this.#pending.push(buildSyncWrite(ADDR_TORQUE_ENABLE, 1, new Map(ids.map((id) => [id, [on ? 1 : 0]]))));
+    for (const id of ids) {
+      if (on) this.#torqued.add(id);
+      else this.#torqued.delete(id);
+    }
+  }
+
+  /**
+   * Operating mode. EEPROM — the servo rejects this while torqued, so callers
+   * must torque off first, and must not call it per round (write endurance).
+   * @param {number[]} ids
+   * @param {number} mode
+   */
+  writeOperatingMode(ids, mode) {
+    if (!ids.length) return;
+    this.#pending.push(buildSyncWrite(ADDR_OPERATING_MODE, 1, new Map(ids.map((id) => [id, [mode & 0xff]]))));
+  }
+
+  /** @param {Map<number, number>} byId Goal current in mA per servo id. */
+  writeGoalCurrent(byId) {
+    if (!byId.size) return;
+    this.#pending.push(buildSyncWrite(ADDR_GOAL_CURRENT, 2, new Map([...byId].map(([id, mA]) => [id, toBytes(mA, 2)]))));
+  }
+
+  /** @param {Map<number, number>} byId Goal position in ticks per servo id. */
+  writeGoalPosition(byId) {
+    if (!byId.size) return;
+    this.#pending.push(
+      buildSyncWrite(ADDR_GOAL_POSITION, 4, new Map([...byId].map(([id, tick]) => [id, toBytes(tick, 4)]))),
+    );
+  }
+
+  async #drainPending() {
+    const writer = this.#writer;
+    if (!writer) return;
+    while (this.#pending.length) {
+      const packet = /** @type {Uint8Array} */ (this.#pending.shift());
+      await writer.write(packet);
     }
   }
 
@@ -276,9 +408,11 @@ export class DynamixelLeader {
     const reader = this.#reader;
     if (!reader) return;
     const parse = createStatusParser((packet) => {
-      if (packet.params.length !== PRESENT_POSITION_LEN || !this.#ids.includes(packet.id)) return;
-      const view = new DataView(packet.params.buffer, packet.params.byteOffset, 4);
-      this.#round.set(packet.id, view.getInt32(0, true));
+      // Write acknowledgements come back as zero-parameter status packets; only
+      // a full present-block answer is a round contribution.
+      if (packet.params.length !== PRESENT_BLOCK_LEN || !this.#ids.includes(packet.id)) return;
+      const view = new DataView(packet.params.buffer, packet.params.byteOffset, PRESENT_BLOCK_LEN);
+      this.#round.set(packet.id, { current: view.getInt16(0, true), position: view.getInt32(6, true) });
       if (this.#round.size === this.#ids.length) this.#roundComplete?.();
     });
     try {
@@ -293,10 +427,11 @@ export class DynamixelLeader {
   }
 
   async #pollLoop() {
-    const request = buildSyncRead(this.#ids, PRESENT_POSITION_ADDR, PRESENT_POSITION_LEN);
+    const request = buildSyncRead(this.#ids, PRESENT_BLOCK_ADDR, PRESENT_BLOCK_LEN);
     while (this.#running && this.#writer) {
       this.#round.clear();
       try {
+        await this.#drainPending();
         await this.#writer.write(request);
       } catch (err) {
         this.#fail(err instanceof Error ? err.message : "Serial write failed");
@@ -314,9 +449,10 @@ export class DynamixelLeader {
 
       if (!this.#running) return;
       if (this.#round.size === this.#ids.length) {
-        const positions = this.#ids.map((id) => this.#round.get(id) ?? 0);
+        const positions = this.#ids.map((id) => this.#round.get(id)?.position ?? 0);
+        const currents = this.#ids.map((id) => this.#round.get(id)?.current ?? 0);
         this.#trackRate();
-        this.#patch({ positions, rate: this.#emitTimes.length, error: null });
+        this.#patch({ positions, currents, rate: this.#emitTimes.length, error: null });
       }
       // Breather so a wedged bus can't busy-loop; sets the ~60 Hz ceiling.
       await sleep(2);

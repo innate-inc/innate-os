@@ -24,13 +24,19 @@ async function test(name, fn) {
 }
 
 /**
- * Build a status packet the way a servo would (for parser tests).
- * @param {number} id @param {number} position
+ * Build a status packet the way a servo would: the present block the reader
+ * asks for, Present Current (int16) / Velocity (int32) / Position (int32)
+ * contiguous from address 126.
+ * @param {number} id @param {number} position @param {number} [current]
  */
-function statusPacket(id, position) {
-  const params = new Uint8Array(4);
-  new DataView(params.buffer).setInt32(0, position, true);
-  const body = [0xff, 0xff, 0xfd, 0x00, id, 0x08, 0x00, 0x55, 0x00, ...params];
+function statusPacket(id, position, current = 0) {
+  const params = new Uint8Array(10);
+  const view = new DataView(params.buffer);
+  view.setInt16(0, current, true);
+  view.setInt32(2, 0, true); // present velocity — read past, not used
+  view.setInt32(6, position, true);
+  const length = params.length + 4; // error byte + instruction + crc16
+  const body = [0xff, 0xff, 0xfd, 0x00, id, length & 0xff, (length >> 8) & 0xff, 0x55, 0x00, ...params];
   const crc = crc16(body);
   return new Uint8Array([...body, crc & 0xff, crc >> 8]);
 }
@@ -58,8 +64,8 @@ await test("parser survives torn chunks, garbage, and bad CRC", () => {
   /** @type {{id: number, pos: number}[]} */
   const seen = [];
   const parse = createStatusParser((p) => {
-    const view = new DataView(p.params.buffer, p.params.byteOffset, 4);
-    seen.push({ id: p.id, pos: view.getInt32(0, true) });
+    const view = new DataView(p.params.buffer, p.params.byteOffset, 10);
+    seen.push({ id: p.id, pos: view.getInt32(6, true) });
   });
 
   const a = statusPacket(1, 2048);
@@ -89,7 +95,7 @@ await test("DynamixelLeader completes rounds against a mock port", async () => {
         assert.equal(chunk[7], 0x82, "loop must send SyncRead");
         pulls += 1;
         for (const id of LEADER_SERVO_IDS) {
-          readCtl.enqueue(statusPacket(id, id * 1000 + pulls));
+          readCtl.enqueue(statusPacket(id, id * 1000 + pulls, id * 10));
         }
       },
     }),
@@ -116,6 +122,11 @@ await test("DynamixelLeader completes rounds against a mock port", async () => {
     last.map((p) => Math.floor(p / 1000)),
     [1, 2, 3, 4, 5, 6],
     "positions ordered by servo id",
+  );
+  assert.deepEqual(
+    withPositions[withPositions.length - 1].currents,
+    LEADER_SERVO_IDS.map((id) => id * 10),
+    "present current read alongside position, ordered by servo id",
   );
   assert.ok(withPositions[withPositions.length - 1].rate > 0, "rate tracked");
   const final = states[states.length - 1];

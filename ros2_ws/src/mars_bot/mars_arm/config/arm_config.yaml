@@ -35,6 +35,63 @@
     #   ros2 param load /mars_arm <this file>
     # =============================================================
 
+    # =============================================================
+    # Body keepout — the arm must not intersect the robot's own body.
+    #
+    # The joint_2 floor in arm_control.cpp cannot express this. Reaching DOWN in
+    # front (over a table edge) and folding BACK over the chassis look identical
+    # to any per-joint limit, so a floor that stops one stops the other. This
+    # tests where the arm actually is: elbow, wrist and tool are placed in
+    # base_link and checked against the boxes below. Reaching down stays free;
+    # only poses that put the arm inside the body are refused, and the command is
+    # walked back along the path from the last clear pose rather than clamped —
+    # the infeasible set is not an interval, so there is nothing to clamp to.
+    #
+    # Boxes are flat [min_x,min_y,min_z, max_x,max_y,max_z] sextets in base_link
+    # metres (ROS parameters have no nested arrays), transcribed from
+    # mars_sim/urdf/mars.urdf. The arm mount is deliberately omitted: the arm is
+    # bolted to it, so it is always "in collision" with it.
+    #
+    # Whole links are tested, not sampled points: the joints sit at 0.21, 0.26
+    # and 0.30 m from the shoulder, so testing only those left the first 0.21 m
+    # of arm uncovered and let 82% of real collisions through.
+    #
+    # margin is the clearance demanded around every box, and doubles as the
+    # links' radius — they are tested as zero-thickness segments, so their real
+    # thickness has to come from somewhere. Raise it if the arm still grazes,
+    # lower it if reachable workspace is lost.
+    # =============================================================
+    self_collision:
+      enabled: true
+      margin: 0.015        # floor under every box's own pad
+      slow_margin: 0.070   # inside this the arm eases off, decelerating into the stop
+      # A path is sampled every step_rad along its widest joint, so a long sweep
+      # is checked as finely as a short one. A fixed step count divided whatever
+      # interval it was given, which left a fast move too coarse to see a corner
+      # it passed through.
+      step_rad: 0.04
+      max_steps: 32
+      boxes: [
+        # chassis: origin (-0.0587, 0, 0.0838), size 0.1878 x 0.182 x 0.1676
+        -0.1526, -0.0910,  0.0000,   0.0352,  0.0910,  0.1676,
+        # rear tray: origin (-0.1895, 0, 0.0466), size 0.0789 x 0.1658 x 0.0594
+        -0.2290, -0.0829,  0.0169,  -0.1501,  0.0829,  0.0763,
+        # lidar turret: origin (-0.0527, 0, 0.1828), size 0.1255 x 0.104 x 0.0304
+        -0.1155, -0.0520,  0.1676,   0.0101,  0.0520,  0.1980,
+        # neck lower: origin (-0.0357, 0, 0.2155), size 0.051 x 0.0854 x 0.039
+        -0.0612, -0.0427,  0.1960,  -0.0102,  0.0427,  0.2350,
+        # neck upper: origin (-0.0466, 0, 0.2533), size 0.0374 x 0.036 x 0.0366
+        -0.0653, -0.0180,  0.2350,  -0.0279,  0.0180,  0.2716,
+      ]
+      # Clearance demanded per box, in the order above. One global figure cannot
+      # work: the shoulder sits 51 mm from the chassis and never moves further
+      # away, so a global pad near that blocks the arm at rest — which is what
+      # made every joint report as blocked. The chassis and rear tray keep a
+      # small pad; the turret and neck, which is what joint_2 folds back into,
+      # get much more, since that is where backlash and flex actually land the
+      # arm on the robot.
+      box_pads: [0.015, 0.015, 0.055, 0.055, 0.055]
+
     joints: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"]
 
     joint_1:
