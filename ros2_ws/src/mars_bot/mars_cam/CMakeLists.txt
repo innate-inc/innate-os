@@ -313,6 +313,12 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 
+  # Unit tests for the pure (ROS-free) checkerboard calibration helpers.
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_checkerboard_calibration test/test_checkerboard_calibration.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
   # Unit tests for the pure (GStreamer/ROS-free) streamer helpers in webrtc_internal.hpp.
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_webrtc_internal test/test_webrtc_internal.cpp)
