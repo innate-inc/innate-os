@@ -17,7 +17,7 @@ import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from innate_llm import Image, Message, Request, Role, Text, configure
+from innate_llm import Image, Message, Reply, Request, Role, Text, configure
 from innate_llm.configure import DEFAULT_MODEL, KEY_ENVS
 from mars_bringup.config_loader import keys_env_path, parse_key_value_env
 
@@ -48,20 +48,27 @@ class Llm:
         question can refer to them as image 1, image 2, ... (640x480 JPEGs, at
         most two per call). Raises SkillCancelled between attempts if the run is
         cancelled."""
-        provider = self._provider()
-        if provider is None:
-            return None
         if isinstance(images_b64, str):
             images_b64 = [images_b64]
         message = Message(Role.USER, (Text(question), *(Image(_jpeg(b)) for b in images_b64)))
-        request = Request(system="", messages=(message,), temperature=0.0)
+        reply = self.run(Request(system="", messages=(message,), temperature=0.0), logger=logger, retries=retries)
+        return None if reply is None else reply.message.text()
+
+    def run(self, request: Request, *, logger=None, retries: int = 3) -> Reply | None:
+        """A whole Request (system, history, images, tools) -> the model's Reply,
+        for skills that hold a conversation rather than ask one question. Same
+        contract as ask(): None if unreachable / all retries fail, SkillCancelled
+        between attempts."""
+        provider = self._provider()
+        if provider is None:
+            return None
         for attempt in range(retries):
             cancellable_sleep(0)
             try:
-                return provider.run(request, timeout=_TIMEOUT_SECS).message.text()
+                return provider.run(request, timeout=_TIMEOUT_SECS)
             except Exception as e:  # noqa: BLE001 — a failed attempt is retried, the last one reported
                 if logger:
-                    logger.warning(f"[llm] {self.model} vision call failed (try {attempt + 1}/{retries}): {e}")
+                    logger.warning(f"[llm] {self.model} call failed (try {attempt + 1}/{retries}): {e}")
                 if attempt < retries - 1:
                     cancellable_sleep(2.0 * (attempt + 1))
         return None

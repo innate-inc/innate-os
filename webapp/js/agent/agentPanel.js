@@ -435,11 +435,13 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!name || !status) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
+    const feedback = typeof payload?.feedback === "string" ? payload.feedback : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
     if (status === "running") runningSkills.add(key);
     else runningSkills.delete(key);
-    opts.onSkillStatus?.({ skill: String(payload?.skill_id ?? name), runId: key, status, timestamp: ts });
-    chat.addSkillRun(key, name, status, ts, reason, payload?.args);
+    // A progress line repeats the run's "running"; it is not a transition anyone else needs to hear.
+    if (!feedback) opts.onSkillStatus?.({ skill: String(payload?.skill_id ?? name), runId: key, status, timestamp: ts });
+    chat.addSkillRun(key, name, status, ts, reason, payload?.args, feedback);
   }, undefined, "std_msgs/msg/String");
 
   return {
