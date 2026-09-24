@@ -814,19 +814,29 @@ class PickAnyObject(Skill):
         except ArmFailed:
             z_close = p["floor_z"] + p["close_lift_m"]
         # A vertical tool that reached the floor can be out of reach a
-        # centimetre up (joint 4's limit): the lifted pose takes the
-        # steepest pitch in reach there.
+        # centimetre up (joint 4's limit): the lift takes the steepest pitch
+        # in reach there.
         pitch_close = self._rung_pitch(x, y, z_close, roll, pitch, yaw)
-        lifted = self._move_quietly(x, y, z_close, roll, pitch_close, yaw, p["close_lift_s"])
-        # Close as a move to the same lifted pose with the grip set, not a
-        # gripper command: that one re-sends the arm's MEASURED joints, which
-        # on a sagging arm at the floor puts the fingertips back into the pile.
-        closed = lifted and self._move_quietly(x, y, z_close, roll, pitch_close, yaw, p["close_s"], grip=grip)
-        if not closed:
-            try:
-                self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
-            except ArmFailed as e:
-                raise ArmUnhealthy(f"gripper would not close: {e}") from e
+        try:
+            self.manipulation.move_to(
+                x,
+                y,
+                z_close,
+                roll=roll,
+                pitch=pitch_close,
+                yaw=yaw,
+                duration=p["close_lift_s"],
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+        except ArmFailed as e:
+            self.logger.warning(f"[PickAnyObject] pre-close lift skipped ({e}); closing at the floor")
+        # gripper_close holds the arm's standing target — the lifted pose —
+        # while the claw shuts.
+        try:
+            self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
+        except ArmFailed as e:
+            raise ArmUnhealthy(f"gripper would not close: {e}") from e
         # Fingers have committed: from here teardown must fold with the grip
         # kept, not open over the floor mid-carry — only a verified miss
         # clears the flag. Set here, not after _grasp_at returns: an exception
@@ -872,26 +882,6 @@ class PickAnyObject(Skill):
             self.manipulation.move_to(
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
-
-    def _move_quietly(self, x, y, z, roll, pitch, yaw, duration, grip=None) -> bool:
-        """An unverified move_to that reports failure instead of raising."""
-        try:
-            self.manipulation.move_to(
-                x,
-                y,
-                z,
-                roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-                duration=duration,
-                grip=grip,
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-        except ArmFailed as e:
-            self.logger.warning(f"[PickAnyObject] move to ({x:.2f}, {y:.2f}, {z:.3f}) skipped: {e}")
-            return False
-        return True
 
     def _fingers_still(self, timeout: float, hold: float = 0.3, tol: float = 0.01) -> None:
         """Block until joint 6 has held within tol for `hold` seconds (or

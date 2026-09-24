@@ -195,6 +195,10 @@ class Manipulation:
         self._status_stamp = 0.0
         # Standing grip target: the last COMMANDED j6 (see module docstring).
         self._grip_target: float | None = None
+        # Standing j1-j5 target, like _grip_target for the claw: a gripper command
+        # holds it. Re-sending the MEASURED pose instead sinks a loaded arm by
+        # its sag each time (fingertips pressed into carpet could not close).
+        self._arm_target: list[float] | None = None
         self._pending: _PendingMotion | None = None
 
         # Subscriptions are created once and never destroyed: destroying one
@@ -620,6 +624,7 @@ class Manipulation:
         with self._stream_lock:
             if self._stream_target is not None and self._stream_cmd is not None:
                 self._grip_target = float(self._stream_cmd[5])
+                self._arm_target = [float(j) for j in self._stream_cmd[:5]]
             self._stream_target = None
 
     def _stream_run(self) -> None:
@@ -635,6 +640,7 @@ class Manipulation:
                     # here again could stomp a grip a motion set since.
                     if not stopped and self._stream_cmd is not None:
                         self._grip_target = float(self._stream_cmd[5])
+                        self._arm_target = [float(j) for j in self._stream_cmd[:5]]
                     self._stream_target = None
                     self._stream_thread = None  # under the lock: see stream_joints
                     return
@@ -734,6 +740,7 @@ class Manipulation:
             self._torque_enabled = False
             self._torque_stamp = time.monotonic()
             self._grip_target = None  # a limp claw holds nothing
+            self._arm_target = None  # and a limp arm is wherever gravity left it
         return success
 
     def reboot_servos(self) -> bool:
@@ -749,6 +756,7 @@ class Manipulation:
             self._torque_enabled = False
             self._torque_stamp = time.monotonic()
             self._grip_target = None
+            self._arm_target = None
         return success
 
     def recover(self) -> None:
@@ -866,6 +874,7 @@ class Manipulation:
             return False
 
         self._grip_target = float(joint_positions[5])
+        self._arm_target = [float(j) for j in joint_positions[:5]]
         return True
 
     def _send_trajectory(
@@ -910,25 +919,27 @@ class Manipulation:
             return False
 
         self._grip_target = float(waypoint_joints[-1][5])
+        self._arm_target = [float(j) for j in waypoint_joints[-1][:5]]
         return True
 
     def _command_gripper(self, j6: float, duration: float, blocking: bool) -> bool:
         """Send a joint command that moves only the gripper to ``j6``.
 
-        Joins any unjoined non-blocking motion first (raising on its failure):
-        j1-j5 are re-sent from measured state, which would otherwise retarget
-        an arm still in flight at a transient pose."""
+        Joins any unjoined non-blocking motion and stops any stream first, so
+        j1-j5 are the standing target the arm was last sent; only with none
+        (after a reboot) are they read from measured state."""
         self._join_pending()
-        if self._arm_state is None:
-            self.logger.error("No arm state available")
-            return False
-
-        self._settle()
-
-        positions = list(self._arm_state.position)
-        if len(positions) < 6:
-            positions.extend([0.0] * (6 - len(positions)))
-        positions[5] = j6
+        self.stream_stop()
+        if self._arm_target is not None:
+            positions = list(self._arm_target)
+        else:
+            if self._arm_state is None:
+                self.logger.error("No arm state available")
+                return False
+            self._settle()
+            positions = [float(p) for p in self._arm_state.position[:5]]
+            positions.extend([0.0] * (5 - len(positions)))
+        positions.append(j6)
         return self._goto(positions, duration, wait=blocking)
 
     def _arm_from_fk(self, msg: PoseStamped) -> Arm:
