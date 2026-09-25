@@ -199,22 +199,6 @@ class BrainAgent:
             self._context.on_request = self._on_request  # the monitor renders the exact request body
             self._context.on_reply = self._on_reply
 
-    def set_model(self, name: str) -> bool:
-        """Point the next turn at a different Gemini model; False if unreachable.
-
-        The turn in flight keeps the model it was sent with — its request is
-        already on the wire.
-        """
-        if self._context is None or not name.strip():
-            return False
-        self._context.model = name.strip()
-        self._logger.info(f"[Brain] Model switched to {name.strip()} (from the next turn)")
-        return True
-
-    @property
-    def model(self) -> str:
-        return self._context.model if self._context is not None else self._config.gemini_model
-
     def set_timezone(self, name: str) -> bool:
         """Point the status-line clock at an IANA zone ("" = the host's own); False if unknown."""
         zone = resolve_timezone(name)

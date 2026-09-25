@@ -190,12 +190,6 @@ class BrainClientNode(Node):
                     f"[BrainClient] Reply order: {'speak, then act' if param.value else 'act, then speak'}"
                 )
                 continue
-            if param.name == "gemini_model":
-                if self.brain.set_model(str(param.value)):
-                    continue
-                return SetParametersResult(
-                    successful=False, reason="the brain has no Gemini transport, or the model name was empty"
-                )
             if param.name == "timezone":
                 if self.brain.set_timezone(str(param.value)):
                     continue

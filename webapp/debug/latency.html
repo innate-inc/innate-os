@@ -239,13 +239,8 @@
   <h2>Live configuration</h2>
   <div class="row">
     <label class="status">brain model
-      <input id="cfg-model" class="mono" size="20" list="model-presets" placeholder="gemini-…">
-      <datalist id="model-presets">
-        <option value="gemini-3.6-flash"></option>
-        <option value="gemini-3.6-pro"></option>
-        <option value="gemini-2.5-flash"></option>
-        <option value="gemini-2.5-pro"></option>
-      </datalist>
+      <input id="cfg-model" class="mono" size="26" list="model-presets" placeholder="vendor:name">
+      <datalist id="model-presets"></datalist>
     </label>
     <label class="status">STT
       <select id="cfg-backend">
@@ -404,6 +399,7 @@
 </div>
 
 <script type="module">
+import { MODEL_OPTIONS } from "../js/models.js";
 import { ros } from "/js/rosClient.js";
 import { initTtsAudio } from "/js/ttsAudio.js";
 
@@ -1362,7 +1358,7 @@ function captureSvg({ runs, span, t1, why, config, zeroAt = null }) {
   const x = (t) => CAP.pad + CAP.nameW + ((t - t0) / span) * plotW;
 
   const meta = [
-    ["brain model", config.gemini_model ?? "unknown"],
+    ["brain model", config.llm_model ?? "unknown"],
     ["STT backend", config.stt_backend ?? "unknown"],
     ["VAD", `${config.stt_vad_engine ?? "?"} · ${config.stt_vad_silence_secs ?? "?"}s silence · threshold ${config.stt_vad_threshold ?? "?"}`],
     ["reply order", config.speak_before_tools ? "speak, then act" : "act, then speak"],
@@ -1474,7 +1470,7 @@ function download(blob, name) {
 
 /** A filename that says what it is without opening it. */
 const captureName = (pin, ext) =>
-  `latency-${(pin.config.gemini_model ?? "model").replace(/[^\w.-]/g, "")}-` +
+  `latency-${(pin.config.llm_model ?? "model").replace(/[^\w.-]/g, "")}-` +
   `${(pin.config.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}-` +
   `${(pin.note || "").trim().replace(/[^\w-]+/g, "_").slice(0, 24) || `pin${pin.id}`}.${ext}`;
 
@@ -1522,7 +1518,7 @@ function pinStats(pin) {
 function pinConfigLine(pin) {
   const c = pin.config;
   return [
-    c.gemini_model ?? "model unknown",
+    c.llm_model ?? "model unknown",
     c.stt_backend ?? "stt unknown",
     c.stt_vad_engine ? `${c.stt_vad_engine} vad` : null,
     c.stt_vad_silence_secs != null ? `${c.stt_vad_silence_secs}s silence` : null,
@@ -1613,7 +1609,7 @@ const PARAM_TYPE = { bool: 1, int: 2, float: 3, string: 4 };
 
 /** @type {{node: string, name: string, type: string, el: string}[]} */
 const CONFIG_KNOBS = [
-  { node: BRAIN_NODE, name: "gemini_model", type: "string", el: "cfg-model" },
+  { node: BRAIN_NODE, name: "llm_model", type: "string", el: "cfg-model" },
   { node: STT_NODE, name: "stt_backend", type: "string", el: "cfg-backend" },
   { node: STT_NODE, name: "stt_vad_engine", type: "string", el: "cfg-vad-engine" },
   { node: STT_NODE, name: "stt_vad_silence_secs", type: "float", el: "cfg-silence" },
@@ -1621,6 +1617,10 @@ const CONFIG_KNOBS = [
   { node: BRAIN_NODE, name: "speak_before_tools", type: "bool", el: "cfg-speak-first" },
   { node: BRAIN_NODE, name: "follow_up_after_silent_call", type: "bool", el: "cfg-follow-up" },
 ];
+
+$("model-presets").replaceChildren(
+  ...MODEL_OPTIONS.map((m) => Object.assign(document.createElement("option"), { value: m.value, label: m.label })),
+);
 
 /** Every control reports a string; a bool knob's is "true"/"false". */
 const knobValue = (knob) => (knob.type === "bool" ? $(knob.el).value === "true" : $(knob.el).value.trim());
@@ -1703,7 +1703,7 @@ function renderOrderNote() {
 function renderConfigLine() {
   const c = liveConfig;
   const parts = [];
-  if (c.gemini_model) parts.push(c.gemini_model);
+  if (c.llm_model) parts.push(c.llm_model);
   if (c.stt_backend) parts.push(c.stt_backend);
   if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
   if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
@@ -1958,7 +1958,7 @@ if (new URLSearchParams(location.search).has("demo")) {
   for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra }, false);
   clockKnown = true;
   liveConfig = {
-    gemini_model: "gemini-3.6-flash",
+    llm_model: "google:gemini-3.6-flash",
     stt_backend: "elevenlabs_batch",
     stt_vad_engine: "silero",
     stt_vad_silence_secs: 0.5,

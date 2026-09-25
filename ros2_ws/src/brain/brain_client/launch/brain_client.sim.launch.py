@@ -64,7 +64,7 @@ def generate_launch_description():
         # renames EVERY node the process creates — the service-call node, the memory
         # search server, skill helpers — to this one name. Three nodes then answer
         # /brain_client_node/set_parameters, and the two that never declared
-        # gemini_model reject the write as undeclared. The executable already names
+        # llm_model reject the write as undeclared. The executable already names
         # itself; the remap only ever collided.
         parameters=[
             {
