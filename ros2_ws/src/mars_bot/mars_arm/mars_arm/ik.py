@@ -24,8 +24,11 @@ class KDLIKNode(Node):
     # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
     # as-is instead of being outvoted by another seed's marginally better fit.
     CONTINUITY_SCORE = 0.005
-    # Radians past a URDF limit still accepted: solver noise, not a real overrun.
-    LIMIT_SLACK = 0.01
+    # How far clamping to the joint limits may move the solved pose. drop_in_box
+    # releases were tuned against the driver's silent clamp and need up to this;
+    # near the fold, wrap-around branches clamp 7+ cm away and must be refused.
+    CLAMP_POS_TOLERANCE_M = 0.03
+    CLAMP_ROT_TOLERANCE_RAD = 0.30
 
     def __init__(self):
         super().__init__("kdl_ik_from_file")
@@ -83,8 +86,8 @@ class KDLIKNode(Node):
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
 
-        # LMA ignores joint limits, and the driver clamps an overrun silently:
-        # the arm would land somewhere nobody asked for.
+        # LMA ignores joint limits, and the driver clamps an overrun silently,
+        # so every solution is clamped and judged here, where it is visible.
         self.joint_limits = [
             (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
             for name in self.joint_names
@@ -169,35 +172,40 @@ class KDLIKNode(Node):
             self.fk_pub.publish(pose_msg)
 
     def _try_ik_with_seed(self, seed: kdl.JntArray, target_frame: kdl.Frame):
-        """Try IK from a given seed. Returns (success, q_out, score) or (False, None, inf).
-        Score is the Cartesian error (position + orientation distance from target).
+        """Try IK from a given seed. Returns (success, q_held, score) or (False, None, inf):
+        q_held is the solution clamped to the joint limits, and score its Cartesian
+        error (position + 0.1 * orientation) from the target.
         """
         q_out = kdl.JntArray(self.chain.getNrOfJoints())
         ik_result = self.ik_solver.CartToJnt(seed, target_frame, q_out)
 
         # Accept successful results and "close enough" warnings
-        if ik_result >= 0 or ik_result in (-100, -101):
-            # Compute FK on solution to measure actual Cartesian error
-            fk_frame = kdl.Frame()
-            self.fksolver.JntToCart(q_out, fk_frame)
+        if ik_result < 0 and ik_result not in (-100, -101):
+            return False, None, float("inf")
 
-            # Position error (Euclidean distance)
-            pos_err = (target_frame.p - fk_frame.p).Norm()
+        q_held = self._clamped(q_out)
+        held = self._fk(q_held)
+        clamp_pos, clamp_rot = self._pose_error(self._fk(q_out), held)
+        if clamp_pos > self.CLAMP_POS_TOLERANCE_M or clamp_rot > self.CLAMP_ROT_TOLERANCE_RAD:
+            return False, None, float("inf")
 
-            # Orientation error (angle between rotations)
-            rot_diff = target_frame.M.Inverse() * fk_frame.M
-            angle_err = rot_diff.GetRotAngle()[0]  # returns (angle, axis)
+        pos_err, angle_err = self._pose_error(target_frame, held)
+        return True, q_held, pos_err + 0.1 * angle_err
 
-            # Combined score (weight orientation error, since it's in radians)
-            score = pos_err + 0.1 * abs(angle_err)
-            return True, q_out, score
-        return False, None, float("inf")
+    def _clamped(self, q: kdl.JntArray) -> kdl.JntArray:
+        held = kdl.JntArray(q.rows())
+        for i, (lower, upper) in enumerate(self.joint_limits):
+            held[i] = min(max(self._normalize_angle(q[i]), lower), upper)
+        return held
 
-    def _within_limits(self, q: kdl.JntArray) -> bool:
-        return all(
-            lower - self.LIMIT_SLACK <= self._normalize_angle(q[i]) <= upper + self.LIMIT_SLACK
-            for i, (lower, upper) in enumerate(self.joint_limits)
-        )
+    def _fk(self, q: kdl.JntArray) -> kdl.Frame:
+        frame = kdl.Frame()
+        self.fksolver.JntToCart(q, frame)
+        return frame
+
+    @staticmethod
+    def _pose_error(a: kdl.Frame, b: kdl.Frame) -> tuple[float, float]:
+        return (a.p - b.p).Norm(), abs((a.M.Inverse() * b.M).GetRotAngle()[0])
 
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
@@ -243,9 +251,6 @@ class KDLIKNode(Node):
 
         for seed_name, seed in seeds:
             success, q_out, score = self._try_ik_with_seed(seed, target_frame)
-            if success and not self._within_limits(q_out):
-                self.get_logger().debug(f"IK ({seed_name} seed) solution violates joint limits — rejected")
-                success = False
             if success and score < best_score:
                 best_solution = q_out
                 best_score = score
