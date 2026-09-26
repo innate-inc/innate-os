@@ -399,6 +399,32 @@ _migrate_llm_settings() {
     fi
 }
 
+_has_service_key() {
+    [ -r "$1" ] && grep -qE '^INNATE_SERVICE_KEY=.+' "$1"
+}
+
+# 0.8 stopped reading service_key as a ROS parameter (rosbridge can read parameters):
+# UniNavid, the logger and the training node take INNATE_SERVICE_KEY from the
+# environment and abort without it. The value is moved, never left in a comment.
+_migrate_service_key_setting() {
+    local repo="$1"
+    local settings="$repo/config/settings.yaml" env_file="$repo/.env"
+    [ -f "$settings" ] || return 0
+    local key
+    key=$(sed -nE "s/^[[:space:]]*service_key:[[:space:]]*[\"']?([^\"'#[:space:]]+).*$/\1/p" "$settings" | tail -n1)
+    [ -n "$key" ] || return 0
+    if _has_service_key "$env_file" || _has_service_key /etc/innate.env; then
+        _mig_log "WARNING: settings.yaml set service_key, which 0.8 no longer reads — commented out; the INNATE_SERVICE_KEY already in the environment is used."
+    else
+        [ -f "$env_file" ] && sed -i -E '/^INNATE_SERVICE_KEY=[[:space:]]*$/d' "$env_file"
+        [ -s "$env_file" ] && [ -n "$(tail -c1 "$env_file")" ] && echo >> "$env_file"
+        (umask 077; printf 'INNATE_SERVICE_KEY=%s\n' "$key" >> "$env_file")
+        _mig_chown "$env_file"
+        _mig_log "WARNING: settings.yaml set service_key, which 0.8 no longer reads — moved it to .env as INNATE_SERVICE_KEY."
+    fi
+    sed -i -E 's|^([[:space:]]*)service_key:.*$|\1# service_key: removed in 0.8, the key is INNATE_SERVICE_KEY in .env|' "$settings"
+}
+
 run_user_data_migrations() {
     local repo="${1:?run_user_data_migrations: repo dir required}"
     _migrate_dir_into_workspace "$repo" agents     custom_agents
@@ -412,6 +438,7 @@ run_user_data_migrations() {
     _migrate_nav_state          "$repo"
     _migrate_stt_settings       "$repo"
     _migrate_llm_settings       "$repo"
+    _migrate_service_key_setting "$repo"
 }
 
 # Execute when run directly (not when sourced).
