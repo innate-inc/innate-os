@@ -120,8 +120,9 @@ uv run lerobot-teleoperate --robot.type=mars --robot.external_commands=true \
     --teleop.type=mars_passthrough --display_data=true
 ```
 
-A [Rerun](https://rerun.io/) window opens with both camera streams and live joint plots. Drive
-the robot from the phone app or the web app and watch them move. The robot's log says
+Your terminal logs `Connected to the MARS bridge at 192.168.1.42`: check it is the robot you
+meant. A [Rerun](https://rerun.io/) window opens with both camera streams and live joint plots.
+Drive the robot from the phone app or the web app and watch them move. The robot's log says
 `LeRobot client connected`. Stop with Ctrl+C.
 
 ### 5. Log in to Hugging Face
