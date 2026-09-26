@@ -1,0 +1,283 @@
+# Innate OS — tunable parameter overrides (native ROS 2 params).
+#
+# This is the single place to tune robot parameters. ROS layers this file on top of
+# each node's own config (last-wins), so anything you set here beats the package default.
+#
+# HOW TO USE: uncomment a whole stanza — the `node:`, `ros__parameters:`, and the value
+# line(s) together. (Select the block and hit your editor's comment-toggle.) Leave the
+# rest commented; an all-commented file is treated as "no overrides".
+#
+# `/**` applies to every node that declares the parameter; a named section targets one node.
+# Use decimals for float values (e.g. 0.4, not 4) so ROS keeps them as floats.
+#
+# config/settings.yaml is auto-created from this template on update; your edits are never
+# overwritten. Secrets and cloud endpoint URLs live in .env (they aren't ROS params, so not
+# here); TTS voice and extra agent/skill dirs are tunables and live in this file.
+
+# ── Global knobs (`/**` — apply to every node that declares the parameter) ──
+# All `/**` settings share ONE block: YAML keeps only the last `/**:` key, so a
+# second `/**:` stanza would silently drop the first. Uncomment `/**:` and
+# `ros__parameters:` once, then uncomment whichever groups below you want.
+#
+# Driving speed — teleop and autonomy are capped independently:
+#   motion_control = manual driving — the joystick, keyboard & app scale to it.
+#   nav            = autonomous nav2 — the nav remap maps it onto nav2's planners +
+#                    velocity smoother.
+# Tune them separately, e.g. turn nav down for safety without slowing manual driving.
+# Neither is the hard ceiling: bringup's `safety` clamp (under `bringup:` below) caps
+# every /cmd_vel at the motors. Keep that safety clamp >= motion_control and nav.
+# /**:
+#   ros__parameters:
+#     motion_control:               # teleop / manual driving
+#       max_speed: 0.4              # m/s, top translational speed
+#       max_angular_speed: 1.0      # rad/s, top rotational speed
+#       speed_scale: 1.0            # speed-mode multiplier on the two caps above. Clamped to
+#                                   # the range the robot's own preset table spans — currently
+#                                   # 0.35 (Slow) to 2.0 (Mad), so above 1.0 it exceeds these
+#                                   # caps and bringup's safety clamp becomes the real ceiling.
+#                                   # The app/webapp speed picker writes this live; setting
+#                                   # it here only changes what the robot boots into.
+#     nav:                          # autonomous (nav2)
+#       max_speed: 0.45             # m/s, top translational speed
+#       max_angular_speed: 0.6      # rad/s, top rotational speed
+#     inflation_layer:              # costmap obstacle inflation (every costmap)
+#       inflation_radius: 0.3       # metres of inflation around obstacles
+#       cost_scaling_factor: 10.0   # higher = cost decays faster with distance
+#     # TTS voice for BOTH speech paths (brain chat-TTS + realtime voice loop).
+#     # The Settings page applies it live; over SSH the same is
+#     #   ros2 param set /brain_client_node cartesia_voice_id <id>
+#     # and setting it here only changes what the robot boots into.
+#     cartesia_voice_id: "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
+
+# ── Teleop: joystick ──────────────────────────────────────────────────
+# joystick_controller:
+#   ros__parameters:
+#     joystick:
+#       slow_mode_factor: 0.25      # speed multiplier while the slow-mode button is held
+
+# ── Teleop: drive ramps (app / webapp joystick) ───────────────────────
+# Scoped to mars_app, not `/**`: the speed *caps* above are shared by every manual input
+# (app, gamepad, keyboard) because "how fast a human may drive" is one number, but the
+# ramps are not. joystick_controller declares the same key names for its own smoother, so
+# a `/**` override would retune the gamepad too.
+#
+# The caps are the ceiling, these are the rate of approach to it.
+#
+# The jerk limits are a floor, not a target: each is raised to at least
+# max_deceleration / (2 * time_constant) for its axis, because below that the robot arrives
+# at rest still braking and kicks after it has stopped. Set them higher to allow a snappier
+# change of acceleration; setting them lower has no effect. Not offered in the Settings
+# page for that reason — the relation is not something three independent fields can hold.
+#
+# settle_epsilon is a hardware floor, not a numerical one: bringup sends int(v * 100), so
+# 0.01 is one wire count and anything finer is motion the motors cannot express. It is the
+# one knob here that does NOT scale with speed mode.
+#
+# Unlike mars_arm's max_jerk below, 0 does NOT mean "disabled" — every knob is divided by
+# or clamped to, so 0 breaks the ramp. Non-positive and non-finite values fall back to the
+# compiled default and are logged. `dt` is read once at startup; the rest are live-tunable
+# through set_parameters.
+# mars_app:
+#   ros__parameters:
+#     motion_control:
+#       dt: 0.02                    # s, smoother tick (0.02 = 50 Hz). Startup only.
+#       speed_time_constant: 0.40   # s, first-order lag, linear; higher = softer
+#       angular_speed_time_constant: 0.10   # s, same for yaw, separate so the angular
+#                                   # ramp can be tightened without changing linear feel
+#       max_acceleration: 0.2       # m/s^2, speeding up
+#       max_deceleration: 1.2       # m/s^2, slowing down; keep above max_acceleration
+#       max_angular_acceleration: 2.0       # rad/s^2, turning harder
+#       max_angular_deceleration: 6.0       # rad/s^2, straightening out; runs harder than
+#                                   # the linear pair, a slow yaw ramp keeps turning after
+#                                   # the operator stopped asking
+#       max_jerk: 10.0              # m/s^3, floor on how fast the accel limits may change
+#       max_angular_jerk: 100.0     # rad/s^3, same for the angular pair
+#       settle_epsilon: 0.01        # m/s and rad/s, snap to target below this
+#       input_timeout: 0.4          # s without a joystick message before ramping to a stop
+#     # Heading hold — resists being turned off-course while driving straight. Does not
+#     # restore heading lost earlier; the operator corrects their own overshoot. Residual
+#     # drift is roughly disturbance / (1 + gain * leak).
+#     heading_hold:
+#       gain: 5.0                   # rad/s of correction per rad of error; 0 disables
+#       leak: 0.1                   # s of memory; 0 makes it an absolute heading lock
+#       max_correction: 1.0         # rad/s ceiling on the correction
+#       min_speed: 0.01             # m/s below which the hold stays off — heading is
+#                                   # meaningless while creeping. Raise the acceleration
+#                                   # limit and this is crossed sooner
+#       straight_yaw: 0.05          # rad/s of requested yaw below which we count as
+#                                   # driving straight; above it the hold releases
+#       deadband: 0.01              # rad of heading error to ignore. One /odom quantum,
+#                                   # so below this the loop would chatter on the wire
+#       slew: 2.0                   # rad/s^2 limit on the correction itself, so engaging
+#                                   # and dropping out are not steps
+#     # Mad Mars states its accelerations outright instead of scaling them. Every other
+#     # mode is a multiplier on the caps, which works while modes differ only in how fast
+#     # they go — but Mad Mars wants 2.0 where scaling gives 0.4, and 3.0 where it gives 4.0.
+#     mad:
+#       max_acceleration: 2.0       # m/s^2, replaces the scaled limit in Mad mode
+#       max_angular_acceleration: 3.0   # rad/s^2, likewise
+
+# ── Battery thresholds + safety speed clamp (bringup) ─────────────────
+# bringup owns the final /cmd_vel clamp before the motors — the hardware safety ceiling
+# every velocity source (teleop, nav2, brain) passes through. It is a backstop, not the
+# driving feel, so keep it >= the motion_control / nav driving caps above. (battery and
+# safety share ONE bringup: block — uncomment the block once, then the groups you want.)
+# bringup:
+#   ros__parameters:
+#     battery:
+#       warning_percentage: 20      # low-battery warning level (%)
+#       critical_percentage: 10     # critical-battery level (%)
+#     safety:
+#       max_speed: 0.8              # m/s, hard /cmd_vel linear ceiling at the motors
+#       max_angular_speed: 2.5      # rad/s, hard /cmd_vel angular ceiling at the motors
+
+# ── Arm ───────────────────────────────────────────────────────────────
+# mars_arm:
+#   ros__parameters:
+#     max_jerk: 150.0               # rad/s^3 trajectory jerk limit (0 disables)
+
+# ── Camera: main (stereo; hardware only) ──────────────────────────────
+# Resolution is staged: the sensor captures the full side-by-side stereo frame at
+# width x height (must be a mode the sensor supports), the GPU downscales it to
+# publish_stereo_*, and each eye (half the stereo width) is resized to
+# publish_left_* — the size every ROS topic carries. publish_left_* above half the
+# publish_stereo size only upscales (no extra detail): for a sharper image, raise
+# width x height and publish_stereo_* together. Downstream consumers (depth,
+# brain, manipulation) follow the published size automatically; the teleop stream
+# size is separate (see webrtc_streamer below).
+# main_camera_driver:
+#   ros__parameters:
+#     width: 2560                   # capture width, both eyes combined (px)
+#     height: 720                   # capture height (px)
+#     publish_stereo_width: 1280    # stereo-frame downscale before the left/right split
+#     publish_stereo_height: 480
+#     publish_left_width: 640       # published per-eye image width (px)
+#     publish_left_height: 480      # published per-eye image height (px)
+#     fps: 15.0                     # camera frame rate
+#     jpeg_quality: 80              # JPEG compression quality (1-100)
+#     auto_exposure_mode: 0         # 0=hardware AE, 1=custom PID, 2=manual
+#     exposure: -1                  # manual exposure time (-1 = keep current; 1-10000)
+#     gain: -1                      # manual gain (-1 = keep current; 0-255)
+#     default_gain: 110             # gain used in auto-exposure mode (0-255)
+#     target_brightness: 128.0      # auto-exposure target brightness (0-255)
+#     ae_kp: 0.8                    # auto-exposure proportional gain
+
+# ── Camera: arm/wrist (hardware only) ─────────────────────────────────
+# arm_camera_driver:
+#   ros__parameters:
+#     width: 640                    # capture width (must be a mode the sensor supports)
+#     height: 480                   # capture height
+#     fps: 30.0                     # camera frame rate
+
+# ── Camera: teleop stream (WebRTC) ────────────────────────────────────
+# The size each camera is encoded at for the app/teleop video stream — incoming
+# frames are resized to it, independent of the published topic size above.
+# webrtc_streamer:
+#   ros__parameters:
+#     main_width: 640               # main-camera stream size (px)
+#     main_height: 480
+#     arm_width: 640                # arm-camera stream size (px)
+#     arm_height: 480
+
+# ── Manipulation (learned-skill execution) ────────────────────────────
+# chunk_size is fixed by the trained model. These are node-level (restart to apply);
+# only n_action_steps accepts a per-skill behavior_config override.
+# manipulation_server:
+#   ros__parameters:
+#     inference_hz: 25.0            # policy inference loop rate (Hz)
+#     speed: 1.5                    # action execution speed multiplier
+#     replay_base_speed_scale: 1.0  # base-speed scale for replay; 1.0 = play base back at full recorded speed
+#     learned_base_speed_scale: 1.0 # base-speed scale for the learned policy; 1.0 = full predicted speed
+#     n_action_steps: 0            # replan horizon; 0 = auto (min(40, chunk_size)), clamped to chunk_size
+#     temporal_ensemble_coeff: 0.0   # ACT action smoothing; 0 = disabled (default). 0.01 is a good value to enable it (pins n_action_steps to 1)
+
+# ── Localization (grid localizer) ─────────────────────────────────────
+# navigation_grid_localizer:
+#   ros__parameters:
+#     max_score_threshold: 0.3      # lower = stricter match required to accept a pose
+#     max_range: 12.0               # max lidar range used for matching (m)
+#     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
+
+# ── Brain runtime (local agent loop) ──────────────────────────────────
+# (Gemini credentials are connectivity and live in .env.) The TTS voice is global;
+# set it under /** above.
+# brain_client_node:
+#   ros__parameters:
+#     vertical_fov: 80.0            # camera vertical field of view (degrees)
+#     x_cam: 0.0197                 # camera forward offset from base_link (m)
+#     height_cam: 0.19663           # camera height above the floor (m)
+#     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
+#     send_arm_camera_image: true   # also send the arm wrist camera image to the model
+#     log_everything: true          # log every turn's full input
+#     gemini_model: "gemini-3.6-flash"
+#     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
+#     idle_turn_interval: 3.0       # seconds between looks when no skill is running
+#     supervision_turn_interval: 5.0  # seconds between looks while a skill runs
+
+# ── Voice & speech (voice loop) ───────────────────────────────────────
+# input_manager_node runs the voice / transcription loop; its model settings live
+# here. The TTS voice is shared globally — set it once under /** above (it
+# reaches both nodes; .env CARTESIA_VOICE_ID is the default).
+# stt_backend picks the transcription service; the default is "elevenlabs"
+# (Scribe realtime) — rollback is setting "elevenlabs_batch" here. Batch
+# backends cut utterances on the robot and send each one whole:
+# "elevenlabs_batch" (Scribe) or "gemini"; batch is also the automatic
+# fallback when the realtime socket will not come back.
+# "elevenlabs" streams over a warm WebSocket but endpoints with the same
+# local detector — measured 2026-08, vendor-side VAD is ~0.6 s slower and
+# trims words on this mic, so every backend endpoints locally.
+# stt_vad_engine picks "silero" (neural, ignores fan/motor noise) or "energy"
+# (bare RMS threshold, the pre-Silero behavior and the fallback if the model
+# can't load). stt_vad_threshold / stt_vad_silence_secs tune that local
+# endpointing for every backend; stt_energy_threshold only applies to the
+# energy engine.
+# stt_agc_max_db caps the software mic gain (slow AGC toward -6 dBFS peak; the
+# far-field capture runs ~30 dB quieter than the models want; 0.0 disables).
+# stt_filter_background_audio is Scribe realtime's server-side gate against
+# nearby conversations and ambient noise.
+# stt_keyterms is the vocabulary both batch backends bias toward — the robot's
+# name and the phrases it is given. Scribe takes them as a parameter (+20% per
+# transcription; [] turns biasing and the surcharge off), Gemini gets them in its
+# prompt. A term is under 50 characters, at most 5 words, and free of <>{}[]\ —
+# anything else is dropped with a warning rather than failing transcription.
+# The model knobs of the backends you aren't using are simply unused.
+input_manager_node:
+  ros__parameters:
+#     stt_backend: "elevenlabs"      # default; "elevenlabs_batch" is the rollback
+#     stt_vad_engine: "silero"
+#     stt_language: "en"
+#     stt_keyterms: ["MARS", "go forwards", "turn left"]   # [] disables biasing
+#     stt_energy_threshold: 0.01    # energy engine: RMS (0-1) that counts as speech
+    stt_vad_threshold: 0.2  # silero: lower = more sensitive to speech
+    stt_vad_silence_secs: 0.7  # silence that closes an utterance (every backend)
+#     stt_agc_max_db: 24.0          # software mic gain ceiling; 0.0 disables the AGC (a bare 0 is an int and rejected)
+#     stt_filter_background_audio: true     # Scribe realtime server-side noise gate
+#     elevenlabs_batch_stt_model: "scribe_v2"
+#     gemini_stt_model: "gemini-3.6-flash"
+#     elevenlabs_stt_model: "scribe_v2_realtime"
+
+# ── Vision-language navigation (UniNavid) ─────────────────────────────
+# (The cloud endpoint URL is connectivity and lives in .env as UNINAVID_WS_URL.)
+# UniNavid drives in discrete action bursts; forward_speed / turn_speed set how fast.
+# This is UniNavid's own autonomous-speed knob — separate from nav (nav2) and
+# motion_control (teleop). The bringup `safety` /cmd_vel clamp is still the ceiling.
+# uninavid_node:
+#   ros__parameters:
+#     forward_speed: 0.3                    # m/s, FORWARD action speed
+#     turn_speed: 0.8                       # rad/s, LEFT / RIGHT action speed
+#     cmd_duration_sec: 0.1                 # how long each movement command runs
+#     image_send_hz: 49.0                   # camera frames sent to the nav model per second
+#     consecutive_stops_to_complete: 30     # stop predictions in a row before "reached"
+#     cmd_publish_hz: 50.0                  # cmd_vel republish rate during a move
+#     poll_period_sec: 0.02                 # action-loop poll interval
+
+# Extra agent/skill directories (script_paths.extra_agent_dirs / extra_skill_dirs)
+# were removed in 0.7: agents and skills load only from workspace/. To add a
+# skill pack, drop its directory into workspace/ — it is picked up (and
+# hot-reloaded) without a restart. A pack that must stay elsewhere on disk is
+# symlinked in instead, and behaves the same:
+#     ln -s /opt/team/skills ~/innate-os/workspace/team_skills
+# Dirs a 0.6.x settings.yaml configured are symlinked into workspace/
+# automatically on update (scripts/update/migrate_user_data.sh): skill dirs as
+# custom_skills/ subpackages (keeping their local/<name> skill ids), agent-dir
+# entries file-by-file into custom_agents/.
