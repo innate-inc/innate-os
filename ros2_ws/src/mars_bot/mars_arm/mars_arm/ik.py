@@ -20,6 +20,14 @@ from urdf_parser_py.urdf import URDF
 from mars_arm.urdf import treeFromUrdfModel
 
 
+def _request_key(t: Twist) -> str:
+    """The request pose, echoed in every reply's frame_id: two clients share
+    /ik_delta and /ik_solution with no other correlation, and each must be
+    able to tell its own answer from the other's. Manipulation._solve_ik
+    builds the same string from the floats it sent."""
+    return f"{t.linear.x:.4f} {t.linear.y:.4f} {t.linear.z:.4f} {t.angular.x:.4f} {t.angular.y:.4f} {t.angular.z:.4f}"
+
+
 class KDLIKNode(Node):
     # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
     # as-is instead of being outvoted by another seed's marginally better fit.
@@ -210,6 +218,7 @@ class KDLIKNode(Node):
 
     def on_delta(self, delta: Twist):
         """Handle absolute target pose (sent via Twist message for compatibility)"""
+        key = _request_key(delta)
         # Create target frame from absolute pose values
         target_frame = kdl.Frame()
 
@@ -261,6 +270,11 @@ class KDLIKNode(Node):
                 f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
                 throttle_duration_sec=1.0,
             )
+            # An empty solution is the answer "unreachable": without it the
+            # asker learns nothing until its timeout.
+            reply = JointState()
+            reply.header.frame_id = key
+            self.joint_pub.publish(reply)
             return
 
         self.get_logger().debug(
@@ -270,6 +284,7 @@ class KDLIKNode(Node):
         # publish JointState
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
+        js.header.frame_id = key
         js.name = self.joint_names
         js.position = [self._normalize_angle(best_solution[i]) for i in range(best_solution.rows())]
         self.joint_pub.publish(js)
