@@ -7624,6 +7624,7 @@ select.skill-input {
 .agent-cockpit {
   --agent-dock-width: 360px;
   --agent-dock-gutter: 18px;
+  --agent-view-toggle-width: 136px;
   /* Inset of every floating control from the feed frame's edge. The camera
      strip set the precedent; the rest match it. */
   --agent-overlay-inset: 14px;
@@ -8883,8 +8884,8 @@ select.skill-input {
 }
 
 /* Where Inspect Brain can open the monitor: its content lines up with the pill on the left and
-   ends where the toggle does on the right, clear of the docked panel. The toggle moves up to
-   the pill's band, which is empty on the right, instead of covering the vitals row. */
+   ends where the toggle does on the right, clear of the docked panel. The toggle keeps its
+   corner in both views, so the monitor's last row stops short of it. */
 @media (min-width: 1281px) {
   .agent-cockpit .agent-brain {
     padding-right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter) + var(--agent-overlay-inset));
@@ -8892,9 +8893,8 @@ select.skill-input {
     padding-left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
   }
 
-  .agent-cockpit.brain-open .agent-stage-view-toggle {
-    top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) + 3px); /* centred on the 62px pill */
-    bottom: auto;
+  .agent-cockpit .agent-brain .br-panel-vitals {
+    margin-right: calc(var(--agent-view-toggle-width) + 12px); /* the grid's gap */
   }
 }
 
@@ -9852,7 +9852,7 @@ select.skill-input {
 
 @media (min-width: 641px) {
   .agent-cockpit .agent-stage-view-toggle {
-    width: 136px;
+    width: var(--agent-view-toggle-width);
     justify-content: center;
   }
 }
