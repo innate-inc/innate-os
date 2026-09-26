@@ -727,13 +727,15 @@ class BrainClientNode(Node):
 
     def _svc_get_directives(self, request, response):
         details = []
+        unlisted = []
         # Load-time broken agents, plus any that pass loading but fail while
         # this response is built — those roster broken too instead of silently
         # dropping out of the picker (the vanishing this field exists to end).
         broken = dict(self.state.broken_agents)
         for agent_id, directive in self.state.directives.items():
             try:
-                details.append(
+                listed = directive.listed()
+                (details if listed else unlisted).append(
                     {
                         "id": directive.id,
                         "display_name": directive.display_name,
@@ -741,7 +743,7 @@ class BrainClientNode(Node):
                         "prompt": directive.get_prompt(),
                         "skills": directive.skill_ids(),
                         "source": getattr(directive, "source", "user"),
-                        "listed": directive.listed(),
+                        "listed": listed,
                         **studio_fields(directive),
                     }
                 )
@@ -768,6 +770,9 @@ class BrainClientNode(Node):
                         {"id": name, "display_name": name, "load_error": error, **broken_agent_fields(name)}
                         for name, error in sorted(broken.items())
                     ],
+                    # Agents people may not pick (a story fixture the web app arms itself),
+                    # kept here for the same reason as broken_agents.
+                    "unlisted_agents": unlisted,
                 }
             ),
         ]

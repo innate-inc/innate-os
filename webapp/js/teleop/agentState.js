@@ -130,7 +130,9 @@ function createAgentState() {
         meta = {};
       }
       /** @type {any[]} */
-      const list = Array.isArray(agentsRaw) ? agentsRaw : (agentsRaw && agentsRaw.agents) || [];
+      const listed = Array.isArray(agentsRaw) ? agentsRaw : (agentsRaw && agentsRaw.agents) || [];
+      const unlisted = Array.isArray(meta?.unlisted_agents) ? meta.unlisted_agents : [];
+      const list = [...listed, ...unlisted];
       const agents = list
         .filter((a) => a && a.id)
         .map((a) => ({
