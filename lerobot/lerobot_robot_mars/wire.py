@@ -11,8 +11,10 @@ holds them equal. The bridge streams only while it hears from a client, so every
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+from socket import gethostbyname
 from typing import Any
 
 import zmq
@@ -31,11 +33,31 @@ COMMAND_PREFIX = "cmd."
 HEARTBEAT_S = 0.5
 # The bridge streams at 30 Hz; asking this long with no answer means it is gone, not slow.
 SILENT_AFTER_S = 1.0
+# Every robot answers to it until renamed, so on a shared network it names whichever one got there first.
+FALLBACK_HOST = "mars.local"
+
+logger = logging.getLogger(__name__)
 
 
 def default_host() -> str:
     """The robot's hostname: MARS_HOST if set, else the web app's default."""
-    return os.environ.get("MARS_HOST", "mars.local")
+    return os.environ.get("MARS_HOST", FALLBACK_HOST)
+
+
+def announce(remote_ip: str) -> None:
+    """Say which robot answered, so a client on a network of several never drives one unknowingly."""
+    try:
+        address = gethostbyname(remote_ip)
+    except OSError:
+        address = remote_ip
+    where = remote_ip if address == remote_ip else f"{remote_ip} ({address})"
+    logger.info("Connected to the MARS bridge at %s", where)
+    if remote_ip == FALLBACK_HOST:
+        logger.warning(
+            "%s is whichever robot answers to that name first. With more than one MARS on this network, "
+            "set MARS_HOST to the robot's IP address.",
+            FALLBACK_HOST,
+        )
 
 
 Header = dict[str, Any]
@@ -103,6 +125,7 @@ class Link:
             self.heartbeat()
             message = self.latest(timeout_ms=200)
             if message is not None:
+                announce(self._remote_ip)
                 return message
         self.close()
         raise DeviceNotConnectedError(
