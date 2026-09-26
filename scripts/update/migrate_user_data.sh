@@ -403,6 +403,37 @@ _has_service_key() {
     [ -r "$1" ] && grep -qE '^INNATE_SERVICE_KEY=.+' "$1"
 }
 
+# The last service_key anywhere in settings.yaml. PyYAML, not a pattern: a quoted value may
+# hold a '#'. Exit 3 = no PyYAML, 4 = unparseable.
+_settings_service_key() {
+    python3 - "$1" <<'PY'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.exit(3)
+try:
+    with open(sys.argv[1]) as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    sys.exit(4)
+
+
+def keys(node):
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == "service_key" and value not in (None, ""):
+                yield str(value)
+            else:
+                yield from keys(value)
+
+
+found = list(keys(data))
+print(found[-1] if found else "")
+PY
+}
+
 # 0.8 stopped reading service_key as a ROS parameter (rosbridge can read parameters):
 # UniNavid, the logger and the training node take INNATE_SERVICE_KEY from the
 # environment and abort without it. The value is moved, never left in a comment.
@@ -410,17 +441,21 @@ _migrate_service_key_setting() {
     local repo="$1"
     local settings="$repo/config/settings.yaml" env_file="$repo/.env"
     [ -f "$settings" ] || return 0
+    grep -Eq '^[[:space:]]*service_key:' "$settings" || return 0
     local key
-    key=$(sed -nE "s/^[[:space:]]*service_key:[[:space:]]*[\"']?([^\"'#[:space:]]+).*$/\1/p" "$settings" | tail -n1)
-    [ -n "$key" ] || return 0
-    if _has_service_key "$env_file" || _has_service_key /etc/innate.env; then
-        _mig_log "WARNING: settings.yaml set service_key, which 0.8 no longer reads — commented out; the INNATE_SERVICE_KEY already in the environment is used."
-    else
-        [ -f "$env_file" ] && sed -i -E '/^INNATE_SERVICE_KEY=[[:space:]]*$/d' "$env_file"
+    if ! key=$(_settings_service_key "$settings"); then
+        _mig_log "WARNING: settings.yaml sets service_key, which 0.8 no longer reads, and it could not be parsed — move it to .env as INNATE_SERVICE_KEY by hand."
+        return 0
+    fi
+    # .env layers over /etc/innate.env, so an empty line there hides the system key.
+    [ -f "$env_file" ] && sed -i -E '/^INNATE_SERVICE_KEY=[[:space:]]*$/d' "$env_file"
+    if [ -n "$key" ] && ! _has_service_key "$env_file" && ! _has_service_key /etc/innate.env; then
         [ -s "$env_file" ] && [ -n "$(tail -c1 "$env_file")" ] && echo >> "$env_file"
         (umask 077; printf 'INNATE_SERVICE_KEY=%s\n' "$key" >> "$env_file")
         _mig_chown "$env_file"
         _mig_log "WARNING: settings.yaml set service_key, which 0.8 no longer reads — moved it to .env as INNATE_SERVICE_KEY."
+    else
+        _mig_log "WARNING: settings.yaml set service_key, which 0.8 no longer reads — commented out; the INNATE_SERVICE_KEY already in the environment is used."
     fi
     sed -i -E 's|^([[:space:]]*)service_key:.*$|\1# service_key: removed in 0.8, the key is INNATE_SERVICE_KEY in .env|' "$settings"
 }
