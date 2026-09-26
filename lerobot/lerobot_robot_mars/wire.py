@@ -33,15 +33,17 @@ COMMAND_PREFIX = "cmd."
 HEARTBEAT_S = 0.5
 # The bridge streams at 30 Hz; asking this long with no answer means it is gone, not slow.
 SILENT_AFTER_S = 1.0
-# Every robot answers to it until renamed, so on a shared network it names whichever one got there first.
-FALLBACK_HOST = "mars.local"
+NO_HOST = (
+    "Set MARS_HOST to the robot's IP address first (run `hostname -I` on the robot), e.g. "
+    "`export MARS_HOST=192.168.1.42`; --robot.remote_ip / --teleop.remote_ip set it for one command."
+)
 
 logger = logging.getLogger(__name__)
 
 
 def default_host() -> str:
-    """The robot's hostname: MARS_HOST if set, else the web app's default."""
-    return os.environ.get("MARS_HOST", FALLBACK_HOST)
+    """MARS_HOST, or "" when unset: there is no robot name that resolves on every network."""
+    return os.environ.get("MARS_HOST", "")
 
 
 def announce(remote_ip: str) -> None:
@@ -52,12 +54,6 @@ def announce(remote_ip: str) -> None:
         address = remote_ip
     where = remote_ip if address == remote_ip else f"{remote_ip} ({address})"
     logger.info("Connected to the MARS bridge at %s", where)
-    if remote_ip == FALLBACK_HOST:
-        logger.warning(
-            "%s is whichever robot answers to that name first. With more than one MARS on this network, "
-            "set MARS_HOST to the robot's IP address.",
-            FALLBACK_HOST,
-        )
 
 
 Header = dict[str, Any]
@@ -108,6 +104,8 @@ class Link:
         return self._sub is not None
 
     def open(self, timeout_s: float) -> Message:
+        if not self._remote_ip:
+            raise DeviceNotConnectedError(NO_HOST)
         context = zmq.Context()
         push = context.socket(zmq.PUSH)
         push.setsockopt(zmq.LINGER, 0)
