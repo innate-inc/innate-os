@@ -107,12 +107,11 @@ reliable choice:
 export MARS_HOST=192.168.1.42
 ```
 
-To find the address, run `hostname -I` on the robot, or `ping mars.local` from your computer.
-The hostname you type into the browser for the web app, such as `mars.local`, works too, but
-`.local` names do not resolve on every network.
+To find the address, run `hostname -I` on the robot.
 
-Every command reads `MARS_HOST`. `--robot.remote_ip=…` and `--teleop.remote_ip=…` override it
-for a single command.
+Every command reads `MARS_HOST` and refuses to start without it. `--robot.remote_ip=…` and
+`--teleop.remote_ip=…` override it for a single command. Once connected, each command logs the
+robot it reached.
 
 ### 4. Check the connection
 
@@ -121,8 +120,9 @@ uv run lerobot-teleoperate --robot.type=mars --robot.external_commands=true \
     --teleop.type=mars_passthrough --display_data=true
 ```
 
-A [Rerun](https://rerun.io/) window opens with both camera streams and live joint plots. Drive
-the robot from the phone app or the web app and watch them move. The robot's log says
+Your terminal logs `Connected to the MARS bridge at 192.168.1.42`: check it is the robot you
+meant. A [Rerun](https://rerun.io/) window opens with both camera streams and live joint plots.
+Drive the robot from the phone app or the web app and watch them move. The robot's log says
 `LeRobot client connected`. Stop with Ctrl+C.
 
 ### 5. Log in to Hugging Face
@@ -377,7 +377,7 @@ picks the angle and holds the head there:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--robot.remote_ip` | `$MARS_HOST`, else `mars.local` | Where the robot is |
+| `--robot.remote_ip` | `$MARS_HOST` (required) | Where the robot is |
 | `--robot.external_commands` | `false` | `true` while you teleoperate the usual way: LeRobot records your commands and sends none of its own |
 | `--robot.head_angle_deg` | from the dataset | See [Head angle](#head-angle) |
 | `--robot.hold_head` | `true` | Keep the head at that angle for the whole session |
@@ -415,6 +415,7 @@ Swap `lawam` for the extra of the policy you want. `uv sync` puts the released v
 
 | Symptom | Cause and fix |
 |---|---|
+| `Set MARS_HOST to the robot's IP address first` | No robot address was given. Run `export MARS_HOST=<robot IP>` in this terminal, or pass `--robot.remote_ip=…`. |
 | `No 'obs' messages from the MARS bridge` | The robot is not reachable at `MARS_HOST`. Use its IP address, check you are on the same network, and look for the `LeRobot bridge listening` log line. |
 | `The MARS bridge sends no [...] frames` | That camera is not running on the robot. Check the camera drivers in `innate view`; recording now would store blank frames. |
 | `The MARS bridge ... stopped answering` | The robot rebooted, the network dropped, or innate-os restarted mid-session. Episodes saved before that are intact; reconnect and resume. |

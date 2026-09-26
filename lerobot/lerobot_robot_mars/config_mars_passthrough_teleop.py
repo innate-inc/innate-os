@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host
+from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host, require_host
 
 
 @TeleoperatorConfig.register_subclass("mars_passthrough")
@@ -23,3 +23,6 @@ class MarsPassthroughTeleopConfig(TeleoperatorConfig):
     port_observations: int = DEFAULT_PORT_OBSERVATIONS
     connect_timeout_s: float = 5.0
     poll_timeout_ms: int = 5
+
+    def __post_init__(self) -> None:
+        require_host(self.remote_ip)

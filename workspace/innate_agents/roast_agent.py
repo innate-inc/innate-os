@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+from innate_skills.arm.arm_move import ArmMove
+from innate_skills.arm.close_gripper import CloseGripper
+from innate_skills.arm.open_gripper import OpenGripper
+from innate_skills.drop_in_box import DropInBox
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.navigate_with_vision import NavigateWithVision
+from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
 from innate_skills.system.change_volume import ChangeVolume
 from innate_skills.turn_in_place import TurnInPlace
@@ -35,6 +40,11 @@ class RoastAgent(Agent):
             NavigateToPosition,
             SearchMemory,
             ChangeVolume,
+            PickAnyObject,
+            ArmMove,
+            OpenGripper,
+            CloseGripper,
+            DropInBox,
         ]
 
     def get_inputs(self) -> list[InputRef]:
