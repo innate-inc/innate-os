@@ -293,10 +293,12 @@
 .br-panel-vitals .br-spark {
   height: 52px;
 }
+/* Keeps the right end of the row even when a narrow row wraps it onto a line of its own. */
 .br-panel-vitals .br-gauge {
   flex: none;
   width: 220px;
   margin-top: 0;
+  margin-left: auto;
 }
 @media (max-width: 1280px) {
   .br-panel-vitals {
