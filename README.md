@@ -27,7 +27,7 @@
 ## Try it without a robot
 
 <p align="center">
-  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot in the browser" width="85%"></a>
+  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot in the browser" width="520"></a>
 </p>
 
 **[Try the live simulator →](https://sim.innate.bot)** — no install, no robot.
