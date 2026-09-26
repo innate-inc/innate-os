@@ -46,6 +46,13 @@ def default_host() -> str:
     return os.environ.get("MARS_HOST", "")
 
 
+def require_host(remote_ip: str) -> None:
+    """Refuse a config with no robot address, while the command line is parsed: before any
+    window, recording or dataset is set up."""
+    if not remote_ip:
+        raise ValueError(NO_HOST)
+
+
 def announce(remote_ip: str) -> None:
     """Say which robot answered, so a client on a network of several never drives one unknowingly."""
     try:
@@ -104,8 +111,6 @@ class Link:
         return self._sub is not None
 
     def open(self, timeout_s: float) -> Message:
-        if not self._remote_ip:
-            raise DeviceNotConnectedError(NO_HOST)
         context = zmq.Context()
         push = context.socket(zmq.PUSH)
         push.setsockopt(zmq.LINGER, 0)

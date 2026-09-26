@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from lerobot.robots.config import RobotConfig
 
-from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host
+from .wire import DEFAULT_PORT_ACTIONS, DEFAULT_PORT_OBSERVATIONS, default_host, require_host
 
 
 @RobotConfig.register_subclass("mars")
@@ -32,3 +32,7 @@ class MarsConfig(RobotConfig):
     # True while the phone app, the web app's teleop, or the leader arm drives the robot: send_action() is recorded but
     # not forwarded, so the client never echoes a stale command behind the operator.
     external_commands: bool = False
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        require_host(self.remote_ip)
