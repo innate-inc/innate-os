@@ -284,9 +284,11 @@
   margin-bottom: 0;
   grid-template-columns: repeat(4, minmax(84px, 108px));
 }
+/* The sparkline takes what the row has left, so the history gauge keeps its place at the end
+   of the row instead of wrapping under the title. */
 .br-panel-vitals .br-spark-wrap {
-  flex: 1 1 240px;
-  min-width: 160px;
+  flex: 1 1 0;
+  min-width: 120px;
 }
 .br-panel-vitals .br-spark {
   height: 52px;
