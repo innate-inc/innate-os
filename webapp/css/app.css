@@ -8759,8 +8759,8 @@ select.skill-input {
   .agent-cockpit .agent-telemetry-overlay {
     top: auto;
     right: auto;
-    bottom: var(--agent-dock-gutter);
-    left: var(--agent-dock-gutter);
+    bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
   }
 
   .agent-cockpit .agent-stage-view-toggle {
