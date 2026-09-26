@@ -8877,10 +8877,25 @@ select.skill-input {
 }
 
 /* The agent's pill floats over this layer's top-left corner and stays live in both views,
-   so the monitor starts below it — the way brain.css's right padding starts left of the
-   docked panel. The pill is 62px tall at its own inset, plus a gap. */
+   so the monitor starts below it. The pill is 62px tall at its own inset, plus a gap. */
 .agent-cockpit .agent-brain {
   padding-top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) + 74px);
+}
+
+/* Where Inspect Brain can open the monitor: its content lines up with the pill on the left and
+   ends where the toggle does on the right, clear of the docked panel. The toggle moves up to
+   the pill's band, which is empty on the right, instead of covering the vitals row. */
+@media (min-width: 1281px) {
+  .agent-cockpit .agent-brain {
+    padding-right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    padding-bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    padding-left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  }
+
+  .agent-cockpit.brain-open .agent-stage-view-toggle {
+    top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) + 3px); /* centred on the 62px pill */
+    bottom: auto;
+  }
 }
 
 .agent-cockpit .agent-panel {
