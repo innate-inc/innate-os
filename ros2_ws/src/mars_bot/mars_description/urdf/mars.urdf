@@ -149,7 +149,9 @@
     <origin xyz="0 0 0.04425" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-1.5708" upper="1.22" effort="2.0" velocity="2.0"/>
+    <!-- joint2-4 are negated like joint6 (see its note): each range is the negation of the servo's
+         raw position_limits in arm_config.yaml, which the servo enforces. -->
+    <limit lower="-1.22" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link2">
     <inertial>
@@ -194,7 +196,7 @@
     <origin xyz="0.02825 0 0.12125" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-1.5708" upper="1.7453" effort="2.0" velocity="2.0"/>
+    <limit lower="-1.7453" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link3">
     <inertial>
@@ -239,7 +241,7 @@
     <origin xyz="0.1375 0 0.0045" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-1.9199" upper="1.7453" effort="2.0" velocity="2.0"/>
+    <limit lower="-1.7453" upper="1.9199" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link4">
     <inertial>
