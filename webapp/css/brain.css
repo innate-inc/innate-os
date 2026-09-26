@@ -319,6 +319,7 @@
   .br-panel-vitals .br-gauge {
     width: auto;
     margin-top: 12px;
+    margin-left: 0;
   }
 }
 .br-feed {
