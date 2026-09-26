@@ -24,8 +24,9 @@ class KDLIKNode(Node):
     # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
     # as-is instead of being outvoted by another seed's marginally better fit.
     CONTINUITY_SCORE = 0.005
-    # Radians past a URDF limit still accepted: solver noise, not a real overrun.
-    LIMIT_SLACK = 0.01
+    # Radians past a URDF limit still accepted; the servo clamps the rest, a few mm at the
+    # gripper. drop_in_box's release at pitch 1.30 needs joint4 up to ~0.015 past its stop.
+    LIMIT_SLACK = 0.03
 
     def __init__(self):
         super().__init__("kdl_ik_from_file")
