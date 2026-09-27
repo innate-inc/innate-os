@@ -20,6 +20,8 @@ class DemoAgent(Agent):
     Demo agent - a friendly and curious robot assistant named Mars.
     """
 
+    model = "openai:gpt-6-astra"
+
     @property
     def id(self) -> str:
         return "demo_agent"
