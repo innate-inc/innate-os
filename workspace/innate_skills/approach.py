@@ -103,14 +103,32 @@ def _min_px_shift(o0, o1, floor_xy):
 
 
 def ask_head(host: ApproachHost, question: str, settle_s: float):
-    """Settle the base, then put the current head frame to the host's model.
+    """Settle the base, then put a head frame taken after it to the host's model.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
-    host.sleep(settle_s)
-    img = host.main_image
+    img = settled_frame(host, settle_s)
     if not img:
         return None, None
     return host.llm.ask(img, question, logger=host.logger), img
+
+
+def settled_frame(
+    host: ApproachHost, settle_s: float, timeout: float = 0.6, read: "Callable[[], str | None] | None" = None
+):
+    """The first frame published after the settle sleep — one captured with
+    the robot at rest, never one the pipeline still held from mid-motion.
+    ``read`` is the feed (the head camera by default). Identity, not
+    content: consecutive sim frames of a still scene are byte-identical."""
+    read = read or (lambda: host.main_image)
+    stale = read()
+    host.sleep(settle_s)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        img = read()
+        if img and img is not stale:
+            return img
+        host.sleep(0.03)
+    return read()
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":
@@ -207,14 +225,16 @@ class FloorApproach:
             logger=self.host.logger,
         )
 
-    def drive(self, dist):
+    def drive(self, dist, *, brisk=False):
+        """``brisk`` holds top speed to the stop, for a move that only has to
+        be roughly there; the default creeps in for a park."""
         self._moving(f"{'driving' if dist >= 0 else 'backing up'} {metres(abs(dist))}")
         return self.host.mobility.drive(
             self.odom_xyt,
             dist,
             kp=self.p["drive_kp"],
             v_max=self.p["drive_v_max"],
-            v_min=self.p["drive_v_min"],
+            v_min=self.p["drive_v_max" if brisk else "drive_v_min"],
             tolerance=self.p["drive_tol_m"],
             logger=self.host.logger,
         )
