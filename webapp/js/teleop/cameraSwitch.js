@@ -41,6 +41,7 @@ const MAP_ICON =
 const MAP_ZOOM_KEY = "innate.map.zoom"; // { small, big } metres-across, persisted per map size
 const MAP_ID = "__map__"; // sentinel "view" id for the nav map (never a real camera name)
 const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider on the full stage
+const HIDDEN_CAMERA_NAMES = new Set(["main_rect"]);
 
 /**
  * @param {HTMLElement} parent cockpit root — owns the strip and (when big) the map layer.
@@ -432,9 +433,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       return;
     }
     if (!Array.isArray(next)) return;
+    const visible = next.filter((name) => typeof name === "string" && !HIDDEN_CAMERA_NAMES.has(name));
     // Status republishes on a 2s timer; only react when the roster actually changes.
-    if (next.length === roster.length && next.every((c, i) => c === roster[i])) return;
-    roster = next;
+    if (visible.length === roster.length && visible.every((c, i) => c === roster[i])) return;
+    roster = visible;
     reconcile();
     commit();
   }, undefined, "std_msgs/msg/String");

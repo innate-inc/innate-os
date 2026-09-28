@@ -60,6 +60,8 @@ arm_camera_driver:
     left_topic: "/mars/main_camera/left/image_raw"
     right_topic: "/mars/main_camera/right/image_raw"
     depth_topic: "/mars/main_camera/depth/image_rect_raw"     # 16UC1 mm
+    depth_overlay_topic: "/mars/main_camera/depth/overlay"    # bgr8, depth colormap over rectified left image
+    height_overlay_topic: "/mars/main_camera/depth/height_above_floor_overlay"  # bgr8, height above floor over rectified left image
     disparity_topic: "/mars/main_camera/disparity"             # filtered DisparityImage
     disparity_unfiltered_topic: "/mars/main_camera/disparity_unfiltered"  # raw VPI output
     left_rectified_topic: "/mars/main_camera/left/image_rect"  # mono8 rectified
@@ -70,6 +72,175 @@ arm_camera_driver:
     # With filter_downsample.factor=2 and pointcloud_decimation=1 you get 320×240 = 76k pts.
     # Set to 2 for 160×120 = 19k pts, etc. Higher = faster publish, fewer points.
     pointcloud_decimation: 1
+
+    # ── Camera mount correction ───────────────────────────────────────────
+    #
+    # The point cloud is back-projected in the RECTIFIED left frame but stamped
+    # camera_optical_frame, the unrectified left camera in the URDF. R1 is
+    # un-applied automatically; these absorb what is left, which is mechanical:
+    # the head servo zero is a single hardcoded homing_offset shared across all
+    # robots, so per-unit assembly variation lands here.
+    #
+    # A tilt error puts the floor above min_obstacle_height at range, which the
+    # costmap marks as a phantom obstacle. To measure, park on flat ground and:
+    #
+    #   ros2 run mars_cam ground_plane_check
+    #
+    # then set mount_pitch_correction_deg to the NEGATIVE of the reported floor
+    # pitch and re-run to confirm it lands near zero.
+    #
+    # Optical-frame axes (x right, y down, z forward): pitch rotates about x,
+    # roll about z. Per-robot values — do not assume they transfer.
+    # mount_height_correction_m corrects the camera's HEIGHT, which turned out
+    # to dominate once the tilt was removed: a ~14mm offset against a 20mm
+    # marking threshold leaves almost no margin. It applies to the nav cloud
+    # only, since a translation is meaningless in the optical frame the other
+    # clouds are stamped with.
+    #
+    # PER-ROBOT. Measured on R7-27 at the -20 deg nav head position; assembly
+    # variation means another unit will need its own. Values are cumulative —
+    # ground_plane_check prints what to ADD, from the corridor fit.
+    # See docs/depth_obstacle_notes.md.
+    mount_pitch_correction_deg: 0.0
+    mount_roll_correction_deg: 0.0
+    mount_height_correction_m: 0.0
+
+    # ── Arm self-masking ──────────────────────────────────────────────────
+    #
+    # dynamic_footprint projects the arm's collision boxes into the camera and
+    # publishes them on /footprint/camera_optical at 15Hz; the disparity under
+    # their convex hull is zeroed before the filter chain, so the arm never
+    # reaches the point cloud or the costmap.
+    #
+    # Past this age the mask is dropped rather than reused. A stale mask is the
+    # dangerous failure — it keeps blanking wherever the arm used to be, which
+    # can hide a real obstacle, while the arm's new position goes unmasked
+    # regardless. Dropping it degrades to a phantom obstacle on the arm, which
+    # stops the robot instead of driving it into something.
+    #
+    # NOT covered: anything the gripper is holding. Payloads are not in the
+    # URDF, so a carried object is marked as an obstacle.
+    footprint_max_age_sec: 0.5
+
+    # ── Forward traversability corridor (/mars/main_camera/points_nav) ────
+    #
+    # The costmap consumes ONLY this cloud, published in base_link and already
+    # height-filtered, so the STVL layer needs no threshold of its own.
+    # Deliberately narrow — see docs/depth_obstacle_notes.md for why:
+    #   * floor error from residual pitch scales with range
+    #   * the image periphery is where a 98 deg lens on plumb_bob fits worst
+    #   * every point outside it can only ever mark a phantom obstacle
+    #
+    # x_max 1.0m against a ~0.52m stopping distance at vx_max leaves ~0.5m of
+    # margin; STVL's 2s voxel_decay accumulates a short trail as the robot moves.
+    # z_min IS the benchmark: 15mm and under can be rolled over at low cost,
+    # anything above it must be flagged.
+    pointcloud_nav_topic: "/mars/main_camera/points_nav"
+    pointcloud_nav_stats_topic: "/mars/main_camera/points_nav/stats"
+    nav_frame: "base_link"
+    nav_roi.x_min: 0.25        # front edge of the footprint
+    nav_roi.x_max: 1.00
+    nav_roi.half_width: 0.22   # footprint half-width 0.165 + margin
+    nav_roi.z_min: 0.015
+    nav_roi.z_max: 0.36        # matches STVL max_obstacle_height
+
+    # ── Temporal evidence filter ──────────────────────────────────────────
+    #
+    # Answers "should I believe this detection?" BEFORE the costmap sees it.
+    # Without it a single bad stereo frame becomes a lethal voxel, nav2
+    # correctly brakes, the next frame clears it, and the robot stutters.
+    # STVL's voxel_decay answers a different question — how long a *believed*
+    # obstacle persists without support — and is not a substitute for this.
+    #
+    # A voxel gains at most ~1.0 per frame (its mean point confidence), so
+    # mark_threshold 3.0 means roughly 3-4 consistent observations. At 8Hz
+    # that is about half a second before a normal-range obstacle is marked.
+    #
+    # clear_threshold is far below mark_threshold on purpose. Equal thresholds
+    # chatter occupied/free around noisy boundaries; once a chair is believed,
+    # disbelieving it should take much more than one missed frame.
+    #
+    # near_field_* is the collision-safety bypass: something close AND
+    # confidently matched short-circuits the temporal wait — but not from a
+    # single frame. At one frame this was the widest path to a phantom: one bad
+    # frame inside near_field_range jumped the score straight to
+    # mark_threshold, and clearing from there is 2.5s of braking for a glitch
+    # that lasted 125ms. Two consecutive frames costs 125ms of reaction time
+    # and closes the single-frame path. Set to 1 for the old behaviour.
+    evidence.enabled: true
+    evidence.frame: "odom"              # must not move with the robot
+    evidence.voxel_size: 0.05           # matches STVL voxel_size
+    evidence.mark_threshold: 3.0
+    evidence.clear_threshold: 0.5
+    evidence.decay_per_second: 1.0
+    evidence.min_points_per_voxel: 4    # fewer than this is a mismatch, not an object
+    evidence.near_field_range: 0.6
+    evidence.near_field_weight: 0.75
+    evidence.near_field_frames: 2
+    # max_score sets how long a depth obstacle is REMEMBERED once it stops being
+    # observed: (max_score - clear_threshold) / decay_per_second. 10.0 gives
+    # ~9.5s, which covers a normal maneuver while limiting how long a false
+    # positive can remain lethal.
+    #
+    # Raise THIS rather than lowering decay_per_second: decay also sets the net
+    # accumulation rate, so lowering it would speed up marking and weaken the
+    # single-frame glitch rejection. max_score only raises the ceiling, leaving
+    # confirmation at ~4 frames.
+    #
+    # Side effect worth knowing: memory scales with how well-established the
+    # obstacle was. 2.3s of observation banks the full ~9.5s; a 1s glimpse banks
+    # less.
+    #
+    # Depth-only: the evidence grid never sees lidar, so the costmap's
+    # obstacle_layer is unaffected.
+    evidence.max_score: 10.0
+    # Confidence falls linearly from 1.0 to 0.0 across this range, because
+    # disparity shrinks as 1/Z: the same 1px matching error is worth 6mm at
+    # 1m and 24cm at 2m. A far point should not carry a near point's authority.
+    evidence.confidence_full_trust_m: 0.8
+    evidence.confidence_no_trust_m: 2.0
+    # How far from base_link a REMEMBERED voxel may still be asserted.
+    #
+    # Confirmed voxels are republished every frame until their score decays, so
+    # an obstacle survives a maneuver that carries it out of the corridor. The
+    # cost is that memory is asserted where the camera is not looking, where
+    # odom drift moves it and nothing can correct it. Bounding by the corridor
+    # would delete the maneuver memory, so this bounds by range instead.
+    #
+    # 1.2m holds an obstacle the robot is steering around, and sits under STVL's
+    # obstacle_range of 1.5m — beyond that the point is discarded downstream
+    # anyway, so publishing it only invites drift.
+    evidence.publish_radius_m: 1.20
+
+    # ── Online floor estimation ───────────────────────────────────────────
+    #
+    # Obstacle height is measured from the OBSERVED floor, not from base_link z.
+    # A plane fit recovers the three degrees of freedom that are actually wrong
+    # — pitch, roll, height — and leaves yaw/x/y to TF, which is fine. So a
+    # mis-mounted camera, an unexpected head angle, gravity sag and a robot
+    # pitching over a floor transition all stop mattering.
+    #
+    # That last one is why the slew limit matters rather than smoothing. Rolling
+    # over a bump pitches the robot several degrees in a few frames; an
+    # exponentially smoothed plane lags it and a flat floor reads ~90mm high for
+    # about a second, marking the entire corridor. The per-frame fit is already
+    # stable to +-0.2mm (it averages ~1200 points), so smoothing bought nothing
+    # and cost everything. The slew limit still blunts a single bad fit.
+    #
+    # With no valid fit, height degrades exactly to base_link z — the previous
+    # behaviour — so a blind or cluttered start is a downgrade, not a failure.
+    ground.enabled: true
+    ground.search_extra_width_m: 0.30   # fit over a wider strip than we mark
+    ground.search_band_m: 0.25
+    ground.max_tilt_deg: 20.0           # must exceed the pitch a bump induces
+    ground.max_offset_m: 0.06           # tight enough that a low platform is not "floor"
+    ground.min_inliers: 150
+    ground.max_residual_m: 0.02
+    # MUST stay well below nav_roi.z_min or a low object joins the floor and
+    # measures under its own threshold.
+    ground.trim_max_m: 0.008
+    ground.max_gradient_step: 0.105     # ~6 deg per frame at 8Hz
+    ground.max_offset_step_m: 0.030
 
     # ── VPI SGM — Creation parameters (changing these rebuilds the CUDA payload) ──
     #
@@ -90,6 +261,21 @@ arm_camera_driver:
     #   Range 0–65535. Lower = keep more (noisy) detail, higher = stricter.
     #   ~32000 is a good balance; 0 keeps everything.
     confidence_threshold: 20000
+
+    # Depth overlay visualization range (near=red, far=blue) for
+    # /mars/main_camera/depth/overlay. This does not affect depth math or nav.
+    depth_overlay_near_m: 0.25
+    depth_overlay_far_m: 1.6
+    depth_overlay_alpha: 0.6
+    # Overlay shaping (single-frame only): smooth color map values and feather
+    # known/unknown transitions to avoid hard cut edges without temporal lag.
+    overlay_value_smooth_kernel: 1
+    overlay_edge_feather_px: 0.4
+    # Height overlay visualization range (blue=near floor, red=high) for
+    # /mars/main_camera/depth/height_above_floor_overlay.
+    height_overlay_min_m: 0.0
+    height_overlay_max_m: 0.30
+    height_overlay_alpha: 0.6
 
     # min_disparity: ignore disparities below this (pixels). 0 = no lower limit.
     #   Increase to ignore very far objects.
@@ -129,8 +315,9 @@ arm_camera_driver:
       # - bilateral
       - domain_transform
       - speckle
-      # - temporal
       - edge_invalidation
+      - hole_filling
+      - temporal
       - speckle
 
     # ── 0. Downsample ─────────────────────────────────────────────────────
@@ -180,7 +367,7 @@ arm_camera_driver:
     # and near-camera noise. Run this early to save work for later filters.
     depth_clamp.enabled: true
     depth_clamp.min_depth_meters: 0.25  # closer than 1 cm → invalid
-    depth_clamp.max_depth_meters: 2.0   # farther than 2 m → invalid
+    depth_clamp.max_depth_meters: 5.0   # farther than 2 m → invalid
 
     # ── 5. Edge Invalidation ──────────────────────────────────────────────
     # Detects depth edges with Canny, dilates them, and zeroes out disparity
@@ -190,9 +377,9 @@ arm_camera_driver:
     #   canny_low/high: Canny hysteresis thresholds on the normalised disparity.
     #     Lower = more sensitive (detects weaker edges). Typical: low 5–20, high 30–60.
     edge_invalidation.enabled: true
-    edge_invalidation.width: 7
-    edge_invalidation.canny_low: 15.0 
-    edge_invalidation.canny_high: 45.0
+    edge_invalidation.width: 1
+    edge_invalidation.canny_low: 24.0 
+    edge_invalidation.canny_high: 72.0
 
     # ── 6. Speckle Removal ────────────────────────────────────────────────
     # Flood-fills connected regions of similar disparity. Any region smaller

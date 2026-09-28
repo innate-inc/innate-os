@@ -49,13 +49,14 @@ gst-inspect-1.0 | grep -E "(nvv4l2|openh264|omx.*264)"
 
 ## Working VP8 Pipeline (for reference)
 ```python
-'appsrc name=src_main is-live=true format=time '
-'caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! '
-'videoconvert ! '
-'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
-'rtpvp8pay pt=96 ! '
-'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! '
-'webrtc.sink_0'
+"appsrc name=src_main is-live=true format=time"
+
+"caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! "
+"videoconvert ! "
+"vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
+"rtpvp8pay pt=96 ! "
+"application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! "
+"webrtc.sink_0"
 ```
 
 ## Final Attempt: Plain x264enc (NVIDIA Forum recommendation)

@@ -1,0 +1,47 @@
+# Stereo Benchmark Text Export
+
+- Source run folder: `/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036`
+- Preferred summary JSON: `stereo_depth_benchmark_20260911_175318.json`
+- This export intentionally excludes PNG/MP4 binaries.
+
+## Regenerate visual artifacts
+
+Run on the robot/workspace where the source run bag data exists:
+
+```bash
+/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/REGENERATE_ARTIFACTS.sh
+```
+
+## Source bags for this run
+
+These are the rosbag directories backing this run's metrics/overlays:
+
+- `/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175036_classical_stereo`
+- `/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175133_fast_foundation_23_36_37_i4_compile`
+- `/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175225_fast_foundation_20_30_48_i4_compile`
+
+Canonical input bag candidate:
+
+- `/home/jetson1/innate-os/recordings/stereo_canonical_20260911_005944`
+
+Bags are intentionally not committed here (they are too large).
+
+If you want a portable backup, sync them to external storage:
+
+```bash
+rsync -a --info=progress2 /home/jetson1/innate-os/recordings/stereo_canonical_20260911_005944 <backup_root>/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/
+rsync -a --info=progress2 /home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175036_classical_stereo <backup_root>/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/
+rsync -a --info=progress2 /home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175133_fast_foundation_23_36_37_i4_compile <backup_root>/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/
+rsync -a --info=progress2 /home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/20260911_175225_fast_foundation_20_30_48_i4_compile <backup_root>/classical_stereo_vs_fast_foundation_23_36_37_i4_compile_vs_fast_foundation_20_30_48_i4_compile__bag_20260911_005944__run_20260911_175036/
+```
+
+Use `SOURCE_BAGS.txt` in this folder as the authoritative source-bag pointer list.
+
+## Included files
+
+- `REGENERATE_ARTIFACTS.sh`
+- `RESULTS_MANIFEST_ALL_MODELS.txt`
+- `RESULTS_SUMMARY_ALL_MODELS.md`
+- `SOURCE_BAGS.txt`
+- `stereo_depth_benchmark_20260911_175318.csv`
+- `stereo_depth_benchmark_20260911_175318.json`

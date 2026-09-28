@@ -120,6 +120,33 @@ void StereoDepthEstimator::syncSGM() {
 }
 
 // =============================================================================
+// Lock the SGM confidence map, normalise U16 -> [0,1]
+// =============================================================================
+// VPI fills this alongside the disparity and it was previously discarded. It is
+// what lets the evidence filter weight a crisp match at 70cm above a marginal
+// one at 3m, instead of treating every surviving point as equally true.
+cv::Mat StereoDepthEstimator::extractConfidence() {
+    VPIImageData data;
+    VPIStatus status = vpiImageLockData(vpi_confidence_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &data);
+    if (status != VPI_SUCCESS)
+        return {};
+
+    const uint16_t* src = reinterpret_cast<const uint16_t*>(data.buffer.pitch.planes[0].data);
+    const int pitch = data.buffer.pitch.planes[0].pitchBytes / sizeof(uint16_t);
+
+    cv::Mat conf(calib_height_, calib_width_, CV_32FC1);
+    for (int y = 0; y < calib_height_; y++) {
+        const uint16_t* row_src = src + y * pitch;
+        float* row_dst = conf.ptr<float>(y);
+        for (int x = 0; x < calib_width_; x++)
+            row_dst[x] = static_cast<float>(row_src[x]) / 65535.0f;
+    }
+
+    vpiImageUnlock(vpi_confidence_);
+    return conf;
+}
+
+// =============================================================================
 // Lock VPI result, convert Q10.5 → float, zero border, return CV_32FC1
 // =============================================================================
 cv::Mat StereoDepthEstimator::extractDisparity() {
