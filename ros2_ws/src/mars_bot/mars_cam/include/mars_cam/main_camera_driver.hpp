@@ -185,6 +185,11 @@ class MainCameraDriver : public rclcpp::Node {
     bool initializeCamera();
 
     /**
+     * @brief Close the dead capture and control handles and reopen the camera once it is back on USB
+     */
+    void reconnectCamera();
+
+    /**
      * @brief Create GStreamer pipeline string
      * @return Pipeline string for camera capture
      */

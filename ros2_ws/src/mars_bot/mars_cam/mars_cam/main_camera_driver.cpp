@@ -108,19 +108,9 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
                     camera_pattern.c_str(), filename.c_str());
     }
 
-    // Resolve the symlink to get actual device path
-    std::string resolved_path = std::filesystem::read_symlink(symlink_path).string();
-
-    // Handle relative paths properly
-    if (resolved_path.find("/dev/") == 0) {
-        // Already absolute path
-        camera_device_ = resolved_path;
-    } else {
-        // Relative path, resolve it properly
-        std::filesystem::path symlink_dir = std::filesystem::path(symlink_path).parent_path();
-        std::filesystem::path full_path = std::filesystem::canonical(symlink_dir / resolved_path);
-        camera_device_ = full_path.string();
-    }
+    // Keep the by-id symlink, not its /dev/videoN target: a USB drop re-enumerates the camera
+    // under a new number, and reconnectCamera() must follow it.
+    camera_device_ = symlink_path;
 
     // Calculate left image dimensions (half width for stereo camera at publish resolution)
     // Note: Frame is downscaled in GStreamer pipeline, so left is half of publish_stereo_width
@@ -130,7 +120,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     RCLCPP_DEBUG(this->get_logger(), "=== Mars Main Camera Driver ===");
     RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
     RCLCPP_DEBUG(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
-    RCLCPP_INFO(this->get_logger(), "Resolved device: %s @ %dx%d, %.1f FPS", camera_device_.c_str(), capture_width_,
+    RCLCPP_INFO(this->get_logger(), "Camera device: %s @ %dx%d, %.1f FPS", camera_device_.c_str(), capture_width_,
                 capture_height_, fps_);
     RCLCPP_DEBUG(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
     RCLCPP_DEBUG(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_,
@@ -340,6 +330,26 @@ bool MainCameraDriver::initializeCamera() {
     return true;
 }
 
+void MainCameraDriver::reconnectCamera() {
+    cap_.release();
+    if (camera_fd_ != -1) {
+        close(camera_fd_);
+        camera_fd_ = -1;
+        v4l2_controls_initialized_ = false;
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (!frame_thread_running_ || !std::filesystem::exists(camera_device_)) {
+        return;
+    }
+
+    if (initializeCamera()) {
+        std::error_code ec;
+        const auto node = std::filesystem::canonical(camera_device_, ec);
+        RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)", ec ? camera_device_.c_str() : node.c_str());
+    }
+}
+
 std::string MainCameraDriver::createGStreamerPipeline() {
     // Use MJPG format for better performance with this camera
     // Pipeline: capture at full resolution, then downscale in GStreamer (hardware accelerated)
@@ -476,8 +486,9 @@ void MainCameraDriver::frameProcessingLoop() {
             bool success = cap_.read(frame);
 
             if (!success || frame.empty()) {
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Failed to capture frame");
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                     "Failed to capture frame, reconnecting to %s", camera_device_.c_str());
+                reconnectCamera();
                 continue;
             }
 
