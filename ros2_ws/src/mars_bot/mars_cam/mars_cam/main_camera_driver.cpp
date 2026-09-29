@@ -343,11 +343,16 @@ void MainCameraDriver::reconnectCamera() {
         return;
     }
 
-    if (initializeCamera()) {
-        std::error_code ec;
-        const auto node = std::filesystem::canonical(camera_device_, ec);
-        RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)", ec ? camera_device_.c_str() : node.c_str());
+    // A capture without its control fd would run on the camera's power-on exposure, gain and
+    // anti-flicker defaults with nothing left to retry them, so count that as not reconnected yet.
+    if (!initializeCamera() || camera_fd_ == -1) {
+        cap_.release();
+        return;
     }
+
+    std::error_code ec;
+    const auto node = std::filesystem::canonical(camera_device_, ec);
+    RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)", ec ? camera_device_.c_str() : node.c_str());
 }
 
 std::string MainCameraDriver::createGStreamerPipeline() {
