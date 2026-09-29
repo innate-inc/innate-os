@@ -58,6 +58,10 @@ import {
 let lastMapMsg = null;
 /** @type {string | null} */
 let lastMapIp = null;
+// /nav/current_mode is a 1 Hz timer, not latched: remembering it lets a newly
+// mounted widget tell a saved map from the live SLAM one on its first draw.
+/** @type {string | null} */
+let lastNavMode = null;
 let mapLatchStarted = false;
 
 function ensureMapLatch() {
@@ -72,6 +76,14 @@ function ensureMapLatch() {
     250,
     "nav_msgs/msg/OccupancyGrid",
   );
+  ros.subscribe(
+    NAV_CURRENT_MODE_TOPIC,
+    (msg) => {
+      if (typeof msg?.data === "string" && msg.data) lastNavMode = msg.data;
+    },
+    0,
+    "std_msgs/msg/String",
+  );
   // The cache is one robot's grid: after connecting to a different robot it
   // must not paint the old map while the new one latches (or never does, when
   // that robot has no map publisher yet).
@@ -79,6 +91,7 @@ function ensureMapLatch() {
     if (ip !== lastMapIp) {
       lastMapMsg = null;
       lastMapIp = null;
+      lastNavMode = null;
     }
   });
 }
@@ -994,10 +1007,10 @@ export function createMap(root, opts = {}) {
   // Last draw's placement, so pointer handlers can invert it.
   /** @type {MapView | null} */
   let view = null;
-  // Saved maps are drawn squared to the screen; the live SLAM map keeps its
+  // Only a grid known to be a saved map is squared: the live SLAM map keeps its
   // raw frame so it doesn't swing while it grows. Read from the mode topic, not
   // setMappingMode — the teleop thumbnail has no nav store to call that.
-  let slamMapLive = false;
+  let navMode = lastNavMode;
   /** @type {{ rev: number, orientation: import("./orientation.js").MapOrientation, floorOutline: import("./orientation.js").CellPoint[] | null } | null} */
   let squaringCache = null;
 
@@ -1089,14 +1102,14 @@ export function createMap(root, opts = {}) {
     return v.rot - (yaw - g.originYaw);
   }
 
-  /** How to square the displayed grid, cached per revision; null for the live SLAM map. */
+  /** How to square the displayed grid, cached per revision; null unless it is a saved map. */
   function gridSquaring() {
-    if (!grid || !gridCells || slamMapLive) return null;
+    if (!grid || !gridCells || navMode === null || navMode === "mapping") return null;
     if (squaringCache?.rev !== gridRev) {
       const orientation = mapOrientation(gridCells, grid.width, grid.height);
       // With free_thresh 0.25, map_server reads map_saver's "unknown" grey as
       // free: a saved grid is floor to its edges, a tilted sheet once squared.
-      // Its floor is drawn only inside the walls' outline, which stands upright.
+      // Its floor is drawn only within the walls' extent, which stands upright.
       const floorOutline = gridCells.some((v) => v < 0) ? null : wallOutline(orientation, WALL_MARGIN_M / grid.resolution);
       squaringCache = { rev: gridRev, orientation, floorOutline };
     }
@@ -1384,8 +1397,6 @@ export function createMap(root, opts = {}) {
       ctx.beginPath();
       for (const p of squaring.floorOutline) ctx.lineTo(p.x * scale, (grid.height - p.y) * scale);
       ctx.clip();
-      ctx.fillStyle = `rgb(${GRID_FREE_RGB.join(" ")})`;
-      ctx.fill();
     }
     ctx.drawImage(off, 0, 0, grid.width * scale, grid.height * scale);
     ctx.restore();
@@ -2234,6 +2245,7 @@ export function createMap(root, opts = {}) {
     grid = null;
     gridCells = null;
     gridRev++;
+    navMode = null;
     costGrid = null;
     localGrid = null;
     displayedMapId = null;
@@ -2272,9 +2284,8 @@ export function createMap(root, opts = {}) {
   const unsubMode = ros.subscribe(
     NAV_CURRENT_MODE_TOPIC,
     (msg) => {
-      const live = msg?.data === "mapping";
-      if (live === slamMapLive) return;
-      slamMapLive = live;
+      if (typeof msg?.data !== "string" || !msg.data || msg.data === navMode) return;
+      navMode = msg.data;
       draw();
     },
     0,

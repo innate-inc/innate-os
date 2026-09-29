@@ -166,7 +166,12 @@ def _render_map_png(image_path: Path, max_px: int = 480) -> bytes:
     h, w = img.shape[:2]
     scale = max_px / max(h, w)
     if scale < 1:
-        img = cv2.resize(img, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
+        size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        # Averaging greys a one-cell wall away, and the webapp squares previews
+        # by their walls: any output pixel covering a wall stays black.
+        walls = cv2.resize((img < 100).astype("float32"), size, interpolation=cv2.INTER_AREA) > 0
+        img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+        img[walls] = 0
     ok, buf = cv2.imencode(".png", img)
     if not ok:
         raise RuntimeError("png encode failed")

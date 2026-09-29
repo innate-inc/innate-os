@@ -16,15 +16,16 @@ const MIN_GAIN = 1.1;
 // map keeps the smaller rotation, and a near-square screen (the teleop
 // thumbnail) lays maps out like the landscape Nav page it expands into.
 const OBLONG = 1.15;
-// Extents ignore the outermost few wall cells: stray hits through doors and
-// windows would otherwise stretch them.
+// The aspect ignores the outermost few wall cells: stray hits through doors
+// and windows would otherwise decide it.
 const SPREAD_TAIL = 0.005;
 
 /**
  * `angle` is the dominant wall direction in the grid frame (radians CCW, in
- * (-π/4, π/4]). The walls lie within `along` × `across`: ranges in cells,
- * along that direction and across it, from the grid's corner.
- * @typedef {{ angle: number, along: [number, number], across: [number, number] }} MapOrientation
+ * (-π/4, π/4]). Every wall cell lies within `along` × `across`: ranges in
+ * cells, along that direction and across it, from the grid's corner. `aspect`
+ * is the walls' along/across ratio.
+ * @typedef {{ angle: number, along: [number, number], across: [number, number], aspect: number }} MapOrientation
  */
 
 /** A point in grid cells: x along the columns, y up the rows.
@@ -50,7 +51,7 @@ export function mapOrientation(cells, width, height) {
       }
     }
   }
-  if (xs.length < MIN_WALL_CELLS) return { angle: 0, along: [0, width], across: [0, height] };
+  if (xs.length < MIN_WALL_CELLS) return { angle: 0, along: [0, width], across: [0, height], aspect: width / Math.max(1, height) };
 
   const reach = Math.ceil(Math.hypot(width, height)) + 1;
   const bins = new Float64Array(2 * reach + 2);
@@ -88,9 +89,9 @@ export function mapOrientation(cells, width, height) {
 
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  const along = xs.map((x, i) => (x + 0.5) * c + (ys[i] + 0.5) * s);
-  const across = xs.map((x, i) => (ys[i] + 0.5) * c - (x + 0.5) * s);
-  return { angle, along: range(along), across: range(across) };
+  const along = measure(xs.map((x, i) => (x + 0.5) * c + (ys[i] + 0.5) * s));
+  const across = measure(xs.map((x, i) => (ys[i] + 0.5) * c - (x + 0.5) * s));
+  return { angle, along: along.extent, across: across.extent, aspect: along.spread / Math.max(1, across.spread) };
 }
 
 /**
@@ -99,17 +100,16 @@ export function mapOrientation(cells, width, height) {
  * long side — never more than a quarter turn.
  * @param {MapOrientation} orientation @param {number} screenAspect width over height
  */
-export function squaringRotation({ angle, along, across }, screenAspect) {
-  const mapAspect = (along[1] - along[0]) / Math.max(1, across[1] - across[0]);
+export function squaringRotation({ angle, aspect }, screenAspect) {
   const portrait = screenAspect * OBLONG < 1;
-  const turnQuarter = portrait ? mapAspect > OBLONG : mapAspect * OBLONG < 1;
+  const turnQuarter = portrait ? aspect > OBLONG : aspect * OBLONG < 1;
   if (!turnQuarter) return angle;
   return angle > 0 ? angle - Math.PI / 2 : angle + Math.PI / 2;
 }
 
 /**
  * The corners of the walls' extent, padded by `pad` cells — a rectangle that
- * reads upright once squared.
+ * reads upright once squared and holds every wall and the floor between them.
  * @param {MapOrientation} orientation @param {number} pad
  * @returns {CellPoint[]}
  */
@@ -132,9 +132,10 @@ function foldQuarter(theta) {
   return theta - quarter * Math.round(theta / quarter - 1e-9);
 }
 
-/** @param {number[]} values @returns {[number, number]} */
-function range(values) {
+/** @param {number[]} values @returns {{ extent: [number, number], spread: number }} */
+function measure(values) {
   values.sort((a, b) => a - b);
   const last = values.length - 1;
-  return [values[Math.round(last * SPREAD_TAIL)], values[Math.round(last * (1 - SPREAD_TAIL))]];
+  const spread = values[Math.round(last * (1 - SPREAD_TAIL))] - values[Math.round(last * SPREAD_TAIL)];
+  return { extent: [values[0], values[last]], spread };
 }
