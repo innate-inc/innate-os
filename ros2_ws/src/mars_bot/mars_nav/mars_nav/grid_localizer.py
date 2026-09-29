@@ -32,6 +32,8 @@ as well take the rest), else 'localized_low_confidence'.
 Service remains available for manual triggers after auto-localize completes.
 """
 
+import time
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -45,6 +47,8 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from mars_nav.scan_match import Estimate, Grid, Scan, locate
+
+MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
 
 
 class GridLocalizer(Node):
@@ -66,6 +70,7 @@ class GridLocalizer(Node):
 
     # Scan storage
     latest_scan = None
+    _scan_received_at = 0.0
 
     # Auto-localize state
     _auto_done: bool = False
@@ -287,6 +292,7 @@ class GridLocalizer(Node):
     def _scan_cb(self, msg: LaserScan):
         """Store latest scan."""
         self.latest_scan = msg
+        self._scan_received_at = time.monotonic()
 
     def _auto_localize_tick(self):
         """Auto-localize on startup.
@@ -489,10 +495,10 @@ class GridLocalizer(Node):
             self._publish_pose(pose.x, pose.y, pose.theta)
             self._warn_if_at_map_edge(pose.x, pose.y)
 
+            confident = estimate.confident(self.confidence_threshold)
+            self._publish_status("localized" if confident else "localized_low_confidence")
             response.success = True
-            confidence = (
-                "Localized" if estimate.confident(self.confidence_threshold) else "Localized with LOW confidence"
-            )
+            confidence = "Localized" if confident else "Localized with LOW confidence"
             response.message = f"{confidence} at {_describe(estimate)}"
             self.get_logger().info(response.message)
 
@@ -507,6 +513,9 @@ class GridLocalizer(Node):
         """The best pose for this scan over the whole map, and how sure it is."""
         if self.grid is None:
             raise RuntimeError("No map received yet")
+        age = time.monotonic() - self._scan_received_at
+        if age > MAX_SCAN_AGE_S:
+            raise ValueError(f"The latest scan is {age:.1f} s old; is the lidar running?")
         scan = Scan.from_laser_scan(msg, self.max_range)
         if len(scan) < 10:
             raise ValueError("Not enough valid scan points")
