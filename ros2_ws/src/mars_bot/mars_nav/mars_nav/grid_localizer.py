@@ -49,6 +49,7 @@ from std_srvs.srv import Trigger
 from mars_nav.scan_match import Estimate, Grid, Scan, locate
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
+LOW_CONFIDENCE = "Localized with LOW confidence"  # /localize reply prefix the relocalize skill keys on
 
 
 class GridLocalizer(Node):
@@ -498,7 +499,7 @@ class GridLocalizer(Node):
             confident = estimate.confident(self.confidence_threshold)
             self._publish_status("localized" if confident else "localized_low_confidence")
             response.success = True
-            confidence = "Localized" if confident else "Localized with LOW confidence"
+            confidence = "Localized" if confident else LOW_CONFIDENCE
             response.message = f"{confidence} at {_describe(estimate)}"
             self.get_logger().info(response.message)
 

@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from rclpy.client import Client
-from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from innate import Mobility, Pose, Skill, SkillOutput, SkillReturn, resource
+from mars_nav.grid_localizer import LOW_CONFIDENCE
 
 SETTLE_S = 0.4
 LOCALIZE_TIMEOUT_S = 30.0
-STATUS_TIMEOUT_S = 2.0
 AMCL_TIMEOUT_S = 5.0
 
 
@@ -30,21 +29,7 @@ class Relocalize(Skill):
             self.fail("No ROS node to reach the localizer from.")
         return self.node.create_client(Trigger, "/localize")
 
-    @resource
-    def statuses(self) -> list[str]:
-        """Every /localization/status grid_localizer publishes during this run, in order."""
-        if self.node is None:
-            self.fail("No ROS node to reach the localizer from.")
-        received: list[str] = []
-
-        def on_status(msg: String) -> None:
-            received.append(msg.data)
-
-        self.node.create_subscription(String, "/localization/status", on_status, 10)
-        return received
-
     def execute(self) -> SkillReturn:
-        seen = len(self.statuses)
         if self.wait_for(lambda: self.localizer.service_is_ready() or None, timeout=2.0) is None:
             self.fail("The localizer isn't running; switch to navigation mode with a map loaded.")
         self.mobility.stop()
@@ -56,20 +41,14 @@ class Relocalize(Skill):
         reply = call.result()
         if reply is None or not reply.success:
             self.fail(f"Could not localize: {reply.message if reply is not None else 'no reply'}.")
-        status = self.wait_for(lambda: self._result_status(seen), timeout=STATUS_TIMEOUT_S)
-        if status is None:
-            self.fail(f"{reply.message}, but the localizer did not say how sure it is; check my position on the map.")
         if self.wait_for(lambda: _newer(self.pose, before), timeout=AMCL_TIMEOUT_S) is None:
             self.fail(f"{reply.message}, but AMCL has not taken the new pose.")
-        if status != "localized":
+        if reply.message.startswith(LOW_CONFIDENCE):
             self.fail(
                 f"Not sure where I am: {reply.message}. Another place fits the scan nearly as well; I've been placed at "
                 "the best match, but check my position on the map or place me from the app before driving."
             )
         return SkillOutput(f"{reply.message}.")
-
-    def _result_status(self, seen: int) -> str | None:
-        return next((s for s in self.statuses[seen:] if s.startswith("localized")), None)
 
 
 def _newer(now: Pose | None, before: Pose | None) -> bool | None:

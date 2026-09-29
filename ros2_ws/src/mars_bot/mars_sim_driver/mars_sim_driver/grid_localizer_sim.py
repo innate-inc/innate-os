@@ -11,7 +11,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile
-from std_msgs.msg import Int64, String
+from std_msgs.msg import Int64
 from std_srvs.srv import Trigger
 
 POSITION_MATCH_TOLERANCE_M = 0.35
@@ -51,7 +51,6 @@ class GridLocalizerSim(LifecycleNode):
         super().__init__("navigation_grid_localizer")
         self._last_odom = None
         self._pose_pub = None
-        self._status_pub = None
         self._retry_timer = None
         self._localization_started_ns = None
         self._reset_pending = False
@@ -178,7 +177,6 @@ class GridLocalizerSim(LifecycleNode):
     def on_configure(self, state) -> TransitionCallbackReturn:
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pose_pub = self.create_lifecycle_publisher(PoseWithCovarianceStamped, "/initialpose", latched)
-        self._status_pub = self.create_lifecycle_publisher(String, "/localization/status", 10)
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state) -> TransitionCallbackReturn:
@@ -196,8 +194,6 @@ class GridLocalizerSim(LifecycleNode):
     def _on_localize(self, _request, response):
         response.success = self._begin_localization()
         response.message = "ground-truth pose published" if response.success else "no odom yet"
-        if response.success and self._status_pub is not None:
-            self._status_pub.publish(String(data="localized"))
         return response
 
     def _begin_localization(self) -> bool:
