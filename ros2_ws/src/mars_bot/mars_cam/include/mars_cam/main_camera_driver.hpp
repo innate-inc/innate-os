@@ -185,7 +185,18 @@ class MainCameraDriver : public rclcpp::Node {
     bool initializeCamera();
 
     /**
-     * @brief Close the dead capture and control handles and reopen the camera once it is back on USB
+     * @brief Find the camera by its by-id name and open its capture and V4L2 controls
+     * @return true only if both are open; otherwise leaves the camera closed
+     */
+    bool openCamera();
+
+    /**
+     * @brief Release the capture and close the V4L2 control fd
+     */
+    void closeCamera();
+
+    /**
+     * @brief Close the dead handles and make one reopen attempt; the frame loop retries
      */
     void reconnectCamera();
 
@@ -271,7 +282,8 @@ class MainCameraDriver : public rclcpp::Node {
 
     // Camera parameters
     std::string data_directory_;
-    std::string camera_device_;
+    std::string camera_pattern_;  // camera_symlink parameter: substring of the camera's /dev/v4l/by-id name
+    std::string camera_device_;   // its by-id path; "" while no matching camera is plugged in
     int capture_width_;  // Capture resolution (full FOV)
     int capture_height_;
     int left_width_;  // Left camera at capture resolution

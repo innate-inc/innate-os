@@ -3,6 +3,8 @@
 #include "mars_cam/main_camera_driver.hpp"
 #include <filesystem>
 
+#include "mars_cam/camera_by_id.hpp"
+
 using namespace std::chrono_literals;
 
 namespace mars_cam {
@@ -37,7 +39,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
 
     // Get parameter values
     data_directory_ = this->get_parameter("data_directory").as_string();
-    std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
+    camera_pattern_ = this->get_parameter("camera_symlink").as_string();
     capture_width_ = this->get_parameter("width").as_int();
     capture_height_ = this->get_parameter("height").as_int();
     publish_left_width_ = this->get_parameter("publish_left_width").as_int();
@@ -64,64 +66,13 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     ae_kp_ = this->get_parameter("ae_kp").as_double();
     auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
 
-    // Find camera symlink by pattern matching
-    std::string camera_pattern = camera_symlink;  // Parameter now contains pattern
-    std::string symlink_path;
-    std::string v4l_dir = "/dev/v4l/by-id/";
-
-    std::vector<std::string> matching_symlinks;
-    if (std::filesystem::exists(v4l_dir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find(camera_pattern) != std::string::npos) {
-                matching_symlinks.push_back(entry.path().string());
-            }
-        }
-    }
-
-    if (matching_symlinks.empty()) {
-        RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", camera_pattern.c_str(),
-                     v4l_dir.c_str());
-        throw std::runtime_error("Camera symlink not found");
-    }
-
-    // Prefer -video-index0 if available (typically the capture device)
-    // Otherwise use the first match
-    bool found_index0 = false;
-    for (const auto& symlink : matching_symlinks) {
-        std::string filename = std::filesystem::path(symlink).filename().string();
-        if (filename.find("-video-index0") != std::string::npos) {
-            symlink_path = symlink;
-            found_index0 = true;
-            RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s (preferred -video-index0)",
-                        camera_pattern.c_str(), filename.c_str());
-            break;
-        }
-    }
-
-    if (!found_index0) {
-        // Fall back to first match
-        symlink_path = matching_symlinks[0];
-        std::string filename = std::filesystem::path(symlink_path).filename().string();
-        RCLCPP_INFO(this->get_logger(),
-                    "Found camera symlink matching pattern '%s': %s (no -video-index0 found, using first match)",
-                    camera_pattern.c_str(), filename.c_str());
-    }
-
-    // Keep the by-id symlink, not its /dev/videoN target: a USB drop re-enumerates the camera
-    // under a new number, and reconnectCamera() must follow it.
-    camera_device_ = symlink_path;
-
     // Calculate left image dimensions (half width for stereo camera at publish resolution)
     // Note: Frame is downscaled in GStreamer pipeline, so left is half of publish_stereo_width
     left_width_ = publish_stereo_width_ / 2;
     left_height_ = publish_stereo_height_;
 
     RCLCPP_DEBUG(this->get_logger(), "=== Mars Main Camera Driver ===");
-    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
-    RCLCPP_DEBUG(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
-    RCLCPP_INFO(this->get_logger(), "Camera device: %s @ %dx%d, %.1f FPS", camera_device_.c_str(), capture_width_,
-                capture_height_, fps_);
+    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
     RCLCPP_DEBUG(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_,
                  publish_stereo_height_);
@@ -177,23 +128,20 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     checkCalibrationFile();
     calib_watch_timer_ = this->create_wall_timer(3s, std::bind(&MainCameraDriver::checkCalibrationFile, this));
 
-    // Initialize camera
-    if (initializeCamera()) {
+    if (openCamera()) {
         camera_initialized_ = true;
-
-        // Initialize frame timing tracking
-        frame_timestamps_.clear();
-        last_stats_print_ = this->now();
-
-        // Start frame processing thread
-        frame_thread_running_ = true;
-        frame_thread_ = std::thread(&MainCameraDriver::frameProcessingLoop, this);
-
+        RCLCPP_INFO(this->get_logger(), "Camera device: %s (%s) @ %dx%d, %.1f FPS", camera_device_.c_str(),
+                    currentVideoNode(camera_device_).c_str(), capture_width_, capture_height_, fps_);
         RCLCPP_INFO(this->get_logger(), "Main camera driver initialized successfully");
     } else {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initialize main camera");
-        throw std::runtime_error("Main camera initialization failed");
+        RCLCPP_WARN(this->get_logger(), "Main camera '%s' not available yet; retrying every second",
+                    camera_pattern_.c_str());
     }
+
+    frame_timestamps_.clear();
+    last_stats_print_ = this->now();
+    frame_thread_running_ = true;
+    frame_thread_ = std::thread(&MainCameraDriver::frameProcessingLoop, this);
 }
 
 MainCameraDriver::~MainCameraDriver() {
@@ -207,16 +155,7 @@ MainCameraDriver::~MainCameraDriver() {
         }
     }
 
-    // Release camera
-    if (cap_.isOpened()) {
-        cap_.release();
-    }
-
-    // Close V4L2 control file descriptor
-    if (camera_fd_ != -1) {
-        close(camera_fd_);
-        camera_fd_ = -1;
-    }
+    closeCamera();
 
     RCLCPP_INFO(this->get_logger(), "Main camera driver shutdown complete");
 }
@@ -226,7 +165,8 @@ bool MainCameraDriver::initializeCamera() {
 
     // Check if device exists
     if (!std::filesystem::exists(camera_device_)) {
-        RCLCPP_ERROR(this->get_logger(), "Camera device not found: %s", camera_device_.c_str());
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Camera device not found: %s",
+                              camera_device_.c_str());
         return false;
     }
 
@@ -238,7 +178,7 @@ bool MainCameraDriver::initializeCamera() {
     cap_.open(pipeline, cv::CAP_GSTREAMER);
 
     if (!cap_.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer");
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to open camera with GStreamer");
         return false;
     }
 
@@ -251,14 +191,15 @@ bool MainCameraDriver::initializeCamera() {
     RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
     RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
-    if (actual_width != capture_width_ || actual_height != capture_height_) {
-        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Requested: %dx%d, Got: %dx%d", capture_width_,
-                    capture_height_, actual_width, actual_height);
+    // cap_ reports the appsink caps, which the pipeline scales to the publish size, not the capture size.
+    if (actual_width != publish_stereo_width_ || actual_height != publish_stereo_height_) {
+        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Expected: %dx%d, Got: %dx%d", publish_stereo_width_,
+                    publish_stereo_height_, actual_width, actual_height);
     }
 
     // Initialize V4L2 controls
     if (!initializeV4L2Controls()) {
-        RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to initialize V4L2 controls");
     } else {
         // Configure V4L2 and initialize AE controller based on mode
         switch (auto_exposure_mode_) {
@@ -309,7 +250,7 @@ bool MainCameraDriver::initializeCamera() {
                         "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
                         power_line_frequency_);
         } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
-            RCLCPP_INFO(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
+            RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
         }
 
         if (exposure_setting_ >= 0) {
@@ -330,29 +271,32 @@ bool MainCameraDriver::initializeCamera() {
     return true;
 }
 
-void MainCameraDriver::reconnectCamera() {
+bool MainCameraDriver::openCamera() {
+    camera_device_ = findCameraByIdPath(camera_pattern_);
+    // A capture without its control fd would run on the camera's power-on exposure, gain and
+    // anti-flicker defaults with nothing left to retry them, so count that as not open.
+    if (camera_device_.empty() || !initializeCamera() || camera_fd_ == -1) {
+        closeCamera();
+        return false;
+    }
+    return true;
+}
+
+void MainCameraDriver::closeCamera() {
     cap_.release();
     if (camera_fd_ != -1) {
         close(camera_fd_);
         camera_fd_ = -1;
-        v4l2_controls_initialized_ = false;
     }
+    v4l2_controls_initialized_ = false;
+}
 
+void MainCameraDriver::reconnectCamera() {
+    closeCamera();
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    if (!frame_thread_running_ || !std::filesystem::exists(camera_device_)) {
-        return;
+    if (frame_thread_running_ && rclcpp::ok()) {
+        openCamera();
     }
-
-    // A capture without its control fd would run on the camera's power-on exposure, gain and
-    // anti-flicker defaults with nothing left to retry them, so count that as not reconnected yet.
-    if (!initializeCamera() || camera_fd_ == -1) {
-        cap_.release();
-        return;
-    }
-
-    std::error_code ec;
-    const auto node = std::filesystem::canonical(camera_device_, ec);
-    RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)", ec ? camera_device_.c_str() : node.c_str());
 }
 
 std::string MainCameraDriver::createGStreamerPipeline() {
@@ -404,7 +348,8 @@ bool MainCameraDriver::initializeV4L2Controls() {
     // Open camera device for control access
     camera_fd_ = open(camera_device_.c_str(), O_RDWR);
     if (camera_fd_ == -1) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera for V4L2 controls: %s", strerror(errno));
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to open camera for V4L2 controls: %s",
+                              strerror(errno));
         return false;
     }
 
@@ -484,6 +429,7 @@ void MainCameraDriver::frameProcessingLoop() {
     RCLCPP_INFO(this->get_logger(), "Frame processing loop started");
 
     cv::Mat frame;
+    bool reconnecting = false;
 
     while (frame_thread_running_ && rclcpp::ok()) {
         try {
@@ -492,9 +438,16 @@ void MainCameraDriver::frameProcessingLoop() {
 
             if (!success || frame.empty()) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                                     "Failed to capture frame, reconnecting to %s", camera_device_.c_str());
+                                     "No frames from main camera '%s', reconnecting", camera_pattern_.c_str());
+                reconnecting = true;
                 reconnectCamera();
                 continue;
+            }
+
+            if (reconnecting) {
+                reconnecting = false;
+                RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)",
+                            currentVideoNode(camera_device_).c_str());
             }
 
             // Increment frame counter
