@@ -16,7 +16,6 @@ import math
 import os
 from pathlib import Path
 
-import cv2
 import numpy as np
 import yaml
 
@@ -27,6 +26,9 @@ UNKNOWN = 205
 MIN_WALL_CELLS = 50
 COARSE_STEP = math.radians(1.0)
 FINE_STEP = COARSE_STEP / 10
+# A long wall's peak is narrower than COARSE_STEP: sampled off-centre it can
+# score below a lesser wall family that sits on a sample, so refine several.
+COARSE_PEAKS = 4
 # Without a clearly sharper alignment (one cluttered room, a sparse scan) the
 # best angle is noise, and the map stays as recorded.
 MIN_GAIN = 1.1
@@ -40,6 +42,8 @@ WALL_WEIGHT = 0.25
 def straighten_saved_map(yaml_path: Path) -> float:
     """Rewrite map_saver's output at ``yaml_path`` squared to its grid; returns
     the rotation applied, 0 when the map was left as recorded."""
+    import cv2  # deferred: mode_manager imports this module at startup, OpenCV joins it only once a save needs it
+
     meta = yaml.safe_load(yaml_path.read_text())
     if not isinstance(meta, dict):
         raise ValueError(f"{yaml_path.name} is not a map yaml")
@@ -89,8 +93,11 @@ def wall_angle(image: np.ndarray) -> float:
         c, s = math.cos(theta), math.sin(theta)
         return peakiness(c, s) + peakiness(-s, c)
 
-    coarse = max((k * COARSE_STEP for k in range(-44, 46)), key=sharpness)
-    best = max((coarse + k * FINE_STEP for k in range(-10, 11)), key=sharpness)
+    coarse = [k * COARSE_STEP for k in range(-44, 46)]
+    scores = [sharpness(theta) for theta in coarse]
+    peaks = [i for i, score in enumerate(scores) if scores[i - 1] <= score >= scores[(i + 1) % len(scores)]]
+    seeds = sorted(peaks, key=scores.__getitem__)[-COARSE_PEAKS:]
+    best = max((coarse[i] + k * FINE_STEP for i in seeds for k in range(-10, 11)), key=sharpness)
     if sharpness(best) < MIN_GAIN * sharpness(0.0):
         return 0.0
     quarter = math.pi / 2
@@ -102,6 +109,8 @@ def straighten(
 ) -> tuple[np.ndarray, tuple[float, float]]:
     """``image`` resampled into its frame turned by ``rotation`` about the
     origin and cropped to its known cells, with the new grid's origin."""
+    import cv2  # deferred: see straighten_saved_map
+
     to_map = _pixel_to_frame(resolution, origin, image.shape[0])
     c, s = math.cos(rotation), math.sin(rotation)
     turn = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
@@ -114,7 +123,7 @@ def straighten(
     to_source = (np.linalg.inv(to_map) @ turn.T @ _pixel_to_frame(resolution, straight_origin, height))[:2]
     size = (int(width), int(height))
     straight = cv2.warpAffine(
-        image, to_source, size, flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP, borderValue=UNKNOWN
+        image, to_source, size, flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP, borderValue=(UNKNOWN,)
     )
     walls = cv2.warpAffine(
         (image == OCCUPIED).astype(np.float32), to_source, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
