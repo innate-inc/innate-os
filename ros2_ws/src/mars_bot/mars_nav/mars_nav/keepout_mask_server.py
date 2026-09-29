@@ -3,6 +3,7 @@
 
 import math
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import rclpy
@@ -18,6 +19,7 @@ from mars_nav.keepout_mask import (
     compatible,
     decode_edit_frame,
     encode_edit_frame,
+    legacy_fingerprint,
     load_mask,
     map_fingerprint,
     save_mask,
@@ -117,11 +119,29 @@ class KeepoutMaskServer(Node):
         if map_hash != self._map_hash:
             self._map_hash = map_hash
             loaded = load_mask(self._path(), map_hash, spec)
+            if loaded is None:
+                loaded = self._adopt_legacy_mask(spec, msg.data)
             self._cells = loaded or [0] * spec.cells
             if loaded is not None:
                 marked = sum(value >= 50 for value in loaded)
                 self.get_logger().info(f"Loaded keepout mask {map_hash[:10]} ({marked} marked cells)")
         self._publish_mask()
+
+    def _adopt_legacy_mask(self, spec: GridSpec, cells: Sequence[int]) -> list[int] | None:
+        """A mask drawn while this map's unexplored cells still loaded as free, re-keyed to the map as it loads now."""
+        legacy_hash = legacy_fingerprint(spec, cells)
+        if legacy_hash == self._map_hash:
+            return None
+        mask = load_mask(self._storage / f"{legacy_hash}.json.gz", legacy_hash, spec)
+        if mask is None:
+            return None
+        try:
+            save_mask(self._path(), self._map_hash, spec, mask)
+        except OSError as exc:
+            self.get_logger().warning(f"Keepout mask {legacy_hash[:10]} applies, but re-keying it failed ({exc})")
+        else:
+            self.get_logger().info(f"Carried keepout mask {legacy_hash[:10]} over to {self._map_hash[:10]}")
+        return mask
 
     def _on_edit(self, msg: OccupancyGrid) -> None:
         if self._map is None or self._spec is None:
