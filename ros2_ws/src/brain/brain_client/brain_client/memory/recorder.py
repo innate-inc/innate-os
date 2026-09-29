@@ -143,7 +143,7 @@ class MemoryRecorder:
         node.create_subscription(String, config.current_nav_mode_topic, self._on_nav_mode, 10)
         node.create_subscription(String, config.current_map_topic, self._on_current_map, 10)
         node.create_subscription(PoseWithCovarianceStamped, config.amcl_pose_topic, self._on_amcl_pose, latched_qos)
-        node.create_subscription(String, "/localization/status", self._on_localization_status, 10)
+        node.create_subscription(String, "/localization/status", self._on_localization_status, latched_qos)
         node.create_subscription(String, config.map_saved_topic, self._on_map_saved, latched_qos)
         node.create_subscription(String, config.mapping_session_topic, self._on_mapping_session, latched_qos)
         node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)

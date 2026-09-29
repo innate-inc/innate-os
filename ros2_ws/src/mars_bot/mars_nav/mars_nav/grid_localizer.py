@@ -124,7 +124,7 @@ class GridLocalizer(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
 
         # Publishers
-        # Latched publisher - message persists for late subscribers (AMCL)
+        # Latched publishers - messages persist for late subscribers (AMCL, the memory recorder)
         # This solves the race condition where grid_localizer publishes before AMCL starts
         latched_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -132,7 +132,7 @@ class GridLocalizer(Node):
             depth=1,
         )
         self.pose_pub = self.create_lifecycle_publisher(PoseWithCovarianceStamped, "/initialpose", latched_qos)
-        self.status_pub = self.create_lifecycle_publisher(String, "/localization/status", 10)
+        self.status_pub = self.create_lifecycle_publisher(String, "/localization/status", latched_qos)
 
         # Service (manual trigger)
         self.srv = self.create_service(Trigger, "localize", self._localize_cb)
