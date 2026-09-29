@@ -230,11 +230,16 @@ class MemoryRecorder:
     def _on_localization_status(self, msg: String) -> None:
         """grid_localizer seeds AMCL even when another place fits the scan nearly as well, and
         AMCL then converges on that guess with a confident covariance; only a confident match
-        or a hand placement (the app announces it as "localized") vouches for the pose again."""
+        or a hand placement (grid_localizer publishes both as "localized") vouches for it again."""
         if msg.data in ("localized", "localized_low_confidence"):
-            self._pose_doubted = msg.data == "localized_low_confidence"
-            if self._pose_doubted:
-                self._logger.info("[Memory] localization is ambiguous; not recording until it is confirmed")
+            doubted = msg.data == "localized_low_confidence"
+            if doubted != self._pose_doubted:
+                self._logger.info(
+                    "[Memory] localization is ambiguous; not recording until it is confirmed"
+                    if doubted
+                    else "[Memory] localization confirmed; recording resumes"
+                )
+            self._pose_doubted = doubted
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
         covariance = msg.pose.covariance

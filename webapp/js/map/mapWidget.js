@@ -18,7 +18,7 @@ import {
   CANCEL_NAVIGATION_SERVICE,
   LOCALIZE_SERVICE,
   SET_INITIAL_POSE_SERVICE,
-  LOCALIZATION_STATUS_TOPIC,
+  HAND_PLACED_SERVICE,
   SCAN_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
   LOCAL_COSTMAP_TOPIC,
@@ -1784,7 +1784,7 @@ export function createMap(root, opts = {}) {
         },
       });
       // A hand placement vouches for the pose: the memory recorder resumes after an ambiguous match.
-      ros.publish(LOCALIZATION_STATUS_TOPIC, { data: "localized" });
+      ros.callService(HAND_PLACED_SERVICE).catch(() => {});
       setStatus("ok", "Position set", true);
     } catch (err) {
       setStatus("fail", `Set position failed — ${err instanceof Error ? err.message : String(err)}`);

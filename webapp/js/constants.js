@@ -101,10 +101,12 @@ export const CANCEL_NAVIGATION_SERVICE = "/nav/cancel_navigation";
 export const LOCALIZE_SERVICE = "/localize";
 // grid_localizer's one-shot result (std_msgs/String, published once per
 // localization attempt): processing_map | localized | localized_low_confidence
-// | error; the map widget adds "localized" after a hand placement. Latched, so
-// a late subscriber gets the latest verdict — steady-state localization health
+// | error, and "localized" after a hand placement (HAND_PLACED_SERVICE). Latched,
+// so a late subscriber gets the latest verdict — steady-state localization health
 // comes from /amcl_pose covariance instead (mobile-app pattern).
 export const LOCALIZATION_STATUS_TOPIC = "/localization/status";
+// Tell grid_localizer (std_srvs/Trigger) that a hand placement vouched for the pose.
+export const HAND_PLACED_SERVICE = "/localization/hand_placed";
 // AMCL's manual seed (nav2_msgs/srv/SetInitialPose) — place the robot by hand.
 export const SET_INITIAL_POSE_SERVICE = "/set_initial_pose";
 

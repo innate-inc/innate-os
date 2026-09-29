@@ -61,6 +61,7 @@ class GridLocalizer(Node):
     pose_pub: Publisher | None = None
     status_pub: Publisher | None = None
     srv = None
+    hand_placed_srv = None
     _auto_timer = None
     _map_check_timer = None
 
@@ -136,6 +137,7 @@ class GridLocalizer(Node):
 
         # Service (manual trigger)
         self.srv = self.create_service(Trigger, "localize", self._localize_cb)
+        self.hand_placed_srv = self.create_service(Trigger, "localization/hand_placed", self._hand_placed_cb)
 
         # AMCL's /set_initial_pose service: the latched /initialpose topic is
         # NOT enough — AMCL subscribes VOLATILE, so a pose published before its
@@ -216,6 +218,9 @@ class GridLocalizer(Node):
         if self.srv:
             self.destroy_service(self.srv)
             self.srv = None
+        if self.hand_placed_srv:
+            self.destroy_service(self.hand_placed_srv)
+            self.hand_placed_srv = None
 
         # Destroy publishers
         if self.pose_pub:
@@ -508,6 +513,17 @@ class GridLocalizer(Node):
             response.message = str(e)
             self.get_logger().error(f"Localization failed: {e}")
 
+        return response
+
+    def _hand_placed_cb(self, request, response):
+        """A person placed the robot on the map from the app, vouching for the pose: record that
+        as the latched verdict, so a late subscriber replays it instead of an earlier doubt."""
+        response.success = self._is_active
+        if not self._is_active:
+            response.message = "Node not active"
+            return response
+        self._publish_status("localized")
+        response.message = "Hand placement recorded"
         return response
 
     def _find_pose(self, msg: LaserScan) -> Estimate:
