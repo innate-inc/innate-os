@@ -28,9 +28,11 @@ import {
   FORGET_MEMORY_SERVICE,
   KEEPOUT_STATE_TOPIC,
   KEEPOUT_EDIT_TOPIC,
+  NAV_CURRENT_MODE_TOPIC,
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
+import { mapOrientation, squaringRotation, wallOutline } from "./orientation.js";
 import {
   isKeepout,
   keepoutGridForMap,
@@ -116,6 +118,8 @@ const PIN_SCALE_CSS = 1.2; // 24-unit glyph → ~29 css px tall, screen-sized at
 // transparent so the dotted backdrop reads as "nowhere".
 const GRID_FREE_RGB = [21, 21, 26];
 const GRID_WALL_RGB = [223, 225, 234];
+// Floor kept around the walls of a squared saved map (see gridSquaring).
+const WALL_MARGIN_M = 0.5;
 
 // /localize scan-matches for up to ~30 s before answering.
 const LOCALIZE_TIMEOUT_MS = 40_000;
@@ -137,6 +141,12 @@ const TRAIL_JUMP_M = 1;
 
 /**
  * @typedef {"scan" | "costmap" | "local" | "trail" | "memories" | "keepout"} LayerName
+ */
+
+/**
+ * A draw's grid→canvas placement: the grid image's top-left corner lands at
+ * (ox, oy), `scale` px per cell, turned by `rot` (ctx.rotate) about that corner.
+ * @typedef {{ ox: number, oy: number, scale: number, rot: number }} MapView
  */
 
 // ---- spatial-memory layer tuning -------------------------------------------
@@ -981,9 +991,15 @@ export function createMap(root, opts = {}) {
     }
   }
 
-  // Last draw's grid→canvas placement, so pointer handlers can invert it.
-  /** @type {{ ox: number, oy: number, scale: number } | null} */
+  // Last draw's placement, so pointer handlers can invert it.
+  /** @type {MapView | null} */
   let view = null;
+  // Saved maps are drawn squared to the screen; the live SLAM map keeps its
+  // raw frame so it doesn't swing while it grows. Read from the mode topic, not
+  // setMappingMode — the teleop thumbnail has no nav store to call that.
+  let slamMapLive = false;
+  /** @type {{ rev: number, orientation: import("./orientation.js").MapOrientation, floorOutline: import("./orientation.js").CellPoint[] | null } | null} */
+  let squaringCache = null;
 
   // "manual"/"goto" arm the map for a press-drag: click sets the position,
   // drag sets the heading.
@@ -1003,7 +1019,7 @@ export function createMap(root, opts = {}) {
   // Thumbnail maps are glanceable robot locators, not independently pannable
   // maps. The full map turns this off again so operators keep normal pan.
   let followRobot = false;
-  /** @type {{ px: number, py: number, center: { x: number, y: number }, moved: boolean } | null} */
+  /** @type {{ px: number, py: number, view: MapView, moved: boolean } | null} */
   let panDrag = null;
   /** @type {{ x: number, y: number, yaw: number } | null} the active goal */
   let goalMarker = null;
@@ -1044,20 +1060,47 @@ export function createMap(root, opts = {}) {
   /** @param {number} x @param {number} y world metres → canvas pixels */
   function worldToCanvas(x, y) {
     const g = /** @type {NonNullable<typeof grid>} */ (grid);
-    const v = /** @type {NonNullable<typeof view>} */ (view);
+    const v = /** @type {MapView} */ (view);
     const local = gridCoordinates(g, x, y);
     const col = local.x / g.resolution;
-    const rowFromBottom = local.y / g.resolution;
-    return { px: v.ox + col * v.scale, py: v.oy + (g.height - rowFromBottom) * v.scale };
+    const rowFromTop = g.height - local.y / g.resolution;
+    const c = Math.cos(v.rot);
+    const s = Math.sin(v.rot);
+    return { px: v.ox + (col * c - rowFromTop * s) * v.scale, py: v.oy + (col * s + rowFromTop * c) * v.scale };
   }
 
-  /** @param {number} px @param {number} py canvas pixels → world metres */
-  function canvasToWorld(px, py) {
+  /** @param {number} px @param {number} py canvas pixels → world metres, through `v` (default: the last draw's view) */
+  function canvasToWorld(px, py, v = /** @type {MapView} */ (view)) {
     const g = /** @type {NonNullable<typeof grid>} */ (grid);
-    const v = /** @type {NonNullable<typeof view>} */ (view);
-    const col = (px - v.ox) / v.scale;
-    const rowFromBottom = g.height - (py - v.oy) / v.scale;
-    return gridPoint(g, col * g.resolution, rowFromBottom * g.resolution);
+    const dx = (px - v.ox) / v.scale;
+    const dy = (py - v.oy) / v.scale;
+    const c = Math.cos(v.rot);
+    const s = Math.sin(v.rot);
+    const col = dx * c + dy * s;
+    const rowFromTop = dy * c - dx * s;
+    return gridPoint(g, col * g.resolution, (g.height - rowFromTop) * g.resolution);
+  }
+
+  /** The ctx.rotate angle that points a drawing's +x along world heading `yaw`
+   * (canvas y points down, so world CCW is canvas CW). @param {number} yaw */
+  function canvasAngle(yaw) {
+    const g = /** @type {NonNullable<typeof grid>} */ (grid);
+    const v = /** @type {MapView} */ (view);
+    return v.rot - (yaw - g.originYaw);
+  }
+
+  /** How to square the displayed grid, cached per revision; null for the live SLAM map. */
+  function gridSquaring() {
+    if (!grid || !gridCells || slamMapLive) return null;
+    if (squaringCache?.rev !== gridRev) {
+      const orientation = mapOrientation(gridCells, grid.width, grid.height);
+      // With free_thresh 0.25, map_server reads map_saver's "unknown" grey as
+      // free: a saved grid is floor to its edges, a tilted sheet once squared.
+      // Its floor is drawn only inside the walls' outline, which stands upright.
+      const floorOutline = gridCells.some((v) => v < 0) ? null : wallOutline(orientation, WALL_MARGIN_M / grid.resolution);
+      squaringCache = { rev: gridRev, orientation, floorOutline };
+    }
+    return squaringCache;
   }
 
   /** @param {PointerEvent} e → canvas-pixel coords */
@@ -1301,7 +1344,11 @@ export function createMap(root, opts = {}) {
 
     // Centre on the pan point if the user grabbed the map, else follow the
     // robot; zoom mode shows a fixed real-world window (zoomMeters across).
-    let scale, ox, oy;
+    let scale;
+    const squaring = gridSquaring();
+    const rot = squaring ? squaringRotation(squaring.orientation, canvas.width / canvas.height) : 0;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
     const center = panCenter ?? (zoomMeters && pose ? pose : null);
     if (zoomMeters && center) {
       const cellsAcross = zoomMeters / grid.resolution;
@@ -1309,7 +1356,9 @@ export function createMap(root, opts = {}) {
     } else {
       // Fit-the-whole-grid scale (no zoom set, or before the first pose).
       const pad = 16 * dpr();
-      scale = Math.min((canvas.width - 2 * pad) / grid.width, (canvas.height - 2 * pad) / grid.height);
+      const spanX = grid.width * Math.abs(cos) + grid.height * Math.abs(sin);
+      const spanY = grid.width * Math.abs(sin) + grid.height * Math.abs(cos);
+      scale = Math.min((canvas.width - 2 * pad) / spanX, (canvas.height - 2 * pad) / spanY);
     }
     if (scale <= 0) {
       // Degenerate container (mid-layout, collapsed PiP host): nothing fits,
@@ -1317,19 +1366,29 @@ export function createMap(root, opts = {}) {
       view = null;
       return;
     }
+    let col = grid.width / 2;
+    let rowFromTop = grid.height / 2;
     if (center) {
       const local = gridCoordinates(grid, center.x, center.y);
-      const col = local.x / grid.resolution;
-      const rowFromBottom = local.y / grid.resolution;
-      ox = canvas.width / 2 - col * scale;
-      oy = canvas.height / 2 - (grid.height - rowFromBottom) * scale;
-    } else {
-      ox = (canvas.width - grid.width * scale) / 2;
-      oy = (canvas.height - grid.height * scale) / 2;
+      col = local.x / grid.resolution;
+      rowFromTop = grid.height - local.y / grid.resolution;
     }
-    view = { ox, oy, scale };
+    const ox = canvas.width / 2 - (col * cos - rowFromTop * sin) * scale;
+    const oy = canvas.height / 2 - (col * sin + rowFromTop * cos) * scale;
+    view = { ox, oy, scale, rot };
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(off, ox, oy, grid.width * scale, grid.height * scale);
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.rotate(rot);
+    if (squaring?.floorOutline) {
+      ctx.beginPath();
+      for (const p of squaring.floorOutline) ctx.lineTo(p.x * scale, (grid.height - p.y) * scale);
+      ctx.clip();
+      ctx.fillStyle = `rgb(${GRID_FREE_RGB.join(" ")})`;
+      ctx.fill();
+    }
+    ctx.drawImage(off, 0, 0, grid.width * scale, grid.height * scale);
+    ctx.restore();
 
     // Keepout zones are a separate Nav2 mask, deliberately overlaid on the
     // immutable localization map. Red means the planner and controller may
@@ -1340,7 +1399,7 @@ export function createMap(root, opts = {}) {
       const cellPx = (keepoutPlacement.resolution / grid.resolution) * scale;
       ctx.save();
       ctx.translate(topLeft.px, topLeft.py);
-      ctx.rotate(-(keepoutPlacement.originYaw - grid.originYaw));
+      ctx.rotate(canvasAngle(keepoutPlacement.originYaw));
       ctx.drawImage(keepoutOff, 0, 0, keepoutPlacement.width * cellPx, keepoutPlacement.height * cellPx);
       ctx.restore();
     }
@@ -1353,7 +1412,7 @@ export function createMap(root, opts = {}) {
       const cellPx = (costGrid.resolution / grid.resolution) * scale;
       ctx.save();
       ctx.translate(topLeft.px, topLeft.py);
-      ctx.rotate(-(costGrid.originYaw - grid.originYaw));
+      ctx.rotate(canvasAngle(costGrid.originYaw));
       ctx.drawImage(costOff, 0, 0, costGrid.width * cellPx, costGrid.height * cellPx);
       ctx.restore();
     }
@@ -1364,8 +1423,7 @@ export function createMap(root, opts = {}) {
       const c = Math.cos(theta);
       const s = Math.sin(theta);
       // The image's top-left corner (max-y edge, matching the row flip) in
-      // odom, carried into the map frame, then rotated relative to the map
-      // grid axes (canvas y points down, so world CCW is canvas clockwise).
+      // odom, carried into the map frame.
       const topLeftOdom = gridPoint(localGrid, 0, localGrid.height * localGrid.resolution);
       const { px, py } = worldToCanvas(
         tx + topLeftOdom.x * c - topLeftOdom.y * s,
@@ -1374,7 +1432,7 @@ export function createMap(root, opts = {}) {
       const cellPx = (localGrid.resolution / grid.resolution) * scale;
       ctx.save();
       ctx.translate(px, py);
-      ctx.rotate(-(theta + localGrid.originYaw - grid.originYaw));
+      ctx.rotate(canvasAngle(theta + localGrid.originYaw));
       ctx.drawImage(localOff, 0, 0, localGrid.width * cellPx, localGrid.height * cellPx);
       ctx.restore();
     }
@@ -1479,11 +1537,12 @@ export function createMap(root, opts = {}) {
       ctx.fill();
       const yaw = goalDrag ? Math.atan2(goalDrag.cur.y - goalDrag.start.y, goalDrag.cur.x - goalDrag.start.x) : goalMarker?.yaw;
       if (typeof yaw === "number") {
+        const heading = canvasAngle(yaw);
         ctx.strokeStyle = color;
         ctx.lineWidth = 2 * dpr();
         ctx.beginPath();
         ctx.moveTo(px, py);
-        ctx.lineTo(px + Math.cos(yaw) * r * 2.4, py - Math.sin(yaw) * r * 2.4);
+        ctx.lineTo(px + Math.cos(heading) * r * 2.4, py + Math.sin(heading) * r * 2.4);
         ctx.stroke();
       }
     }
@@ -1507,7 +1566,7 @@ export function createMap(root, opts = {}) {
         const spriteH = spriteW * (robotImg.naturalHeight / robotImg.naturalWidth);
         ctx.save();
         ctx.translate(px, py);
-        ctx.rotate(-pose.yaw); // world CCW is canvas CW; the drawing's front is +x
+        ctx.rotate(canvasAngle(pose.yaw)); // the drawing's front is +x
         ctx.imageSmoothingEnabled = true;
         // Rim light: the drawing's greys were made for the app's white map —
         // a silhouette-hugging halo keeps them readable on the dark floor.
@@ -1517,14 +1576,15 @@ export function createMap(root, opts = {}) {
         ctx.restore();
       } else {
         // Too small for the chassis to read — heading wedge + dot + ring.
-        const tipX = px + Math.cos(pose.yaw) * rad * 2.3;
-        const tipY = py - Math.sin(pose.yaw) * rad * 2.3;
+        const heading = canvasAngle(pose.yaw);
+        const tipX = px + Math.cos(heading) * rad * 2.3;
+        const tipY = py + Math.sin(heading) * rad * 2.3;
         const w = Math.max(2 * d, rad * 0.55);
         ctx.fillStyle = MAP_COLORS.robot;
         ctx.beginPath();
         ctx.moveTo(tipX, tipY);
-        ctx.lineTo(px + Math.cos(pose.yaw + Math.PI / 2) * w, py - Math.sin(pose.yaw + Math.PI / 2) * w);
-        ctx.lineTo(px + Math.cos(pose.yaw - Math.PI / 2) * w, py - Math.sin(pose.yaw - Math.PI / 2) * w);
+        ctx.lineTo(px + Math.cos(heading - Math.PI / 2) * w, py + Math.sin(heading - Math.PI / 2) * w);
+        ctx.lineTo(px + Math.cos(heading + Math.PI / 2) * w, py + Math.sin(heading + Math.PI / 2) * w);
         ctx.closePath();
         ctx.fill();
         ctx.beginPath();
@@ -1542,7 +1602,7 @@ export function createMap(root, opts = {}) {
     // every pan/zoom/follow reframe — but only re-place when the framing
     // actually changed. placeMemCard reads offsetWidth/clientHeight (a forced
     // layout), and the recall glow drives draw() at 60 fps for many seconds.
-    const cardsViewSig = view ? `${view.ox}|${view.oy}|${view.scale}` : "";
+    const cardsViewSig = view ? `${view.ox}|${view.oy}|${view.scale}|${view.rot}` : "";
     if (cardsViewSig !== memCardsViewSig) {
       memCardsViewSig = cardsViewSig;
       if (!memHoverCard.hidden && memHover) placeMemCard(memHoverCard, memHover);
@@ -1606,7 +1666,7 @@ export function createMap(root, opts = {}) {
     const nowMs = performance.now();
     const d = dpr();
     const g = /** @type {NonNullable<typeof grid>} */ (grid);
-    const v = /** @type {NonNullable<typeof view>} */ (view);
+    const v = /** @type {MapView} */ (view);
     const searchHit = memSearch?.found && nowMs < memSearchUntil ? memSearch.id : null;
     for (const m of memState.memories) {
       // Layer off: draw nothing except a memory the sidebar reel is inspecting
@@ -1891,7 +1951,7 @@ export function createMap(root, opts = {}) {
       return;
     }
     // Otherwise grab-to-pan.
-    panDrag = { px, py, center: canvasToWorld(canvas.width / 2, canvas.height / 2), moved: false };
+    panDrag = { px, py, view, moved: false };
   }
 
   /** @param {PointerEvent} e */
@@ -1946,9 +2006,8 @@ export function createMap(root, opts = {}) {
       panDrag.moved = true;
       canvas.style.cursor = "grabbing";
     }
-    // Shift the centre opposite the drag (canvas y down, world y up).
-    const mPerPx = grid.resolution / view.scale;
-    panCenter = { x: panDrag.center.x - dx * mPerPx, y: panDrag.center.y + dy * mPerPx };
+    // The grabbed point follows the pointer: centre on whatever sat opposite the drag when it began.
+    panCenter = canvasToWorld(canvas.width / 2 - dx, canvas.height / 2 - dy, panDrag.view);
     draw();
   }
 
@@ -2210,6 +2269,17 @@ export function createMap(root, opts = {}) {
   // Always on (a tiny 1 Hz JSON), not layer-gated: highlightMemory/focusMemory
   // must keep working from the sidebar reel while the layer chip is off.
   const unsubMemories = ros.subscribe(MEMORY_POSITIONS_TOPIC, onMemories, 0, "std_msgs/msg/String");
+  const unsubMode = ros.subscribe(
+    NAV_CURRENT_MODE_TOPIC,
+    (msg) => {
+      const live = msg?.data === "mapping";
+      if (live === slamMapLive) return;
+      slamMapLive = live;
+      draw();
+    },
+    0,
+    "std_msgs/msg/String",
+  );
 
   return {
     /** Re-measure and redraw. The host reparents between the thumbnail and the
@@ -2352,6 +2422,7 @@ export function createMap(root, opts = {}) {
       for (const unsub of unsubPlans) unsub();
       unsubGoal();
       unsubMemories();
+      unsubMode();
       unsubMappingPose?.();
       unadvertiseKeepoutEdit?.();
       for (const unsub of Object.values(layerUnsubs)) unsub();

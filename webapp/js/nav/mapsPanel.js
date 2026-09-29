@@ -9,7 +9,12 @@
 // drops to map-free first. The roster locks while a recording is in progress.
 
 import { NAV_AVAILABLE_MAPS_TOPIC } from "../constants.js";
+import { mapOrientation, squaringRotation, wallOutline } from "../map/orientation.js";
 import { confirmDialog } from "./confirm.js";
+
+const PREVIEW_MARGIN_PX = 8;
+// The hover card is fixed-width, so a landscape map keeps it short.
+const PREVIEW_ASPECT = 1.5;
 
 /**
  * @param {HTMLElement} host
@@ -137,14 +142,17 @@ export function createMapsPanel(host, store) {
       preview.hidden = true;
       row.addEventListener("mouseenter", () => {
         if (!preview.firstChild) {
-          const img = document.createElement("img");
-          img.alt = `Preview of ${name}`;
-          img.src = `/map/preview?name=${encodeURIComponent(name)}`;
+          const canvas = document.createElement("canvas");
+          canvas.setAttribute("role", "img");
+          canvas.setAttribute("aria-label", `Preview of ${name}`);
+          const img = new Image();
+          img.addEventListener("load", () => drawSquared(canvas, img));
           img.addEventListener("error", () => {
-            img.remove();
+            canvas.remove();
             preview.textContent = "no preview";
           });
-          preview.appendChild(img);
+          img.src = `/map/preview?name=${encodeURIComponent(name)}`;
+          preview.appendChild(canvas);
         }
         const r = row.getBoundingClientRect();
         preview.style.right = `${window.innerWidth - r.left + 10}px`;
@@ -188,4 +196,44 @@ export function createMapsPanel(host, store) {
       section.remove();
     },
   };
+}
+
+/** A saved map's preview, squared like the live map (see map/orientation.js)
+ * and cropped to its walls.
+ * @param {HTMLCanvasElement} canvas @param {HTMLImageElement} img */
+function drawSquared(canvas, img) {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const source = document.createElement("canvas");
+  source.width = w;
+  source.height = h;
+  const sourceCtx = source.getContext("2d");
+  const ctx = canvas.getContext("2d");
+  if (!sourceCtx || !ctx) return;
+  sourceCtx.drawImage(img, 0, 0);
+  // map_saver's trinary PGM: walls 0, unknown 205, free 254.
+  const gray = sourceCtx.getImageData(0, 0, w, h).data;
+  const cells = new Int8Array(w * h);
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      if (gray[(row * w + col) * 4] < 128) cells[(h - 1 - row) * w + col] = 100; // grid rows run bottom-up
+    }
+  }
+  const orientation = mapOrientation(cells, w, h);
+  const rot = squaringRotation(orientation, PREVIEW_ASPECT);
+  const c = Math.cos(rot);
+  const s = Math.sin(rot);
+  const corners = wallOutline(orientation, PREVIEW_MARGIN_PX).map(({ x, y }) => ({
+    x: x * c - (h - y) * s,
+    y: x * s + (h - y) * c,
+  }));
+  const left = Math.min(...corners.map((p) => p.x));
+  const top = Math.min(...corners.map((p) => p.y));
+  canvas.width = Math.ceil(Math.max(...corners.map((p) => p.x)) - left);
+  canvas.height = Math.ceil(Math.max(...corners.map((p) => p.y)) - top);
+  ctx.fillStyle = "rgb(205 205 205)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(-left, -top);
+  ctx.rotate(rot);
+  ctx.drawImage(img, 0, 0);
 }

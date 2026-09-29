@@ -10803,7 +10803,7 @@ select.skill-input {
   pointer-events: none;
 }
 
-.maps-preview img {
+.maps-preview canvas {
   display: block;
   width: 100%;
   border-radius: 4px;
