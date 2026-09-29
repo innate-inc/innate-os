@@ -367,7 +367,7 @@ export const SETTINGS_PAGES = [
         title: "Localization",
         note: "Grid localizer.",
         knobs: [
-          { path: ["navigation_grid_localizer", P, "max_score_threshold"], label: "Match threshold", default: 0.3, type: "float", doc: "Lower = stricter match required to accept a pose" },
+          { path: ["navigation_grid_localizer", P, "confidence_threshold"], label: "Confidence threshold", default: 0.95, type: "float", doc: "Share of the lidar evidence the best pose must hold to count as confidently localized; below it the pose is still used but flagged low confidence", min: 0.5, max: 1 },
           { path: ["navigation_grid_localizer", P, "max_range"], label: "Max lidar range", default: 12, type: "float", unit: "m", doc: "Max lidar range used for matching" },
           { path: ["navigation_grid_localizer", P, "auto_localize_timeout"], label: "Auto-localize timeout", default: 30, type: "float", unit: "s", doc: "Seconds to keep trying auto-localization on startup" },
         ],

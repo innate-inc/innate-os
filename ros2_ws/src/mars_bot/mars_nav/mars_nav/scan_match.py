@@ -7,6 +7,8 @@ endpoint's distance to the nearest occupied cell; its fit is the fraction of
 endpoints within INLIER_M of one. Unknown space never counts as a hit, so a
 pose whose beams pass through walls scores low. Searches are brute force over
 (position, heading) sets — coarse with a wide σ, then refined with a narrow one.
+How sure a match is: the best pose's share of the evidence among every distinct
+pose the search finds, each weighted by its likelihood score.
 """
 
 from __future__ import annotations
@@ -20,14 +22,19 @@ import cv2
 import numpy as np
 
 if TYPE_CHECKING:
-    from brain_client.state.lidar import Lidar
-    from brain_client.state.map import Map
+    from nav_msgs.msg import OccupancyGrid
+    from sensor_msgs.msg import LaserScan
 
 INLIER_M = 0.10
 FINE_SIGMA_M = 0.08
 COARSE_SIGMA_M = 0.20
 LASER_X_M = -0.0764  # base_link -> base_laser in mars.urdf, no rotation
 OCCUPIED_MIN = 65  # nav2 map_server's occupied_thresh
+TAU = 0.02  # score gap worth a factor e when the best pose explains the whole scan...
+TAU_SLOPE = 0.15  # ...widened per unit of what it leaves unexplained (clutter, a stale map)
+MERGE_M = 0.4
+MERGE_DEG = 20.0
+MIN_FIT = 0.55  # a confident match puts at least this share of endpoints on a wall
 
 
 @dataclass(frozen=True)
@@ -53,10 +60,10 @@ class Scan:
     py: np.ndarray
 
     @staticmethod
-    def from_lidar(lidar: Lidar, max_range: float = 11.5) -> Scan:
-        ranges = np.asarray(lidar.ranges, dtype=np.float32)
-        angles = lidar.angle_min + np.arange(len(ranges), dtype=np.float32) * lidar.angle_increment
-        ok = np.isfinite(ranges) & (ranges > max(lidar.range_min, 0.05)) & (ranges < min(lidar.range_max, max_range))
+    def from_laser_scan(msg: LaserScan, max_range: float) -> Scan:
+        ranges = np.asarray(msg.ranges, dtype=np.float32)
+        angles = msg.angle_min + np.arange(len(ranges), dtype=np.float32) * msg.angle_increment
+        ok = np.isfinite(ranges) & (ranges > max(msg.range_min, 0.05)) & (ranges < min(msg.range_max, max_range))
         r, a = ranges[ok], angles[ok]
         return Scan((r * np.cos(a) + LASER_X_M).astype(np.float32), (r * np.sin(a)).astype(np.float32))
 
@@ -80,13 +87,12 @@ class Grid:
     _fields: dict[float, np.ndarray] = field(default_factory=dict, repr=False)
 
     @staticmethod
-    def from_map(nav_map: Map) -> Grid | None:
-        cells = nav_map.grid
-        if cells is None:
-            return None
+    def from_occupancy_grid(msg: OccupancyGrid) -> Grid:
+        info = msg.info
+        cells = np.asarray(msg.data, dtype=np.int8).reshape((info.height, info.width))
         occupied = cells >= OCCUPIED_MIN
         dist = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, 5).astype(np.float32)
-        return Grid(cells == 0, dist * nav_map.resolution, nav_map.resolution, nav_map.origin_x, nav_map.origin_y)
+        return Grid(cells == 0, dist * info.resolution, info.resolution, info.origin.position.x, info.origin.position.y)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -107,6 +113,34 @@ class Grid:
             lik = np.exp(-(self.dist**2) / (2 * sigma * sigma))
             self._fields[sigma] = np.pad((lik * 255).astype(np.uint8), 1).ravel()
         return self._fields[sigma]
+
+
+@dataclass(frozen=True)
+class Estimate:
+    pose: Pose2D  # the best pose, fitted to the scan
+    share: float  # its share of the evidence among every distinct candidate
+
+    def confident(self, min_share: float) -> bool:
+        return self.share >= min_share and self.pose.fit >= MIN_FIT
+
+
+def locate(grid: Grid, scan: Scan) -> Estimate | None:
+    """The best pose over the whole map and how much of the evidence it holds, or None when nothing fits."""
+    poses = _distinct(global_search(grid, scan))
+    if not poses:
+        return None
+    best = poses[0]
+    tau = TAU + TAU_SLOPE * (1.0 - best.score)
+    return Estimate(best, 1.0 / sum(math.exp((p.score - best.score) / tau) for p in poses))
+
+
+def _distinct(poses: list[Pose2D]) -> list[Pose2D]:
+    """Best first, dropping any pose within MERGE_M and MERGE_DEG of a better one."""
+    kept: list[Pose2D] = []
+    for pose in sorted(poses, key=lambda p: -p.score):
+        if all(pose.distance(k) >= MERGE_M or pose.heading_gap(k) >= math.radians(MERGE_DEG) for k in kept):
+            kept.append(pose)
+    return kept
 
 
 def score_grid(grid: Grid, scan: Scan, xs: np.ndarray, ys: np.ndarray, thetas: np.ndarray, sigma: float) -> np.ndarray:

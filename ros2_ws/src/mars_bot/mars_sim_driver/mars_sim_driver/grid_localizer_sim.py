@@ -1,5 +1,4 @@
-"""Sim stand-in for mars_nav's grid_localizer (which is CUDA-only and can't
-run in the container). Same contract: lifecycle node named
+"""Sim stand-in for mars_nav's grid_localizer. Same contract: lifecycle node named
 navigation_grid_localizer, latched /initialpose, a `localize` Trigger -- but
 "localization" is just the driver's ground-truth odom pose (map == odom in
 sim until AMCL refines it)."""

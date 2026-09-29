@@ -89,8 +89,8 @@ echo "Started UDP leader receiver (:9999/udp)..."
 
 # === Window 3: Nav + Brain ===
 # The REAL navigation stack (mode manager, router, namespaced planners, AMCL,
-# velocity smoother) -- the sim substitutes only the CUDA grid_localizer (see
-# mars_sim_driver) and seeds the maps dir with every environment pack's map so
+# velocity smoother) -- the sim substitutes only grid_localizer, with a
+# ground-truth stand-in (see mars_sim_driver), and seeds the maps dir with every environment pack's map so
 # the mode manager boots straight into navigation mode and the world server
 # can switch it between packs (/nav/change_navigation_map).
 mkdir -p ~/innate-os/data/maps
