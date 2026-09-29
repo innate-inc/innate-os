@@ -185,8 +185,14 @@ class MainCameraDriver : public rclcpp::Node {
     bool initializeCamera();
 
     /**
-     * @brief Find the camera by its by-id name and open its capture and V4L2 controls
-     * @return true only if both are open; otherwise leaves the camera closed
+     * @brief Open the V4L2 control fd and apply the configured exposure mode, anti-flicker, exposure and gain
+     * @return true if the control fd opened
+     */
+    bool applyV4L2Controls();
+
+    /**
+     * @brief Find the camera by its by-id name and open its capture (and, if it can, its V4L2 controls)
+     * @return true if the capture opened; otherwise leaves the camera closed
      */
     bool openCamera();
 

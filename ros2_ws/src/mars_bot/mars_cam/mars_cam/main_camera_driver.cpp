@@ -197,75 +197,79 @@ bool MainCameraDriver::initializeCamera() {
                     publish_stereo_height_, actual_width, actual_height);
     }
 
-    // Initialize V4L2 controls
+    applyV4L2Controls();
+    return true;
+}
+
+bool MainCameraDriver::applyV4L2Controls() {
     if (!initializeV4L2Controls()) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to initialize V4L2 controls");
-    } else {
-        // Configure V4L2 and initialize AE controller based on mode
-        switch (auto_exposure_mode_) {
-            case AutoExposureMode::HARDWARE:
-                // Camera built-in AE (aperture priority) — no PID, reset gain to default
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: HARDWARE (aperture priority)");
-                    if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
-                        current_gain_ = default_gain_param_;
-                        RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
-                    }
+        return false;
+    }
+
+    // Configure V4L2 and initialize AE controller based on mode
+    switch (auto_exposure_mode_) {
+        case AutoExposureMode::HARDWARE:
+            // Camera built-in AE (aperture priority) — no PID, reset gain to default
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: HARDWARE (aperture priority)");
+                if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
+                    current_gain_ = default_gain_param_;
+                    RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
                 }
-                break;
-
-            case AutoExposureMode::CUSTOM_PID:
-                // Custom PID AE — set V4L2 manual mode, initialize and run PID controller
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: CUSTOM_PID (manual V4L2 + PID controller)");
-                }
-                auto_exposure_controller_.initialize(exposure_min_, exposure_max_, target_brightness_, ae_kp_);
-                RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
-                RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
-                RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
-                RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)",
-                             auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
-                break;
-
-            case AutoExposureMode::MANUAL:
-                // Pure manual — set V4L2 manual mode, no PID controller
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: MANUAL (pure manual, no PID)");
-                }
-                break;
-        }
-
-        // Anti-flicker filter: match the camera's banding filter to the local mains
-        // frequency so indoor lighting doesn't flicker in auto-exposure mode.
-        int flicker_ctrl = -1;
-        if (power_line_frequency_ == 0) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_DISABLED;
-        } else if (power_line_frequency_ == 50) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_50HZ;
-        } else if (power_line_frequency_ == 60) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_60HZ;
-        }
-        if (flicker_ctrl < 0) {
-            RCLCPP_WARN(this->get_logger(),
-                        "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
-                        power_line_frequency_);
-        } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
-            RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz",
-                             power_line_frequency_);
-        }
-
-        if (exposure_setting_ >= 0) {
-            if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
-                current_exposure_ = exposure_setting_;
-                RCLCPP_DEBUG(this->get_logger(), "Set exposure to %d", exposure_setting_);
             }
-        }
+            break;
 
-        if (gain_setting_ >= 0) {
-            if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
-                current_gain_ = gain_setting_;
-                RCLCPP_DEBUG(this->get_logger(), "Set gain to %d", gain_setting_);
+        case AutoExposureMode::CUSTOM_PID:
+            // Custom PID AE — set V4L2 manual mode, initialize and run PID controller
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: CUSTOM_PID (manual V4L2 + PID controller)");
             }
+            auto_exposure_controller_.initialize(exposure_min_, exposure_max_, target_brightness_, ae_kp_);
+            RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
+            RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
+            RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
+            RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)",
+                         auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
+            break;
+
+        case AutoExposureMode::MANUAL:
+            // Pure manual — set V4L2 manual mode, no PID controller
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: MANUAL (pure manual, no PID)");
+            }
+            break;
+    }
+
+    // Anti-flicker filter: match the camera's banding filter to the local mains
+    // frequency so indoor lighting doesn't flicker in auto-exposure mode.
+    int flicker_ctrl = -1;
+    if (power_line_frequency_ == 0) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_DISABLED;
+    } else if (power_line_frequency_ == 50) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_50HZ;
+    } else if (power_line_frequency_ == 60) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_60HZ;
+    }
+    if (flicker_ctrl < 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
+                    power_line_frequency_);
+    } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
+        RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
+    }
+
+    if (exposure_setting_ >= 0) {
+        if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
+            current_exposure_ = exposure_setting_;
+            RCLCPP_DEBUG(this->get_logger(), "Set exposure to %d", exposure_setting_);
+        }
+    }
+
+    if (gain_setting_ >= 0) {
+        if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
+            current_gain_ = gain_setting_;
+            RCLCPP_DEBUG(this->get_logger(), "Set gain to %d", gain_setting_);
         }
     }
 
@@ -274,9 +278,7 @@ bool MainCameraDriver::initializeCamera() {
 
 bool MainCameraDriver::openCamera() {
     camera_device_ = findCameraByIdPath(camera_pattern_);
-    // A capture without its control fd would run on the camera's power-on exposure, gain and
-    // anti-flicker defaults with nothing left to retry them, so count that as not open.
-    if (camera_device_.empty() || !initializeCamera() || camera_fd_ == -1) {
+    if (camera_device_.empty() || !initializeCamera()) {
         closeCamera();
         return false;
     }
@@ -449,6 +451,12 @@ void MainCameraDriver::frameProcessingLoop() {
                 reconnecting = false;
                 RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)",
                             currentVideoNode(camera_device_).c_str());
+            }
+
+            // Keep a working stream even if its control fd failed to open; retrying here is what gets
+            // exposure, gain and anti-flicker applied once the control device answers.
+            if (camera_fd_ == -1) {
+                applyV4L2Controls();
             }
 
             // Increment frame counter
