@@ -97,12 +97,13 @@ export const AMCL_POSE_TOPIC = "/amcl_pose";
 export const COMMANDED_GOAL_TOPIC = "/nav/commanded_goal";
 // Stop all active navigation (std_srvs/Trigger), no matter which client started it.
 export const CANCEL_NAVIGATION_SERVICE = "/nav/cancel_navigation";
-// Auto-localization (std_srvs/Trigger on grid_localizer). Can take tens of seconds.
+// Auto-localization (std_srvs/Trigger on grid_localizer), about half a second.
 export const LOCALIZE_SERVICE = "/localize";
 // grid_localizer's one-shot result (std_msgs/String, published once per
 // localization attempt): processing_map | localized | localized_low_confidence
-// | error. Only seen if subscribed when it fires — steady-state localization
-// health comes from /amcl_pose covariance instead (mobile-app pattern).
+// | error; the map widget adds "localized" after a hand placement. Only seen if
+// subscribed when it fires — steady-state localization health comes from
+// /amcl_pose covariance instead (mobile-app pattern).
 export const LOCALIZATION_STATUS_TOPIC = "/localization/status";
 // AMCL's manual seed (nav2_msgs/srv/SetInitialPose) — place the robot by hand.
 export const SET_INITIAL_POSE_SERVICE = "/set_initial_pose";
