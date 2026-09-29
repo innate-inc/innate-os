@@ -250,7 +250,8 @@ bool MainCameraDriver::initializeCamera() {
                         "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
                         power_line_frequency_);
         } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
-            RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
+            RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz",
+                             power_line_frequency_);
         }
 
         if (exposure_setting_ >= 0) {
@@ -348,8 +349,8 @@ bool MainCameraDriver::initializeV4L2Controls() {
     // Open camera device for control access
     camera_fd_ = open(camera_device_.c_str(), O_RDWR);
     if (camera_fd_ == -1) {
-        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to open camera for V4L2 controls: %s",
-                              strerror(errno));
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                              "Failed to open camera for V4L2 controls: %s", strerror(errno));
         return false;
     }
 

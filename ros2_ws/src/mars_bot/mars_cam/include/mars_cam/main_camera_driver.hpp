@@ -284,7 +284,7 @@ class MainCameraDriver : public rclcpp::Node {
     std::string data_directory_;
     std::string camera_pattern_;  // camera_symlink parameter: substring of the camera's /dev/v4l/by-id name
     std::string camera_device_;   // its by-id path; "" while no matching camera is plugged in
-    int capture_width_;  // Capture resolution (full FOV)
+    int capture_width_;           // Capture resolution (full FOV)
     int capture_height_;
     int left_width_;  // Left camera at capture resolution
     int left_height_;
