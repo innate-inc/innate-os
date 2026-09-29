@@ -164,9 +164,17 @@ def refine(
 
 
 def global_search(grid: Grid, scan: Scan, k: int = 8) -> list[Pose2D]:
-    """The k best separated poses over the whole map."""
+    """The k best distinct poses over the whole map, apart in position or in heading."""
     return _coarse_to_fine(
-        grid, scan, grid.free & (grid.clearance >= 0.12), spacing_m=0.2, heading_deg=6.0, k=k, sep_m=0.8, beams=90
+        grid,
+        scan,
+        grid.free & (grid.clearance >= 0.12),
+        spacing_m=0.2,
+        heading_deg=6.0,
+        k=k,
+        sep_m=0.8,
+        sep_deg=30.0,
+        beams=90,
     )
 
 
@@ -179,6 +187,7 @@ def _coarse_to_fine(
     heading_deg: float,
     k: int,
     sep_m: float,
+    sep_deg: float,
     beams: int,
 ) -> list[Pose2D]:
     step = max(1, round(spacing_m / grid.resolution))
@@ -189,7 +198,7 @@ def _coarse_to_fine(
     xs, ys = grid.world(rows[keep], cols[keep])
     thetas = np.radians(np.arange(0.0, 360.0, heading_deg))
     scores = score_grid(grid, scan.subsample(beams), xs, ys, thetas, COARSE_SIGMA_M)
-    seeds = _separated_peaks(xs, ys, thetas, scores, k, sep_m)
+    seeds = _separated_peaks(xs, ys, thetas, scores, k, sep_m, sep_deg)
     refined = [
         refine(grid, scan, seed, span_m=spacing_m, step_m=spacing_m / 5, span_deg=heading_deg, step_deg=2.0)
         for seed in seeds
@@ -198,14 +207,16 @@ def _coarse_to_fine(
 
 
 def _separated_peaks(
-    xs: np.ndarray, ys: np.ndarray, thetas: np.ndarray, scores: np.ndarray, k: int, sep_m: float
+    xs: np.ndarray, ys: np.ndarray, thetas: np.ndarray, scores: np.ndarray, k: int, sep_m: float, sep_deg: float
 ) -> list[Pose2D]:
-    best_heading = scores.argmax(axis=1)
-    best = scores[np.arange(len(xs)), best_heading]
+    """The k best (position, heading) cells, each sep_m or sep_deg from every better pick:
+    one spot facing two ways is two hypotheses (a corridor fits its own reverse)."""
     picked: list[Pose2D] = []
-    for i in np.argsort(-best):
+    for flat in np.argsort(-scores, axis=None):
         if len(picked) >= k:
             break
-        if all(math.hypot(xs[i] - p.x, ys[i] - p.y) >= sep_m for p in picked):
-            picked.append(Pose2D(float(xs[i]), float(ys[i]), float(thetas[best_heading[i]]), score=float(best[i])))
+        i, j = divmod(int(flat), len(thetas))
+        pose = Pose2D(float(xs[i]), float(ys[i]), float(thetas[j]), score=float(scores[i, j]))
+        if all(pose.distance(p) >= sep_m or pose.heading_gap(p) >= math.radians(sep_deg) for p in picked):
+            picked.append(pose)
     return picked
