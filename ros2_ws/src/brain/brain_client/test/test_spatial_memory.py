@@ -1183,7 +1183,7 @@ def test_a_failing_promotion_never_escapes_the_callback(data_dir, clock):
     # disk mid-promotion must log, not kill the node.
     recorder, store = make_recorder(data_dir)
 
-    def full_disk(_name, _started):
+    def full_disk(_name, _started, _rotation):
         raise OSError("disk full")
 
     store.promote_mapping_session = full_disk

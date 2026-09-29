@@ -204,6 +204,7 @@ class MemoryRecorder:
             payload = json.loads(msg.data)
             map_name, stamp = str(payload["map"]), float(payload["stamp"])
             mapping_started = float(payload["mapping_started"]) if "mapping_started" in payload else None
+            rotation = float(payload.get("rotation", 0.0))
         except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             self._logger.error(f"[Memory] unreadable map-save announcement: {msg.data!r}")
             return
@@ -213,7 +214,7 @@ class MemoryRecorder:
             self._logger.info(f"[Memory] ignoring a stale save announcement for {map_name} ({age:.0f}s old)")
             return
         try:
-            promoted = self._store.promote_mapping_session(map_name, mapping_started)
+            promoted = self._store.promote_mapping_session(map_name, mapping_started, rotation)
         except StaleStageError as error:
             self._logger.error(f"[Memory] stage not promoted to {map_name} — another session built it: {error}")
             return
