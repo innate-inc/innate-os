@@ -59,16 +59,31 @@ def straighten_saved_map(yaml_path: Path) -> float:
     if not ok:
         raise OSError(f"could not encode the straightened {image_path.name}")
     meta["origin"] = [origin[0], origin[1], 0.0]
-    # Both staged before either lands: a full disk must not leave a new
-    # image under the old origin.
+    _replace_pair(image_path, pgm.tobytes(), yaml_path, meta)
+    return rotation
+
+
+def _replace_pair(image_path: Path, image: bytes, yaml_path: Path, meta: dict) -> None:
+    """Swap in a new image and yaml together: whatever fails, the recorded pair
+    stays, since a new image under the old origin puts every wall elsewhere."""
     image_tmp = image_path.with_name(f"{image_path.name}.tmp")
     yaml_tmp = yaml_path.with_name(f"{yaml_path.name}.tmp")
-    image_tmp.write_bytes(pgm.tobytes())
-    with yaml_tmp.open("w") as stream:
-        yaml.safe_dump(meta, stream, sort_keys=False, default_flow_style=None)
-    os.replace(image_tmp, image_path)
-    os.replace(yaml_tmp, yaml_path)
-    return rotation
+    recorded = image_path.with_name(f"{image_path.name}.recorded")
+    try:
+        image_tmp.write_bytes(image)
+        with yaml_tmp.open("w") as stream:
+            yaml.safe_dump(meta, stream, sort_keys=False, default_flow_style=None)
+        recorded.unlink(missing_ok=True)
+        os.link(image_path, recorded)
+        os.replace(image_tmp, image_path)
+        try:
+            os.replace(yaml_tmp, yaml_path)
+        except OSError:
+            os.replace(recorded, image_path)
+            raise
+    finally:
+        for leftover in (image_tmp, yaml_tmp, recorded):
+            leftover.unlink(missing_ok=True)
 
 
 def wall_angle(image: np.ndarray) -> float:
