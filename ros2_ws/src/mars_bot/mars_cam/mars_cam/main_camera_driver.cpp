@@ -433,6 +433,7 @@ void MainCameraDriver::frameProcessingLoop() {
 
     cv::Mat frame;
     bool reconnecting = false;
+    auto next_control_retry = std::chrono::steady_clock::now();
 
     while (frame_thread_running_ && rclcpp::ok()) {
         try {
@@ -455,7 +456,9 @@ void MainCameraDriver::frameProcessingLoop() {
 
             // Keep a working stream even if its control fd failed to open; retrying here is what gets
             // exposure, gain and anti-flicker applied once the control device answers.
-            if (camera_fd_ == -1) {
+            const auto now = std::chrono::steady_clock::now();
+            if (camera_fd_ == -1 && now >= next_control_retry) {
+                next_control_retry = now + std::chrono::seconds(1);
                 applyV4L2Controls();
             }
 
