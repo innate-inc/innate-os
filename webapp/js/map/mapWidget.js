@@ -1783,12 +1783,17 @@ export function createMap(root, opts = {}) {
           },
         },
       });
-      // A hand placement vouches for the pose: the memory recorder resumes after an ambiguous match.
-      ros.callService(HAND_PLACED_SERVICE).catch(() => {});
-      setStatus("ok", "Position set", true);
     } catch (err) {
       setStatus("fail", `Set position failed — ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
+    // A hand placement vouches for the pose: the memory recorder resumes after an ambiguous match.
+    const noted = await ros.callService(HAND_PLACED_SERVICE).then(
+      (res) => res?.success === true,
+      () => false,
+    );
+    if (noted) setStatus("ok", "Position set", true);
+    else setStatus("hint", "Position set, but the localizer did not note it — memory recording may stay paused until you press Locate or place the robot again");
   }
 
   /** @param {number} x @param {number} y @param {number} yaw */
