@@ -16,16 +16,18 @@ const MIN_GAIN = 1.1;
 // map keeps the smaller rotation, and a near-square screen (the teleop
 // thumbnail) lays maps out like the landscape Nav page it expands into.
 const OBLONG = 1.15;
-// The aspect ignores the outermost few wall cells: stray hits through doors
-// and windows would otherwise decide it.
-const SPREAD_TAIL = 0.005;
+// A wall cell sets the walls' extent only with this many wall cells (itself
+// included) in the 3 × 3 buckets around it: a real wall, however far, arrives
+// as a run of hits, while a lone stray through a door or window must not
+// stretch the outline.
+const SUPPORT_BUCKET = 20; // cells: 1 m on MARS's 5 cm maps
+const MIN_SUPPORT = 5;
 
 /**
  * `angle` is the dominant wall direction in the grid frame (radians CCW, in
- * (-π/4, π/4]). Every wall cell lies within `along` × `across`: ranges in
- * cells, along that direction and across it, from the grid's corner. `aspect`
- * is the walls' along/across ratio.
- * @typedef {{ angle: number, along: [number, number], across: [number, number], aspect: number }} MapOrientation
+ * (-π/4, π/4]). The walls lie within `along` × `across`: ranges in cells,
+ * along that direction and across it, from the grid's corner.
+ * @typedef {{ angle: number, along: [number, number], across: [number, number] }} MapOrientation
  */
 
 /** A point in grid cells: x along the columns, y up the rows.
@@ -51,7 +53,7 @@ export function mapOrientation(cells, width, height) {
       }
     }
   }
-  if (xs.length < MIN_WALL_CELLS) return { angle: 0, along: [0, width], across: [0, height], aspect: width / Math.max(1, height) };
+  if (xs.length < MIN_WALL_CELLS) return { angle: 0, along: [0, width], across: [0, height] };
 
   const reach = Math.ceil(Math.hypot(width, height)) + 1;
   const bins = new Float64Array(2 * reach + 2);
@@ -89,9 +91,19 @@ export function mapOrientation(cells, width, height) {
 
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  const along = measure(xs.map((x, i) => (x + 0.5) * c + (ys[i] + 0.5) * s));
-  const across = measure(xs.map((x, i) => (ys[i] + 0.5) * c - (x + 0.5) * s));
-  return { angle, along: along.extent, across: across.extent, aspect: along.spread / Math.max(1, across.spread) };
+  /** @type {[number, number]} */
+  const along = [Infinity, -Infinity];
+  /** @type {[number, number]} */
+  const across = [Infinity, -Infinity];
+  for (const i of supportedWalls(xs, ys, width, height)) {
+    const a = (xs[i] + 0.5) * c + (ys[i] + 0.5) * s;
+    const b = (ys[i] + 0.5) * c - (xs[i] + 0.5) * s;
+    along[0] = Math.min(along[0], a);
+    along[1] = Math.max(along[1], a);
+    across[0] = Math.min(across[0], b);
+    across[1] = Math.max(across[1], b);
+  }
+  return { angle, along, across };
 }
 
 /**
@@ -100,7 +112,8 @@ export function mapOrientation(cells, width, height) {
  * long side — never more than a quarter turn.
  * @param {MapOrientation} orientation @param {number} screenAspect width over height
  */
-export function squaringRotation({ angle, aspect }, screenAspect) {
+export function squaringRotation({ angle, along, across }, screenAspect) {
+  const aspect = (along[1] - along[0]) / Math.max(1, across[1] - across[0]);
   const portrait = screenAspect * OBLONG < 1;
   const turnQuarter = portrait ? aspect > OBLONG : aspect * OBLONG < 1;
   if (!turnQuarter) return angle;
@@ -132,10 +145,25 @@ function foldQuarter(theta) {
   return theta - quarter * Math.round(theta / quarter - 1e-9);
 }
 
-/** @param {number[]} values @returns {{ extent: [number, number], spread: number }} */
-function measure(values) {
-  values.sort((a, b) => a - b);
-  const last = values.length - 1;
-  const spread = values[Math.round(last * (1 - SPREAD_TAIL))] - values[Math.round(last * SPREAD_TAIL)];
-  return { extent: [values[0], values[last]], spread };
+/**
+ * Indices of the wall cells with company enough to set the extent (see
+ * MIN_SUPPORT); all of them when none has, so the extent is never empty.
+ * @param {number[]} xs @param {number[]} ys @param {number} width @param {number} height
+ */
+function supportedWalls(xs, ys, width, height) {
+  const cols = Math.ceil(width / SUPPORT_BUCKET);
+  const rows = Math.ceil(height / SUPPORT_BUCKET);
+  const counts = new Int32Array(cols * rows);
+  const bx = xs.map((x) => Math.floor(x / SUPPORT_BUCKET));
+  const by = ys.map((y) => Math.floor(y / SUPPORT_BUCKET));
+  bx.forEach((col, i) => counts[by[i] * cols + col]++);
+  const all = xs.map((_, i) => i);
+  const supported = all.filter((i) => {
+    let n = 0;
+    for (let row = Math.max(0, by[i] - 1); row <= Math.min(rows - 1, by[i] + 1); row++) {
+      for (let col = Math.max(0, bx[i] - 1); col <= Math.min(cols - 1, bx[i] + 1); col++) n += counts[row * cols + col];
+    }
+    return n >= MIN_SUPPORT;
+  });
+  return supported.length ? supported : all;
 }
