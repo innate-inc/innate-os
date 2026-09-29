@@ -12,6 +12,7 @@ ignore it — so the turn lives in the pixels.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from pathlib import Path
@@ -83,7 +84,9 @@ def _replace_pair(image_path: Path, image: bytes, yaml_path: Path, meta: dict) -
             raise
     finally:
         for leftover in (image_tmp, yaml_tmp, recorded):
-            leftover.unlink(missing_ok=True)
+            # a stray leftover is harmless; raising here would report a landed swap as rotation 0
+            with contextlib.suppress(OSError):
+                leftover.unlink(missing_ok=True)
 
 
 def wall_angle(image: np.ndarray) -> float:
