@@ -46,6 +46,7 @@ set(msg_files
   "msg/SkillInfo.msg"
   "msg/AvailableSkills.msg"
   "msg/EncodeStatus.msg"
+  "msg/PlaceMatch.msg"
 )
 
 set(action_files
@@ -54,6 +55,7 @@ set(action_files
   "action/ExecuteBehavior.action"
   "action/ExecuteArmCommand.action"
   "action/SearchMemory.action"
+  "action/RecognizePlace.action"
 )
 
 if(BUILD_TESTING)

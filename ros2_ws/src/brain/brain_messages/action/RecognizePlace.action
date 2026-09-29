@@ -1,0 +1,14 @@
+# Goal definition
+string[] images_b64  # recent camera views as JPEG, oldest first; the last is the current view
+string[] labels      # one per image: where it was taken relative to the robot now
+string context       # extra facts for the model (e.g. lidar clearance around the robot)
+---
+# Result definition
+string error                 # non-empty when recognition itself failed (transport, unreadable answer)
+brain_messages/PlaceMatch[] matches
+float64 turn_deg             # suggested next move toward a more recognizable view: turn first (+ = left)...
+float64 forward_m            # ...then drive straight
+string move_reason
+float64 latency_sec
+---
+# Feedback definition
