@@ -13,15 +13,15 @@ import inspect
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_type_hints
 
 from httpx import HTTPError
 
 import innate
 from brain_client.common.script_paths import get_innate_skills_dir
-from innate import Manipulation
+from innate import Head, HeadState, Manipulation, Mobility, Odometry
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
@@ -33,6 +33,10 @@ ENDPOINT = "/v1/chat/completions"
 EXEMPLARS = ("head_emotion.py", "turn_in_place.py", "arm/arm_rest_position.py")
 ARM_CONSTANTS = ("JOINT_NAMES", "ZERO", "REST", "REACH_X", "REACH_Y", "GRIPPER_CLOSED", "GRIPPER_OPEN")
 ARM_METHODS = ("move_joints", "rest", "move_to", "move_by", "reachable", "gripper_open", "gripper_close", "wait")
+HEAD_STATE = ("pitch_degrees", "min_degrees", "max_degrees", "default_degrees")
+HEAD_METHODS = ("set_position",)
+ODOMETRY = ("x", "y", "theta", "theta_degrees", "linear_velocity", "angular_velocity")
+BASE_METHODS = ("send_cmd_vel", "rotate_in_place")
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
 _REFUSAL = re.compile(r"^\s*CANNOT:\s*(.+?)\s*$", re.MULTILINE)
 _MODULE_PREFIX = re.compile(r"\b(?:[a-z_]+\.)+(?=[A-Z])")
@@ -84,6 +88,18 @@ graspable box is REACH_X by REACH_Y just above the floor. Moves block until the 
 raise ArmFailed or ArmUnhealthy (both importable from innate) when it cannot.
 """
 
+HEAD = """\
+Declare `head: Head` on the class to tilt the head with self.head.set_position(degrees), and \
+`head_position: HeadState` to read where it is (self.head_position.pitch_degrees). The head has one \
+axis, pitch: negative looks down, 0 is level. set_position returns at once; self.sleep while it travels.
+"""
+
+BASE = """\
+Declare `mobility: Mobility` on the class to drive the base with self.mobility, and `odom: Odometry` \
+to read its pose in the odom frame (metres; theta in radians, counter-clockwise positive). Velocity \
+commands return at once; give each a duration so the base stops by itself.
+"""
+
 
 def system_prompt() -> str:
     exemplars = "\n\n".join(
@@ -91,6 +107,7 @@ def system_prompt() -> str:
     )
     return (
         f"{RULES}\n# The `innate` API\n{innate.__doc__}\n\n# The arm\n{arm_reference()}\n\n"
+        f"# The head\n{head_reference()}\n\n# The base\n{base_reference()}\n\n"
         f"# Example skills\n{exemplars}"
     )
 
@@ -98,15 +115,36 @@ def system_prompt() -> str:
 def arm_reference() -> str:
     """Manipulation's skill-facing surface, read off the class so the prompt cannot drift from it."""
     constants = "\n".join(f"Manipulation.{name} = {getattr(Manipulation, name)!r}" for name in ARM_CONSTANTS)
-    methods = "\n\n".join(_method_stub(name) for name in ARM_METHODS)
-    return f"{ARM}```python\n{constants}\n\n{methods}\n```"
+    return f"{ARM}```python\n{constants}\n\n{_method_stubs(Manipulation, ARM_METHODS)}\n```"
 
 
-def _method_stub(name: str) -> str:
-    method = getattr(Manipulation, name)
+def head_reference() -> str:
+    return f"{HEAD}```python\n{_attributes(HeadState, HEAD_STATE)}\n\n{_method_stubs(Head, HEAD_METHODS)}\n```"
+
+
+def base_reference() -> str:
+    return f"{BASE}```python\n{_attributes(Odometry, ODOMETRY)}\n\n{_method_stubs(Mobility, BASE_METHODS)}\n```"
+
+
+def _attributes(cls: type, names: tuple[str, ...]) -> str:
+    return "\n".join(f"{cls.__name__}.{name}: {inspect.formatannotation(_hint(cls, name))}" for name in names)
+
+
+def _hint(cls: type, name: str) -> object:
+    member = vars(cls).get(name)
+    if isinstance(member, property):
+        return get_type_hints(member.fget)["return"]
+    return get_type_hints(cls)[name]
+
+
+def _method_stubs(cls: type, names: tuple[str, ...]) -> str:
+    return "\n\n".join(_method_stub(getattr(cls, name)) for name in names)
+
+
+def _method_stub(method: Callable[..., object]) -> str:
     signature = _MODULE_PREFIX.sub("", str(inspect.signature(method)))
     doc = (inspect.getdoc(method) or "").replace("\n", "\n    ")
-    return f'def {name}{signature}:\n    """{doc}"""'
+    return f'def {method.__name__}{signature}:\n    """{doc}"""'
 
 
 class ForgeUnreachable(Exception):
