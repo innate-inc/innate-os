@@ -28,11 +28,14 @@ from brain_client.common.logging import UniversalLogger
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 
+SPEED_RANGE = (0.6, 1.5)  # Cartesia's generation_config speed bounds (sonic-3 and newer)
+
 
 @dataclass(frozen=True)
 class Delivery:
-    """How a clip is read, in Cartesia generation_config terms (sonic-3 and
-    newer): speed 0.6-1.5, volume 0.5-2.0. None keeps the platform default.
+    """How a clip is read: ``speed`` scales the platform's usual rate (the speaker
+    already reads at the top of SPEED_RANGE, the sim at 1.0), ``volume`` is
+    Cartesia's absolute gain (0.5-2.0). None keeps the default.
     ``sound_effect``: the text describes a sound to generate, not words to read."""
 
     speed: float | None = None
@@ -41,8 +44,14 @@ class Delivery:
     seconds: float | None = None  # a generated sound effect's length; None lets the generator pick
     pcm: bytes | None = None  # a ready clip: 16-bit mono PCM at SPEAKER_SAMPLE_RATE, played as-is
 
-    def generation_config(self) -> dict[str, float]:
-        return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
+    def generation_config(self, base_speed: float) -> dict[str, float]:
+        config: dict[str, float] = {}
+        if self.speed is not None:
+            slowest, fastest = SPEED_RANGE
+            config["speed"] = min(max(base_speed * self.speed, slowest), fastest)
+        if self.volume is not None:
+            config["volume"] = self.volume
+        return config
 
 
 def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
@@ -52,10 +61,11 @@ def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
     try:
         payload = json.loads(data)
         if "sound" in payload:
+            sound = str(payload["sound"]).strip()
+            if not sound:
+                return None
             seconds = payload.get("seconds")
-            return str(payload["sound"]), Delivery(
-                sound_effect=True, seconds=None if seconds is None else float(seconds)
-            )
+            return sound, Delivery(sound_effect=True, seconds=None if seconds is None else float(seconds))
         if "pcm" in payload:
             return str(payload.get("label", "")), Delivery(sound_effect=True, pcm=base64.b64decode(payload["pcm"]))
         speed, volume = payload.get("speed"), payload.get("volume")
@@ -148,6 +158,7 @@ class TTSHandler:
         self._speech_cv = threading.Condition()
         self._playing_reply_id: str | None = None
         self._closing = threading.Event()
+        self._sound_lock = threading.Lock()  # one generation at a time: a prefetch and the worker never race
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
     def _init_client(self):
@@ -283,12 +294,14 @@ class TTSHandler:
             return self._sound_effect_bytes(text, delivery.seconds)
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
-            generation_config: dict[str, float] = {"speed": self.SPEAKER_SPEED}
+            base_speed = self.SPEAKER_SPEED
+            generation_config: dict[str, float] = {"speed": base_speed}
         else:
             output_format = {"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100}
+            base_speed = 1.0
             generation_config = {}
         if delivery is not None:
-            generation_config.update(delivery.generation_config())
+            generation_config.update(delivery.generation_config(base_speed))
         return self._cartesia_client.tts.bytes_stream(
             model_id="sonic-3.5",
             transcript=text,
@@ -305,29 +318,48 @@ class TTSHandler:
     SOUND_SECONDS = (0.5, 30.0)  # the generator's duration_seconds range; unset, it picks a few seconds
 
     def _sound_effect_bytes(self, text: str, seconds: float | None) -> Iterator[bytes]:
+        yield self._sound_effect_file(text, seconds).read_bytes()
+
+    def _sound_effect_file(self, text: str, seconds: float | None) -> Path:
         body: dict[str, Any] = {"text": text}
         if seconds is not None:
             shortest, longest = self.SOUND_SECONDS
             body["duration_seconds"] = min(max(seconds, shortest), longest)
-        key = f"{json.dumps(body, sort_keys=True)} mono"  # "mono": the earlier keys hold the raw stereo answer
+        key = json.dumps(body, sort_keys=True)
         cached = self.SOUND_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.pcm"
-        if not cached.exists():
-            with self._proxy.request_stream(
-                "elevenlabs",
-                "/v1/sound-generation",
-                json=body,
-                params={"output_format": f"pcm_{self.SPEAKER_SAMPLE_RATE}"},
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                stereo = response.read()
-            # pcm_16000 arrives as interleaved STEREO s16, whatever the format name suggests;
-            # fed to aplay as mono it plays at half speed, an octave down.
-            cached.parent.mkdir(parents=True, exist_ok=True)
-            staging = cached.with_suffix(".tmp")
-            staging.write_bytes(audioop.tomono(stereo, 2, 0.5, 0.5))
-            staging.replace(cached)  # a crash mid-write must not leave a clipped sound to replay forever
-        yield cached.read_bytes()
+        with self._sound_lock:
+            if not cached.exists():
+                self._generate_sound(body, cached)
+        return cached
+
+    def _generate_sound(self, body: dict[str, Any], cached: Path) -> None:
+        with self._proxy.request_stream(
+            "elevenlabs",
+            "/v1/sound-generation",
+            json=body,
+            params={"output_format": f"pcm_{self.SPEAKER_SAMPLE_RATE}"},
+            timeout=60.0,
+        ) as response:
+            response.raise_for_status()
+            stereo = response.read()
+        # pcm_16000 arrives as interleaved STEREO s16, whatever the format name suggests;
+        # fed to aplay as mono it plays at half speed, an octave down.
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        staging = cached.with_suffix(".tmp")
+        staging.write_bytes(audioop.tomono(stereo, 2, 0.5, 0.5))
+        staging.replace(cached)  # a crash mid-write must not leave a clipped sound to replay forever
+
+    def _prefetch_sound(self, text: str, seconds: float | None) -> None:
+        """Generate a queued sound while earlier speech plays: generated on the worker instead,
+        it would hold every later reply and keep the mic ducked for the whole request."""
+
+        def generate() -> None:
+            try:
+                self._sound_effect_file(text, seconds)
+            except Exception as e:  # noqa: BLE001 — the worker generates again and reports that failure
+                self.logger.debug(f"Sound prefetch failed: {e}")
+
+        threading.Thread(target=generate, daemon=True).start()
 
     def _synthesize_to_aplay(
         self,
@@ -535,6 +567,8 @@ class TTSHandler:
                     _Utterance(text, voice_config, on_start, on_done, reply_id, protected, delivery)
                 )
                 self._speech_cv.notify()
+        if queued and delivery is not None and delivery.sound_effect and delivery.pcm is None:
+            self._prefetch_sound(text, delivery.seconds)
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
         for callback in dropped_callbacks:

@@ -68,12 +68,12 @@ def get_learned_skills_dir() -> Path:
 
 
 DRAFT_MARKER = "# innate: draft under trial\n"
-"""First line of a learned skill while learn_skill tries it: loaded and runnable, withheld from the roster."""
+"""Last line of a learned skill while learn_skill tries it: loaded and runnable, withheld from the
+roster. Last, not first, so the file's line numbers stay the ones the coder was shown."""
 
 
 def is_draft(path: Path | str) -> bool:
-    with open(path, encoding="utf-8") as source:
-        return source.readline() == DRAFT_MARKER
+    return Path(path).read_bytes().endswith(DRAFT_MARKER.encode())
 
 
 # workspace/ directories that are never skill packages: agent/input/lib

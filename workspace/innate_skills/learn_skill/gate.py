@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import sys
 from dataclasses import dataclass
 
 from brain_client.common.dynamic_loader import class_name_to_snake_case
@@ -48,10 +49,29 @@ BANNED_NAMES = frozenset(
         "sleep",  # `from time import sleep`: time.sleep ignores Stop
     }
 )
-# Attributes that turn an allowed module into a door (typing.sys, json.decoder, ...).
+# Attributes that turn an allowed module into a door (typing.sys, json.decoder, dataclasses.inspect,
+# json.codecs.open ...): the escape modules, and the banned builtins reached as attributes.
 BANNED_ATTRS = frozenset(
-    {"sys", "os", "subprocess", "builtins", "importlib", "socket", "shutil", "ctypes", "modules", "smtplib", "decoder"}
-)
+    {
+        "sys",
+        "os",
+        "subprocess",
+        "builtins",
+        "importlib",
+        "socket",
+        "shutil",
+        "ctypes",
+        "modules",
+        "smtplib",
+        "decoder",
+        "inspect",
+        "codecs",
+        "io",
+        "pathlib",
+        "types",
+        "gc",
+    }
+) | (BANNED_NAMES - {"sleep"})
 
 
 class DraftRejected(Exception):
@@ -83,9 +103,11 @@ def check(source: str) -> Draft:
         raise DraftRejected(f"syntax error on line {error.lineno}: {error.msg}") from None
     _check_import_time(tree.body)
     own_privates = _declared_privates(tree)
+    modules = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    dotted = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
     for node in ast.walk(tree):
         try:
-            _check_node(node, own_privates)
+            _check_node(node, own_privates, modules, dotted)
         except DraftRejected as rejected:
             where = f"line {getattr(node, 'lineno', '?')}: {(ast.get_source_segment(source, node) or '').strip()}"
             raise DraftRejected(f"{rejected} ({where})") from None
@@ -96,15 +118,19 @@ def check(source: str) -> Draft:
     return Draft(skills[0].name, source)
 
 
-def _check_node(node: ast.AST, own_privates: frozenset[str]) -> None:
+def _check_node(node: ast.AST, own_privates: frozenset[str], modules: set[str], dotted: set[int]) -> None:
+    """``modules`` are the names ``import x`` bound; ``dotted`` the ids of every ``x`` in an ``x.y``:
+    a module used any other way (``t = time``) is an alias that hides what the checks below look for."""
     if isinstance(node, ast.Import | ast.ImportFrom):
         _check_import(node)
     elif isinstance(node, ast.Name) and (node.id in BANNED_NAMES or node.id.startswith("__")):
         raise DraftRejected(f"'{node.id}' is not allowed in a skill")
+    elif isinstance(node, ast.Name) and node.id in modules and id(node) not in dotted:
+        raise DraftRejected(f"'{node.id}' may only be used as {node.id}.<name>, never aliased or passed around")
+    elif isinstance(node, ast.Attribute) and _dotted(node) == "time.sleep":
+        raise DraftRejected("time.sleep is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
     elif isinstance(node, ast.Attribute) and _escapes(node, own_privates):
         raise DraftRejected(f"'.{node.attr}' is not allowed in a skill")
-    elif isinstance(node, ast.Call) and _dotted(node.func) == "time.sleep":
-        raise DraftRejected("time.sleep() is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
 
 
 def _check_import_time(body: list[ast.stmt]) -> None:
@@ -146,17 +172,24 @@ def _check_import(node: ast.Import | ast.ImportFrom) -> None:
         if alias.name in BANNED_NAMES or alias.name in BANNED_ATTRS:
             raise DraftRejected(f"'{alias.name}' may not be imported")
     package = node.module if isinstance(node, ast.ImportFrom) else None
-    modules = [f"{package}.{alias.name}" if package else alias.name for alias in names]
-    for module in (package, *modules):
-        if module and module.startswith("innate_skills.") and not _exists(module):
-            raise DraftRejected(f"there is no module {module}; only the skills and helpers listed in the prompt exist")
+    imported = [f"{package}.{alias.name}" if package else alias.name for alias in names]
+    for name in (package, *imported):
+        if name and name.startswith("innate_skills.") and not _resolvable(name):
+            raise DraftRejected(f"there is no {name}; only the skills and helpers listed in the prompt exist")
 
 
-def _exists(module: str) -> bool:
+def _resolvable(name: str) -> bool:
+    """A module find_spec locates, or what an imported module defines (``from innate_skills.x import Cls``)."""
     try:
-        return importlib.util.find_spec(module) is not None
-    except ModuleNotFoundError:  # a missing parent package
+        return importlib.util.find_spec(name) is not None
+    except (ModuleNotFoundError, ValueError):
+        pass  # the parent is missing, or a plain module the name must then be an attribute of
+    parent, _, attribute = name.rpartition(".")
+    try:
+        module = sys.modules.get(parent) or importlib.import_module(parent)
+    except Exception:  # noqa: BLE001 — a parent that cannot import is as good as missing
         return False
+    return hasattr(module, attribute)
 
 
 def _declared_privates(tree: ast.Module) -> frozenset[str]:

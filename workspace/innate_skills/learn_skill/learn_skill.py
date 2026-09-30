@@ -13,7 +13,7 @@ from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extr
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
-from brain_client.common.script_paths import DRAFT_MARKER, LEARNED_GROUP, get_learned_skills_dir
+from brain_client.common.script_paths import DRAFT_MARKER, LEARNED_GROUP, get_learned_skills_dir, is_draft
 from innate import Skill, SkillReturn
 from innate_proxy import ProxyClient
 
@@ -51,6 +51,7 @@ class LearnSkill(Skill):
         written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted
         draft: Draft | None = None
         problem: str | None = None
+        _drop_orphan_drafts()
         try:
             with LearningMode(self) as show:
                 for round_number in range(1, ROUNDS + 1):
@@ -92,11 +93,12 @@ class LearnSkill(Skill):
     def _install(self, draft: Draft, written: set[Path]) -> str | None:
         """Write the draft, marked as on trial, where the catalog looks and wait for the roster to load it."""
         path = _learned_path(draft)
-        if path.exists() and path not in written:
-            raise DraftRejected(f"a learned skill named {draft.class_name} already exists; choose another class name")
+        if path not in written and (path.exists() or _roster_lists(draft)):
+            raise DraftRejected(f"a skill named {draft.class_name} already exists; choose another class name")
         path.parent.mkdir(parents=True, exist_ok=True)
         written.add(path)
-        loaded = self._publish(path, DRAFT_MARKER + draft.source, lambda: _roster_has(draft, on_trial=True))
+        source = f"{draft.source.rstrip()}\n{DRAFT_MARKER}"
+        loaded = self._publish(path, source, lambda: _roster_has(draft, on_trial=True))
         return None if loaded else "the skill catalog did not pick the file up in time"
 
     def _acquire(self, draft: Draft) -> bool:
@@ -126,18 +128,39 @@ def _learned_path(draft: Draft) -> Path:
     return get_learned_skills_dir() / f"{draft.module}.py"
 
 
+def _drop_orphan_drafts() -> None:
+    """A draft on disk before this run began was left by a run that died mid-trial (one learns at a
+    time): loaded but withheld, it would hide from the roster and hold its class name forever."""
+    for stale in get_learned_skills_dir().glob("*.py"):
+        if is_draft(stale):
+            stale.unlink()
+
+
 def _roster_stamp() -> int:
     return CONTRACTS.stat().st_mtime_ns if CONTRACTS.exists() else 0
 
 
-def _roster_has(draft: Draft, *, on_trial: bool) -> bool | None:
-    """True once the rebuilt roster carries the draft's skill in that state, or its module's load error."""
+def _roster() -> list[dict]:
     try:
-        skills = json.loads(CONTRACTS.read_text())["skills"]
+        return json.loads(CONTRACTS.read_text())["skills"]
     except (OSError, ValueError, KeyError, TypeError):
-        return None
-    broken = f"local/{LEARNED_GROUP}.{draft.module}"
-    for skill in skills:
-        if skill["id"] == broken or (skill["id"] == draft.skill_id and bool(skill.get("draft")) == on_trial):
+        return []
+
+
+def _roster_lists(draft: Draft) -> bool:
+    """A skill the draft would shadow: the same id (a user's custom skill) or the same tool name (a
+    shipped one, which `local/` would outrank). A draft on the roster is never acquired, so it is not."""
+    return any(
+        not skill.get("draft") and (skill["id"] == draft.skill_id or skill.get("name") == draft.module)
+        for skill in _roster()
+    )
+
+
+def _roster_has(draft: Draft, *, on_trial: bool) -> bool | None:
+    """True once the rebuilt roster carries the draft's skill in that state, or its load error."""
+    # a module that never imported clean is keyed by its path; one that did keeps its class id
+    ids = (draft.skill_id, f"local/{LEARNED_GROUP}.{draft.module}")
+    for skill in _roster():
+        if skill["id"] in ids and (skill.get("load_error") or bool(skill.get("draft")) == on_trial):
             return True
     return None

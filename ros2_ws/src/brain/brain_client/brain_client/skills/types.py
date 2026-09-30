@@ -18,7 +18,6 @@ from types import GeneratorType, UnionType  # stdlib `types`, not this module
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, TypeVar, Union, get_args, get_origin, overload
 
 from rclpy.node import Node
-from rclpy.publisher import Publisher
 from std_msgs.msg import String
 from typing_extensions import Self
 
@@ -28,6 +27,8 @@ from brain_client.common.script_paths import Source
 from brain_client.skills.overlay import OVERLAY_TOPIC, Overlay
 
 if TYPE_CHECKING:
+    from rclpy.publisher import Publisher
+
     from brain_client.skills.invoker import SkillInvoker
 
 T = TypeVar("T")
@@ -990,8 +991,9 @@ class Skill(ABC):
 
     def say(self, text: str, wait: bool = False, *, speed: float | None = None, volume: float | None = None) -> None:
         """Speak through the robot's voice; ``wait=True`` blocks until
-        playback ends (best effort). ``speed`` (0.6-1.5) and ``volume``
-        (0.5-2.0) style the read. No-op if speech isn't available."""
+        playback ends (best effort). ``speed`` scales the robot's usual rate
+        (0.6-1.5, so 0.8 is slower than normal) and ``volume`` (0.5-2.0)
+        sets the gain. No-op if speech isn't available."""
         if not text or self.node is None:
             return
         self._utter(self.node, json.dumps({"text": text, "speed": speed, "volume": volume}), text, wait)
@@ -1025,7 +1027,7 @@ class Skill(ABC):
         if wait:
             self._wait_for_speech_end(text, clip_s)
 
-    def _tts_publisher(self, node: Node) -> Publisher:
+    def _tts_publisher(self, node: Node) -> "Publisher":
         publisher = vars(self).get("_say_publisher")  # some skills skip super().__init__()
         if publisher is None:
             publisher = self._say_publisher = node.create_publisher(String, TTS_STYLED_TOPIC, 10)

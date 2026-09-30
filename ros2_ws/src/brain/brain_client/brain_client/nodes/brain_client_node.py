@@ -354,7 +354,7 @@ class BrainClientNode(Node):
                         "brain_active": self.state.is_brain_active,
                         "brain_thinking": self.brain.thinking,
                         "current_directive": self.state.current_directive.id if self.state.current_directive else "",
-                        "active_skills": list(self.state.active_skill_ids or []),
+                        "active_skills": self.roster.active_skill_ids(),
                         # Speech needs the hosted proxy (an Innate service
                         # key); clients gray out their TTS input without it.
                         "tts_available": bool(self._tts_handler is not None and self._tts_handler.is_available()),
@@ -432,7 +432,7 @@ class BrainClientNode(Node):
         self._speak_line(msg.data)
 
     def _on_styled_tts(self, msg: String) -> None:
-        """A skill's line with its own speed/volume (Skill.say(speed=, volume=))."""
+        """A skill's styled line, sound effect, or ready clip (Skill.say / play / play_clip)."""
         request = parse_styled_tts(msg.data)
         if request is None:
             self.get_logger().warn(f"Ignoring malformed styled TTS request: {msg.data[:80]}")
@@ -442,17 +442,13 @@ class BrainClientNode(Node):
     def _speak_line(self, text: str, delivery: Delivery | None = None) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the
         robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
-        if delivery is not None and delivery.pcm is not None:
+        if delivery is not None and delivery.sound_effect:
             if text.strip():
-                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # a labelled clip shows as a sound
+                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # in the transcript as a sound, not words
             self.chat.speak(text.strip() or "clip", delivery=delivery)
             return
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            if delivery is not None and delivery.sound_effect:
-                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # in the transcript as a sound, not words
-                self.chat.speak(text, delivery=delivery)
-                return
             self.chat.emit(Sender.ROBOT, text, delivery=delivery)
 
     def _on_environment_speech(self, payload: dict) -> None:

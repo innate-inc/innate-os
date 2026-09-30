@@ -12,7 +12,9 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import queue
 import re
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, get_type_hints
@@ -30,6 +32,7 @@ CODER_ENV = "INNATE_LEARN_CODER"
 DEFAULT_CODER = "openai/gpt-6-astra"
 REASONING_EFFORT = "low"  # keeps a draft under a minute; GPT-6 Astra does not take `none` (or temperature)
 ENDPOINT = "/v1/chat/completions"
+HEARTBEAT_S = 0.2  # how long a silent model leaves a Stop unanswered
 EXEMPLARS = ("head_emotion.py", "turn_in_place.py", "arm/arm_rest_position.py")
 ARM_CONSTANTS = ("JOINT_NAMES", "ZERO", "REST", "REACH_X", "REACH_Y", "GRIPPER_CLOSED", "GRIPPER_OPEN")
 ARM_METHODS = ("move_joints", "rest", "move_to", "move_by", "reachable", "gripper_open", "gripper_close", "wait")
@@ -182,7 +185,8 @@ class Forge:
         self._messages: list[dict[str, str]] = [{"role": "system", "content": system}]
 
     def ask(self, prompt: str) -> Iterator[str]:
-        """Stream the reply text; the exchange stays in the conversation for the next round."""
+        """Stream the reply text, with an empty string every HEARTBEAT_S while the model is silent
+        so the caller can answer a Stop; the exchange stays in the conversation for the next round."""
         self._messages.append({"role": "user", "content": prompt})
         reply: list[str] = []
         for delta in self._stream():
@@ -191,7 +195,24 @@ class Forge:
         self._messages.append({"role": "assistant", "content": "".join(reply)})
 
     def _stream(self) -> Iterator[str]:
+        # The socket read blocks for as long as the model reasons before its first token, so a
+        # thread pumps it: the consumer keeps waking, and an abandoned stream drains over there.
+        deltas: queue.Queue[str | BaseException | None] = queue.Queue()
         body = self._coder.request(self._messages)
+        threading.Thread(target=self._pump, args=(body, deltas), name="forge-pump", daemon=True).start()
+        while True:
+            try:
+                item = deltas.get(timeout=HEARTBEAT_S)
+            except queue.Empty:
+                yield ""
+                continue
+            if item is None:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    def _pump(self, body: dict[str, object], deltas: queue.Queue[str | BaseException | None]) -> None:
         try:
             with self._client.request_stream(self._coder.service, ENDPOINT, json=body, timeout=180.0) as response:
                 response.raise_for_status()
@@ -201,9 +222,13 @@ class Forge:
                     choices = json.loads(line[len("data: ") :]).get("choices") or []
                     delta = choices[0].get("delta", {}).get("content") if choices else None
                     if delta:
-                        yield delta
+                        deltas.put(delta)
         except (HTTPError, OSError) as error:
-            raise ForgeUnreachable(f"the coding model was unreachable ({error})") from error
+            deltas.put(ForgeUnreachable(f"the coding model was unreachable ({error})"))
+        except Exception as error:  # noqa: BLE001 — the consumer raises it; swallowed here, it would read as an empty reply
+            deltas.put(error)
+        finally:
+            deltas.put(None)
 
 
 def extract_code(reply: str) -> str:
