@@ -287,6 +287,15 @@ function buildAgentView(root) {
     });
   };
 
+  // The studio dock floats over the map's top-left corner, where the map's own
+  // controls start; app.css hangs them under its lower edge.
+  const studioDock = root.querySelector(".agent-studio-dock");
+  const reportStudioDock = () => {
+    if (!studioDock) return;
+    const below = studioDock.getBoundingClientRect().bottom - root.getBoundingClientRect().top;
+    root.style.setProperty("--agent-studio-dock-bottom", `${Math.max(0, below)}px`);
+  };
+
   const applyLayout = () => {
     root.classList.toggle("agent-compact", compactLayout.matches);
     const edgeToEdge = Boolean(config.simControls) && compactLayout.matches;
@@ -300,13 +309,18 @@ function buildAgentView(root) {
     panel.setCompact(compactLayout.matches);
     studio.setCompact(compactLayout.matches);
     reportSafeArea();
+    reportStudioDock();
   };
   compactLayout.addEventListener("change", applyLayout);
   monitorTooNarrow.addEventListener("change", applyLayout);
-  const safeAreaObserver = new ResizeObserver(reportSafeArea);
-  safeAreaObserver.observe(root);
-  safeAreaObserver.observe(feedFrame);
-  if (dockPanel) safeAreaObserver.observe(dockPanel);
+  const layoutObserver = new ResizeObserver(() => {
+    reportSafeArea();
+    reportStudioDock();
+  });
+  layoutObserver.observe(root);
+  layoutObserver.observe(feedFrame);
+  if (dockPanel) layoutObserver.observe(dockPanel);
+  if (studioDock) layoutObserver.observe(studioDock);
   applyLayout();
 
   const parts = [
@@ -315,7 +329,7 @@ function buildAgentView(root) {
       destroy: () => {
         compactLayout.removeEventListener("change", applyLayout);
         monitorTooNarrow.removeEventListener("change", applyLayout);
-        safeAreaObserver.disconnect();
+        layoutObserver.disconnect();
         document.body.classList.remove("sim-edge-to-edge");
         viewportMeta?.setAttribute("content", originalViewport);
       },
