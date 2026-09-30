@@ -147,7 +147,7 @@ class GridLocalizer(Node):
             self.declare_parameter("max_range", 12.0)  # max lidar range
             self.declare_parameter("scan_topic", "/scan_fast")
             self.declare_parameter("auto_localize_timeout", 30.0)  # seconds
-            self.declare_parameter("confidence_threshold", 0.75)  # evidence share for 'localized'; see the PR sweep on mars-the-26th
+            self.declare_parameter("confidence_threshold", 0.75)  # evidence share for 'localized' (swept on real scans)
             self.declare_parameter("auto_localize", True)  # enable auto-localize on startup
             self.declare_parameter("auto_recover", True)  # relocalize when AMCL loses the robot
             self.declare_parameter("stall_detection", False)  # stop navigation when the wheels spin in place
