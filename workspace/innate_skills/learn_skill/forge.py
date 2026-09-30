@@ -42,7 +42,8 @@ ODOMETRY = ("x", "y", "theta", "theta_degrees", "linear_velocity", "angular_velo
 BASE_METHODS = ("send_cmd_vel", "rotate_in_place")
 LLM_STATE = ("available",)
 LLM_METHODS = ("ask",)
-_FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
+# A fence closes only at the start of a line: a draft that strips ``` off its own model's reply has one mid-line.
+_FENCE = re.compile(r"^```(?:python)?[ \t]*\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE)
 _REFUSAL = re.compile(r"^\s*CANNOT:\s*(.+?)\s*$", re.MULTILINE)
 _MODULE_PREFIX = re.compile(r"\b(?:[a-z_]+\.)+(?=[A-Z])")
 
