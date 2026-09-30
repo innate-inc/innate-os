@@ -208,7 +208,8 @@ def score_grid(grid: Grid, scan: Scan, xs: np.ndarray, ys: np.ndarray, thetas: n
     return out
 
 
-def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float, inlier_m: float = INLIER_M) -> Pose2D:
+def endpoint_distances(grid: Grid, scan: Scan, x: float, y: float, theta: float) -> np.ndarray:
+    """Metres from each endpoint, with the scan placed at the pose, to the nearest occupied cell; 1 m off-grid."""
     cos, sin = math.cos(theta), math.sin(theta)
     ex, ey = x + scan.px * cos - scan.py * sin, y + scan.px * sin + scan.py * cos
     rows = np.floor((ey - grid.origin_y) / grid.resolution).astype(np.int32)
@@ -217,9 +218,14 @@ def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float, inlier_m:
     inside = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
     d = np.full(rows.shape, 1.0, dtype=np.float32)
     d[inside] = grid.dist[rows[inside], cols[inside]]
+    return d
+
+
+def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float, inlier_m: float = INLIER_M) -> Pose2D:
+    d = endpoint_distances(grid, scan, x, y, theta)
     score = float(np.exp(-(d * d) / (2 * FINE_SIGMA_M**2)).mean()) if len(d) else 0.0
     fit = float((d < inlier_m).mean()) if len(d) else 0.0
-    return Pose2D(x, y, math.atan2(sin, cos), fit, score)
+    return Pose2D(x, y, math.atan2(math.sin(theta), math.cos(theta)), fit, score)
 
 
 def refine(

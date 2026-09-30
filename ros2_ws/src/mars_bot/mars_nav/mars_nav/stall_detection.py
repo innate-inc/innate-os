@@ -12,7 +12,9 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from mars_nav.scan_match import MIN_FIT, MIN_SCAN_POINTS, Grid, Pose2D, Scan, evaluate
+import numpy as np
+
+from mars_nav.scan_match import MIN_FIT, MIN_SCAN_POINTS, Grid, Pose2D, Scan, endpoint_distances, evaluate
 
 if TYPE_CHECKING:
     from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -31,6 +33,8 @@ INLIER_M = 0.03  # tight enough to tell a few centimetres of motion from none
 MARGIN = 0.25  # "stood still" must fit this much more of the scan than the wheels' claimed motion
 STRIKES = 3  # consecutive scans
 QUIET_S = 3.0  # the base needs this long to stop before a stall can be judged again
+SECTORS = 8
+MIN_SECTORS = 3  # the unchanged points must span this many sectors: a person walking alongside fills one, walls several
 
 
 @dataclass(frozen=True)
@@ -81,9 +85,10 @@ class StallDetector:
             self._strikes = 0
             return None
         field = Grid.from_scan(earlier, GRID_M)
-        still = evaluate(field, now, 0.0, 0.0, 0.0, INLIER_M)
+        unchanged = endpoint_distances(field, now, 0.0, 0.0, 0.0) < INLIER_M
+        still_fit = float(unchanged.mean())
         moved = evaluate(field, now, claimed.x, claimed.y, claimed.theta, INLIER_M)
-        if still.fit < MIN_FIT or still.fit < moved.fit + MARGIN:
+        if still_fit < MIN_FIT or still_fit < moved.fit + MARGIN or _sectors(now, unchanged) < MIN_SECTORS:
             self._strikes = 0
             return None
         self._strikes += 1
@@ -91,7 +96,7 @@ class StallDetector:
             return None
         self._strikes = 0
         self._quiet_until = time.monotonic() + QUIET_S
-        return Stall(claimed, still.fit, moved.fit, stamp(after) - stamp(before))
+        return Stall(claimed, still_fit, moved.fit, stamp(after) - stamp(before))
 
     def wheels_turning(self, window_s: float) -> bool:
         """Whether wheel odometry moved within the last window_s; True too while odometry cannot tell,
@@ -131,3 +136,9 @@ class StallDetector:
             return None
         nearest, pose = min(self._odom, key=lambda sample: abs(sample[0] - at))
         return pose if abs(nearest - at) <= ODOM_MATCH_S else None
+
+
+def _sectors(scan: Scan, points: np.ndarray) -> int:
+    """How many of SECTORS equal bearing sectors around the robot the selected endpoints fall in."""
+    bearings = np.arctan2(scan.py[points], scan.px[points])
+    return len(np.unique(((bearings + math.pi) * SECTORS / (2 * math.pi)).astype(int) % SECTORS))
