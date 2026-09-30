@@ -159,9 +159,10 @@ class TTSHandler:
         self._speech_cv = threading.Condition()
         self._playing_reply_id: str | None = None
         self._closing = threading.Event()
-        # one lock per sound: a prefetch and the worker never generate the same one twice, and a
-        # prefetch's long request never holds up a different sound the worker is ready to play
-        self._sound_locks: dict[Path, threading.Lock] = {}
+        # Sounds being generated right now: a prefetch and the worker never generate the same one
+        # twice, a different sound never waits, and nothing is kept once the request ends.
+        self._sound_cv = threading.Condition()
+        self._sounds_in_flight: set[Path] = set()
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
     def _init_client(self):
@@ -330,9 +331,18 @@ class TTSHandler:
             body["duration_seconds"] = min(max(seconds, shortest), longest)
         key = json.dumps(body, sort_keys=True)
         cached = self.SOUND_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.pcm"
-        with self._sound_locks.setdefault(cached, threading.Lock()):  # setdefault is atomic under the GIL
-            if not cached.exists():
-                self._generate_sound(body, cached)
+        with self._sound_cv:
+            while cached in self._sounds_in_flight:
+                self._sound_cv.wait()
+            if cached.exists():
+                return cached
+            self._sounds_in_flight.add(cached)
+        try:
+            self._generate_sound(body, cached)
+        finally:
+            with self._sound_cv:
+                self._sounds_in_flight.discard(cached)
+                self._sound_cv.notify_all()
         return cached
 
     def _generate_sound(self, body: dict[str, Any], cached: Path) -> None:
