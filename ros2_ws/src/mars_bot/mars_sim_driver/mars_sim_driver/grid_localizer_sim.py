@@ -198,7 +198,7 @@ class GridLocalizerSim(LifecycleNode):
         response.message = "ground-truth pose published" if response.success else "no odom yet"
         return response
 
-    def _on_hand_placed(self, _request, response):
+    def _on_hand_placed(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         response.success = True
         response.message = "ground truth needs no vouching"
         return response

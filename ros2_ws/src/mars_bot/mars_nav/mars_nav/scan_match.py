@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from functools import cached_property
 from typing import TYPE_CHECKING
 
 import cv2
@@ -119,10 +118,14 @@ class Grid:
     def world(self, rows: np.ndarray, cols: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return self.origin_x + (cols + 0.5) * self.resolution, self.origin_y + (rows + 0.5) * self.resolution
 
-    @cached_property
-    def clearance(self) -> np.ndarray:
-        """Metres from each cell to the nearest non-free cell."""
-        return cv2.distanceTransform(self.free.astype(np.uint8), cv2.DIST_L2, 5) * self.resolution
+    def explored(self, x: float, y: float) -> bool:
+        """Whether the cell under (x, y) was seen during mapping: free or occupied, not unknown."""
+        row = int(math.floor((y - self.origin_y) / self.resolution))
+        col = int(math.floor((x - self.origin_x) / self.resolution))
+        h, w = self.shape
+        if not (0 <= row < h and 0 <= col < w):
+            return False
+        return bool(self.free[row, col]) or self.dist[row, col] == 0.0  # dist is 0 only on an occupied cell
 
     def likelihood(self, sigma: float) -> np.ndarray:
         """Flat uint8 likelihood image, padded by one zero cell so clipped endpoints score 0."""
@@ -215,11 +218,12 @@ def refine(
 
 
 def global_search(grid: Grid, scan: Scan, k: int = 8) -> list[Pose2D]:
-    """The k best distinct poses over the whole map, apart in position or in heading."""
+    """The k best distinct poses over the whole map, apart in position or in heading. Candidates are
+    free cells clear of walls, unknown neighbours allowed: explored floor is thin between sparse lidar rays."""
     return _coarse_to_fine(
         grid,
         scan,
-        grid.free & (grid.clearance >= 0.12),
+        grid.free & (grid.dist >= 0.12),
         spacing_m=0.2,
         heading_deg=6.0,
         k=k,

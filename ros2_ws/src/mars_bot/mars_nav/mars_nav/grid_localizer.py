@@ -42,6 +42,7 @@ from collections import deque
 
 import numpy as np
 import rclpy
+from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.srv import SetInitialPose
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -53,11 +54,11 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from mars_nav.localize_reply import LOW_CONFIDENCE, describe_pose
 from mars_nav.scan_match import MIN_FIT, Estimate, Grid, Pose2D, Scan, evaluate, locate, refine
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
 MIN_SCAN_POINTS = 10
-LOW_CONFIDENCE = "Localized with LOW confidence"  # /localize reply prefix the relocalize skill keys on
 
 WATCH_PERIOD_S = 1.0
 LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map-wide search
@@ -108,7 +109,7 @@ class GridLocalizer(Node):
     map_received_time = None
 
     # Scan storage
-    latest_scan = None
+    latest_scan: LaserScan | None = None
     _scan_received_at = 0.0
 
     # Auto-localize state
@@ -121,6 +122,8 @@ class GridLocalizer(Node):
     _amcl: tuple[float, Pose2D] | None = None  # (scan stamp, AMCL's pose at that scan)
     _lost_strikes: int = 0
     _watch_quiet_until: float = 0.0
+    _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
+    _watch_doubted: bool = False  # the watch downgraded a 'localized' verdict; restored once AMCL's pose fits again
 
     # Stall watch state
     _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
@@ -167,6 +170,8 @@ class GridLocalizer(Node):
         self.latest_scan = None
         self._scans.clear()
         self._amcl = None
+        self._verdict = ""
+        self._watch_doubted = False
 
         # Auto-localize state
         self._auto_done = not auto_localize  # Skip if disabled
@@ -420,7 +425,7 @@ class GridLocalizer(Node):
                 self._auto_timer.cancel()
 
             pose = estimate.pose
-            self._publish_pose(pose.x, pose.y, pose.theta)
+            self._publish_pose(pose.x, pose.y, pose.theta, self.latest_scan.header.stamp)
             self._warn_if_at_map_edge(pose.x, pose.y)
 
             if estimate.confident(self.confidence_threshold):
@@ -457,6 +462,9 @@ class GridLocalizer(Node):
         msg.data = status
         self.status_pub.publish(msg)
         self.get_logger().info(f"Published status: {status}")
+        if status in ("localized", "localized_low_confidence"):
+            self._verdict = status
+            self._watch_doubted = False
 
     EDGE_MARGIN_M = 0.30  # closer to the border than this and the costmap can't see ahead
 
@@ -479,14 +487,16 @@ class GridLocalizer(Node):
                 "(the costmap cannot see past the map edge, so navigation is unreliable there)"
             )
 
-    def _publish_pose(self, x: float, y: float, theta: float):
-        """Publish pose to /initialpose (latched for AMCL)."""
+    def _publish_pose(self, x: float, y: float, theta: float, stamp: Time | None = None):
+        """Publish pose to /initialpose (latched for AMCL). Stamped with the scan it was matched from,
+        AMCL adds the odometry since; stamped now, it takes the pose as current (a stalled robot's
+        odometry since the scan is phantom)."""
         if self.pose_pub is None or not self.pose_pub.is_activated:
             self.get_logger().warn("Pose publisher is not active. Cannot publish pose.")
             return
 
         msg = PoseWithCovarianceStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = self.get_clock().now().to_msg() if stamp is None else stamp
         msg.header.frame_id = "map"
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = y
@@ -566,7 +576,7 @@ class GridLocalizer(Node):
         pose_msg, retries_left = self._pending_seed
         self._seed_amcl(pose_msg, retries_left - 1)
 
-    def _localize_cb(self, request, response):
+    def _localize_cb(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         """Service callback to trigger localization."""
         # Check if node is active
         if not self._is_active:
@@ -588,7 +598,7 @@ class GridLocalizer(Node):
             estimate = self._find_pose(self.latest_scan)
             pose = estimate.pose
 
-            self._publish_pose(pose.x, pose.y, pose.theta)
+            self._publish_pose(pose.x, pose.y, pose.theta, self.latest_scan.header.stamp)
             self._warn_if_at_map_edge(pose.x, pose.y)
 
             confident = estimate.confident(self.confidence_threshold)
@@ -605,7 +615,7 @@ class GridLocalizer(Node):
 
         return response
 
-    def _hand_placed_cb(self, request, response):
+    def _hand_placed_cb(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         """A person placed the robot on the map from the app, vouching for the pose: record that
         as the latched verdict, so a late subscriber replays it instead of an earlier doubt."""
         response.success = self._is_active
@@ -629,19 +639,25 @@ class GridLocalizer(Node):
         self._watch_quiet_until = time.monotonic() + SETTLE_S
 
     def _watch_tick(self) -> None:
-        """Count AMCL as lost when even the best pose near its own leaves the scan unexplained."""
+        """Count AMCL as lost when even the best pose near its own leaves the scan unexplained.
+        Not judged on unexplored floor (the planner crosses it): the surroundings there are not on the map."""
         if self.grid is None or time.monotonic() < self._watch_quiet_until:
             return
         paired = self._scan_for_amcl_pose()
         if paired is None:
             return
         msg, believed = paired
+        if not self.grid.explored(believed.x, believed.y):
+            self._lost_strikes = 0
+            return
         scan = Scan.from_laser_scan(msg, self.max_range)
         if len(scan) < MIN_SCAN_POINTS:
             return
         here = refine(self.grid, scan, believed)
         if here.fit >= MIN_FIT:
             self._lost_strikes = 0
+            if self._watch_doubted:
+                self._publish_status("localized")
             return
         self._lost_strikes += 1
         if self._lost_strikes >= LOST_STRIKES:
@@ -663,11 +679,12 @@ class GridLocalizer(Node):
         a crowd around the robot or moved furniture lowers every pose's fit alike."""
         self._lost_strikes = 0
         self._watch_quiet_until = time.monotonic() + RETRY_S
-        lost_at = f"({here.x:.2f}, {here.y:.2f}, {math.degrees(here.theta):.1f}°), lidar fit {here.fit:.0%}"
-        if self.latest_scan is None:
+        lost_at = f"{describe_pose(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
+        scan = self.latest_scan
+        if scan is None:
             return
         try:
-            estimate = self._find_pose(self.latest_scan)
+            estimate = self._find_pose(scan)
         except (ValueError, RuntimeError) as e:
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
             return
@@ -677,11 +694,20 @@ class GridLocalizer(Node):
                 f"better (best: {_describe(estimate)}); keeping it: the map may be incomplete here or the "
                 f"surroundings changed. Next check in {RETRY_S:.0f} s"
             )
+            self._doubt()
             return
         self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}")
         pose = estimate.pose
-        self._publish_pose(pose.x, pose.y, pose.theta)
+        self._publish_pose(pose.x, pose.y, pose.theta, scan.header.stamp)
         self._publish_status("localized")
+
+    def _doubt(self) -> None:
+        """AMCL's pose is judged wrong but nothing better was found: withdraw a 'localized' verdict, so
+        the memory recorder stops saving views under it, until the pose fits again or someone relocalizes."""
+        if self._verdict != "localized":
+            return
+        self._publish_status("localized_low_confidence")
+        self._watch_doubted = True
 
     def _odom_cb(self, msg: Odometry) -> None:
         pose = msg.pose.pose
@@ -705,6 +731,7 @@ class GridLocalizer(Node):
         before, after, claimed = claim
         earlier, now = Scan.from_laser_scan(before, STALL_RANGE_M), Scan.from_laser_scan(after, STALL_RANGE_M)
         if min(len(earlier), len(now)) < MIN_SCAN_POINTS:
+            self._stall_strikes = 0
             return
         field = Grid.from_scan(earlier, STALL_GRID_M)
         still = evaluate(field, now, 0.0, 0.0, 0.0, STALL_INLIER_M)
@@ -719,8 +746,8 @@ class GridLocalizer(Node):
     def _wheel_claim(self) -> tuple[LaserScan, LaserScan, Pose2D] | None:
         """The newest scan, the latest earlier one the wheels claim to have clearly moved away from,
         and that claimed motion in the earlier scan's frame; None when the wheels claim no such move."""
-        if len(self._scans) < 2:
-            return None
+        if len(self._scans) < 2 or not self._odom or self._odom[0][1] == self._odom[-1][1]:
+            return None  # parked wheels report the same pose for the whole buffer
         after = self._scans[-1]
         end = self._odom_at(_stamp(after))
         if end is None:
@@ -772,7 +799,7 @@ class GridLocalizer(Node):
             return
         self.get_logger().warn(
             f"After the stall AMCL was at ({believed.x:.2f}, {believed.y:.2f}); the scan puts the robot at "
-            f"({here.x:.2f}, {here.y:.2f}, {math.degrees(here.theta):.1f}°), lidar fit {here.fit:.0%}"
+            f"{describe_pose(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         )
         self._publish_pose(here.x, here.y, here.theta)
 
@@ -799,8 +826,7 @@ def _stamp(msg: LaserScan | PoseWithCovarianceStamped | Odometry) -> float:
 def _describe(estimate: Estimate) -> str:
     pose = estimate.pose
     return (
-        f"({pose.x:.2f}, {pose.y:.2f}, {np.degrees(pose.theta):.1f}°), "
-        f"{estimate.share:.0%} of the evidence, lidar fit {pose.fit:.0%}"
+        f"{describe_pose(pose.x, pose.y, pose.theta)}, {estimate.share:.0%} of the evidence, lidar fit {pose.fit:.0%}"
     )
 
 

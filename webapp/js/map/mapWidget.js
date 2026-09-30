@@ -295,7 +295,7 @@ export function createMap(root, opts = {}) {
   let goalGen = 0; // ignore settlements of superseded goals
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let statusClearTimer;
-  /** @param {"navigating" | "ok" | "fail" | "muted" | "hint"} kind @param {string} text @param {boolean} [autoclear] */
+  /** @param {"navigating" | "ok" | "warn" | "fail" | "muted" | "hint"} kind @param {string} text @param {boolean} [autoclear] */
   function setStatus(kind, text, autoclear = false) {
     clearTimeout(statusClearTimer);
     statusEl.hidden = false;
@@ -1793,7 +1793,7 @@ export function createMap(root, opts = {}) {
       () => false,
     );
     if (noted) setStatus("ok", "Position set", true);
-    else setStatus("hint", "Position set, but the localizer did not note it — memory recording may stay paused until you press Locate or place the robot again");
+    else setStatus("warn", "Position set, but the localizer did not note it — memory recording may stay paused until you press Locate or place the robot again");
   }
 
   /** @param {number} x @param {number} y @param {number} yaw */

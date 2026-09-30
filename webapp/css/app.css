@@ -687,6 +687,10 @@ select.skill-input {
   color: var(--ok);
 }
 
+.map-status[data-kind="warn"] {
+  color: var(--ctl-accent);
+}
+
 .map-status[data-kind="fail"] {
   color: var(--danger);
 }
