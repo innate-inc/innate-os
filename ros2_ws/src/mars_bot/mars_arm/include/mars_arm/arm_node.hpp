@@ -176,7 +176,7 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::Publisher<mars_msgs::msg::ArmStatus>::SharedPtr arm_status_pub_;
     rclcpp::TimerBase::SharedPtr health_timer_;
     mars_msgs::msg::ArmStatus last_arm_status_;
-    std::mutex arm_status_mutex_;  // guards last_arm_status_: the scan writes it, torque changes read it
+    std::mutex arm_status_mutex_;  // guards last_arm_status_ and orders the scan's and announceTorque's publishes
     std::atomic<bool> arm_torque_enabled_{true};
     // An arm servo is limp on a latched hardware error (as of the last health
     // scan): the fold must not drag the rest of the arm around it.

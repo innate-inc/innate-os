@@ -213,12 +213,11 @@ void MarsArmNode::healthMonitorCallback() {
         status_msg.error = std::string("Health check error: ") + e.what();
     }
 
-    // Read after the scan: it can queue behind a torque walk, and an earlier
-    // read would re-publish the state that walk just replaced.
+    // The torque flag is read and the status published under the one lock
+    // announceTorque uses, so the two never reach the wire out of order.
+    std::lock_guard<std::mutex> lock(arm_status_mutex_);
     status_msg.is_torque_enabled = arm_torque_enabled_.load();
     arm_status_pub_->publish(status_msg);
-
-    std::lock_guard<std::mutex> lock(arm_status_mutex_);
     if (status_msg.is_ok != last_arm_status_.is_ok || status_msg.error != last_arm_status_.error) {
         if (status_msg.is_ok) {
             RCLCPP_INFO(this->get_logger(), "Arm health nominal: %s", status_msg.error.c_str());
@@ -232,16 +231,9 @@ void MarsArmNode::healthMonitorCallback() {
 // The scan publishes every 5 s; a torque change goes out at once, so a client
 // waiting to drive the arm does not wait out a scan.
 void MarsArmNode::announceTorque() {
-    mars_msgs::msg::ArmStatus status;
-    {
-        std::lock_guard<std::mutex> lock(arm_status_mutex_);
-        if (last_arm_status_.error.empty()) {
-            return;  // no scan yet, so no health to repeat
-        }
-        status = last_arm_status_;
-    }
-    status.is_torque_enabled = arm_torque_enabled_.load();
-    arm_status_pub_->publish(status);
+    std::lock_guard<std::mutex> lock(arm_status_mutex_);
+    last_arm_status_.is_torque_enabled = arm_torque_enabled_.load();
+    arm_status_pub_->publish(last_arm_status_);
 }
 
 // Every servo is scanned so a trip behind the reported one is not missed;

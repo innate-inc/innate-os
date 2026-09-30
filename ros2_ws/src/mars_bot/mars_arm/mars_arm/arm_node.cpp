@@ -197,6 +197,9 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     RCLCPP_DEBUG(this->get_logger(), "Creating health monitor timer at 0.2 Hz");
     health_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(5000), std::bind(&MarsArmNode::healthMonitorCallback, this), health_callback_group_);
+    // A status at boot, not 5 s in: a torque change before the first scan
+    // repeats it, and the tripped-servo latch is set before the first fold.
+    healthMonitorCallback();
 
     // Register parameter change callback for PID hot-reload
     param_callback_handle_ =
