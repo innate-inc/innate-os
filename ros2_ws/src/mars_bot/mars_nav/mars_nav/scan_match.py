@@ -4,17 +4,19 @@
 
 A pose's score is the mean, over lidar endpoints, of exp(-d² / 2σ²) with d the
 endpoint's distance to the nearest occupied cell; its fit is the fraction of
-endpoints within INLIER_M of one. Unknown space never counts as a hit, so a
-pose whose beams pass through walls scores low. Searches are brute force over
-(position, heading) sets — coarse with a wide σ, then refined with a narrow one.
-How sure a match is: the best pose's share of the evidence among every distinct
-pose the search finds, each weighted by its likelihood score.
+endpoints within INLIER_M of one. Unknown space never counts as a hit. Searches
+are brute force over (position, heading) sets — coarse with a wide σ, then
+refined with a narrow one. The finalists are then discounted by the share of
+their beams that would have to pass through a wall to reach their endpoint,
+which a real beam cannot: two small rooms in a row can put every endpoint of a
+long scan on a wall. How sure a match is: the best pose's share of the evidence
+among every distinct pose the search finds, each weighted by its discounted score.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import cv2
@@ -34,6 +36,7 @@ TAU_SLOPE = 0.15  # ...widened per unit of what it leaves unexplained (clutter, 
 MERGE_M = 0.4
 MERGE_DEG = 20.0
 MIN_FIT = 0.55  # a confident match puts at least this share of endpoints on a wall
+MIN_SCAN_POINTS = 10  # fewer valid endpoints than this and no pose can be judged
 
 
 @dataclass(frozen=True)
@@ -149,9 +152,35 @@ def locate(grid: Grid, scan: Scan) -> Estimate | None:
     poses = _distinct(global_search(grid, scan))
     if not poses:
         return None
+    poses = sorted((_discounted(grid, scan, pose) for pose in poses), key=lambda p: -p.score)
     best = poses[0]
     tau = TAU + TAU_SLOPE * (1.0 - best.score)
     return Estimate(best, 1.0 / sum(math.exp((p.score - best.score) / tau) for p in poses))
+
+
+def _discounted(grid: Grid, scan: Scan, pose: Pose2D) -> Pose2D:
+    return replace(pose, score=pose.score * (1.0 - crossing_share(grid, scan, pose)))
+
+
+def crossing_share(grid: Grid, scan: Scan, pose: Pose2D) -> float:
+    """Share of beams that pass through a wall on the way to their endpoint, which a real beam cannot.
+    Sampled every cell from the laser to INLIER_M short of the endpoint, whose own wall is not a crossing."""
+    if len(scan) == 0:
+        return 0.0
+    dx, dy = scan.px - np.float32(LASER_X_M), scan.py
+    length = np.hypot(dx, dy)
+    along = np.arange(0.0, float(length.max()), grid.resolution, dtype=np.float32)[None, :]
+    unit = np.maximum(length, 1e-6)
+    bx = np.float32(LASER_X_M) + (dx / unit)[:, None] * along
+    by = (dy / unit)[:, None] * along
+    cos, sin = math.cos(pose.theta), math.sin(pose.theta)
+    rows = np.floor((pose.y + bx * sin + by * cos - grid.origin_y) / grid.resolution).astype(np.int32)
+    cols = np.floor((pose.x + bx * cos - by * sin - grid.origin_x) / grid.resolution).astype(np.int32)
+    h, w = grid.shape
+    sampled = (along < (length - INLIER_M)[:, None]) & (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
+    crossed = np.zeros(rows.shape, dtype=bool)
+    crossed[sampled] = grid.dist[rows[sampled], cols[sampled]] == 0.0
+    return float(crossed.any(axis=1).mean())
 
 
 def _distinct(poses: list[Pose2D]) -> list[Pose2D]:

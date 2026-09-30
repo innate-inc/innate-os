@@ -26,7 +26,8 @@ Key features:
 - Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
   but only to a confident match that clearly fits better (`auto_recover`)
 - Catches stalls, wheels spinning while the lidar shows the robot standing still: stops
-  navigation and pulls AMCL back to where the scan puts the robot (`auto_recover`)
+  navigation and pulls AMCL back to where the scan puts the robot (`stall_detection`,
+  off by default until it has been tested against a real stall)
 - Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically localizes once a map and a scan are in.
@@ -56,36 +57,26 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from mars_nav.localize_reply import LOW_CONFIDENCE, describe_pose
-from mars_nav.scan_match import MERGE_DEG, MERGE_M, MIN_FIT, Estimate, Grid, Pose2D, Scan, evaluate, locate, refine
+from mars_nav.scan_match import MIN_FIT, MIN_SCAN_POINTS, Estimate, Grid, Pose2D, Scan, locate, refine
+from mars_nav.stall_detection import Stall, StallDetector, stamp
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
-MIN_SCAN_POINTS = 10
 
 WATCH_PERIOD_S = 1.0
 LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map-wide search
 SETTLE_S = 5.0  # a new seed or map gets this long to take before AMCL's pose is judged
 RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner
 RECOVERY_MARGIN = 0.15  # a jump must put this much more of the scan on walls than AMCL's own pose
-SCAN_HISTORY = 32  # ~4 s of /scan_fast: the scan AMCL's latest estimate came from, and the stall lookback
+SCAN_HISTORY = 32  # ~4 s of /scan_fast: the scan AMCL's latest estimate came from
 SAME_SCAN_S = 0.02  # AMCL's /scan is every other /scan_fast message, same stamps
+CONFIRM_DRIVE_M = 3.0  # a doubted pose that keeps fitting the scan over this much driving is trusted again
 
-STALL_LOOKBACK_S = 3.0  # how far back a stall check looks for a scan the wheels claim to have left
-STALL_MIN_MOVE_M = 0.08  # wheel motion smaller than this, and than STALL_MIN_TURN, the lidar cannot judge
-STALL_MIN_TURN = math.radians(8)
-STALL_RANGE_M = 4.0  # nearby structure shows motion; far returns only slow the check
-STALL_GRID_M = 0.02
-STALL_INLIER_M = 0.03  # tight enough to tell a few centimetres of motion from none
-STALL_MARGIN = 0.25  # "stood still" must fit this much more of the scan than the wheels' claimed motion
-STALL_STRIKES = 3  # consecutive scans
-STALL_QUIET_S = 3.0  # the base needs this long to stop before a stall can be judged again
 STALL_SETTLE_S = 1.0  # AMCL is judged once the wheels have been still this long
 STALL_FIX_TIMEOUT_S = 8.0  # a cancelled goal can take mode_manager up to 5 s to end; past this the wheels never stopped
 STALL_SEARCH_M = 0.35  # at full speed AMCL absorbs up to ~0.3 m / 20° of phantom motion before a stall is caught
 STALL_SEARCH_DEG = 25.0
 STALL_DRIFT_M = 0.05  # an AMCL pose this close to the scan's after a stall is left alone
 STALL_DRIFT_TURN = math.radians(3)
-ODOM_HISTORY = 120  # ~4 s of /odom at 30 Hz
-ODOM_MATCH_S = 0.1
 
 
 class GridLocalizer(Node):
@@ -125,14 +116,12 @@ class GridLocalizer(Node):
     _lost_strikes: int = 0
     _watch_quiet_until: float = 0.0
     _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
-    _watch_doubted: bool = False  # the watch downgraded a 'localized' verdict; restored once AMCL's pose fits again
-    _reaffirm_after: float = 0.0  # a reaffirm search that failed is not repeated sooner; the watch itself goes on
+    _confirm_progress: float = 0.0  # metres driven with a doubted pose fitting the scan the whole way
+    _confirm_from: Pose2D | None = None  # AMCL's pose at the last fitting watch tick
 
-    # Stall watch state
-    _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
-    _odom_received_at: float = 0.0
-    _stall_strikes: int = 0
-    _stall_quiet_until: float = 0.0
+    # Stall state
+    _stall_detection: bool = False
+    _stalls: StallDetector
     _stall_fix_deadline: float = 0.0
 
     # Node state tracking
@@ -146,7 +135,7 @@ class GridLocalizer(Node):
     def __init__(self, node_name="grid_localizer", **kwargs):
         super().__init__(node_name, **kwargs)
         self._scans = deque(maxlen=SCAN_HISTORY)
-        self._odom = deque(maxlen=ODOM_HISTORY)
+        self._stalls = StallDetector()
         self._cancel_nav_client = self.create_client(Trigger, "/nav/cancel_navigation")
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
@@ -159,6 +148,7 @@ class GridLocalizer(Node):
             self.declare_parameter("confidence_threshold", 0.95)  # evidence share for 'localized'
             self.declare_parameter("auto_localize", True)  # enable auto-localize on startup
             self.declare_parameter("auto_recover", True)  # relocalize when AMCL loses the robot
+            self.declare_parameter("stall_detection", False)  # stop navigation when the wheels spin in place
 
         self.max_range = self.get_parameter("max_range").get_parameter_value().double_value
         scan_topic = self.get_parameter("scan_topic").value
@@ -166,6 +156,7 @@ class GridLocalizer(Node):
         self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
         auto_localize = self.get_parameter("auto_localize").value
         self._auto_recover = self.get_parameter("auto_recover").get_parameter_value().bool_value
+        self._stall_detection = self.get_parameter("stall_detection").get_parameter_value().bool_value
 
         # Reset map state
         self.map_received = False
@@ -176,7 +167,6 @@ class GridLocalizer(Node):
         self._scans.clear()
         self._amcl = None
         self._verdict = ""
-        self._watch_doubted = False
 
         # Auto-localize state
         self._auto_done = not auto_localize  # Skip if disabled
@@ -191,8 +181,9 @@ class GridLocalizer(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
         if self._auto_recover:
             self.amcl_sub = self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 1)
-            self._odom.clear()
-            self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_cb, 10)
+        if self._stall_detection:
+            self._stalls.reset()
+            self.odom_sub = self.create_subscription(Odometry, "/odom", self._stalls.on_odom, 10)
 
         # Publishers
         # Latched publishers - messages persist for late subscribers (AMCL, the memory recorder)
@@ -248,7 +239,8 @@ class GridLocalizer(Node):
                 self._watch_timer = self.create_timer(WATCH_PERIOD_S, self._watch_tick)
             else:
                 self._watch_timer.reset()
-            self._stall_strikes = 0
+        if self._stall_detection:
+            self._stalls.reset()
 
         # This call automatically activates lifecycle publishers (pose_pub and status_pub)
         return super().on_activate(state)
@@ -392,8 +384,10 @@ class GridLocalizer(Node):
         self.latest_scan = msg
         self._scans.append(msg)
         self._scan_received_at = time.monotonic()
-        if self._auto_recover and self._is_active:
-            self._check_stall()
+        if self._stall_detection and self._is_active:
+            stall = self._stalls.on_scan(msg)
+            if stall is not None:
+                self._on_stall(stall)
 
     def _auto_localize_tick(self):
         """Auto-localize on startup.
@@ -465,7 +459,6 @@ class GridLocalizer(Node):
         self.get_logger().info(f"Published status: {status}")
         if status in ("localized", "localized_low_confidence"):
             self._verdict = status
-            self._watch_doubted = False
 
     EDGE_MARGIN_M = 0.30  # closer to the border than this and the costmap can't see ahead
 
@@ -631,13 +624,14 @@ class GridLocalizer(Node):
     def _amcl_cb(self, msg: PoseWithCovarianceStamped) -> None:
         pose = msg.pose.pose
         theta = 2.0 * math.atan2(pose.orientation.z, pose.orientation.w)
-        self._amcl = (_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta))
+        self._amcl = (stamp(msg), Pose2D(pose.position.x, pose.position.y, theta))
 
     def _settle(self) -> None:
         """A new seed or map: forget AMCL's earlier estimate, give the new one time to take, and drop a
         pending stall correction, which belongs to the pose and map before it."""
         self._amcl = None
         self._lost_strikes = 0
+        self._confirm_progress, self._confirm_from = 0.0, None
         self._watch_quiet_until = time.monotonic() + SETTLE_S
         self._drop_stall_fix()
 
@@ -652,45 +646,45 @@ class GridLocalizer(Node):
         msg, believed = paired
         if not self.grid.explored(believed.x, believed.y):
             self._lost_strikes = 0
+            self._confirm_progress, self._confirm_from = 0.0, None
             return
         scan = Scan.from_laser_scan(msg, self.max_range)
         if len(scan) < MIN_SCAN_POINTS:
             return
         here = refine(self.grid, scan, believed)
-        if here.fit >= MIN_FIT:
-            self._lost_strikes = 0
-            if self._watch_doubted and time.monotonic() >= self._reaffirm_after:
-                self._reaffirm(here)
+        if here.fit < MIN_FIT:
+            self._confirm_progress, self._confirm_from = 0.0, None
+            self._lost_strikes += 1
+            if self._lost_strikes >= LOST_STRIKES:
+                self._recover(here)
             return
-        self._lost_strikes += 1
-        if self._lost_strikes >= LOST_STRIKES:
-            self._recover(here)
+        self._lost_strikes = 0
+        if self._verdict == "localized_low_confidence":
+            self._confirm(believed)
 
-    def _reaffirm(self, here: Pose2D) -> None:
-        """A doubted pose fits the scan again: restore 'localized' only when the map-wide search
-        confidently agrees it is the one place that does, since a wrong place can fit locally too."""
-        scan = self.latest_scan
-        if scan is None:
+    def _confirm(self, believed: Pose2D) -> None:
+        """A doubted pose that keeps fitting the scan while the robot drives is trusted again: driving
+        past look-alike places is how AMCL tells them apart, and one scan alone cannot."""
+        if self._confirm_from is not None:
+            self._confirm_progress += believed.distance(self._confirm_from)
+        self._confirm_from = believed
+        if self._confirm_progress < CONFIRM_DRIVE_M:
             return
-        try:
-            estimate = self._find_pose(scan)
-        except (ValueError, RuntimeError):
-            estimate = None
-        if estimate is not None and estimate.confident(self.confidence_threshold) and _same_place(estimate.pose, here):
-            self._publish_status("localized")
-            return
-        self._reaffirm_after = time.monotonic() + RETRY_S
+        self.get_logger().info(
+            f"AMCL's pose kept fitting the scan over {self._confirm_progress:.1f} m of driving; localization confirmed"
+        )
+        self._publish_status("localized")
 
     def _scan_for_amcl_pose(self) -> tuple[LaserScan, Pose2D] | None:
         """The scan AMCL's latest estimate came from. AMCL re-estimates on any odometry change, so an
         estimate older than every buffered scan means the robot has not moved: the newest scan stands in."""
         if self._amcl is None or not self._scans:
             return None
-        stamp, believed = self._amcl
-        if stamp < _stamp(self._scans[0]):
+        at, believed = self._amcl
+        if at < stamp(self._scans[0]):
             return self._scans[-1], believed
-        match = min(self._scans, key=lambda scan: abs(_stamp(scan) - stamp))
-        return (match, believed) if abs(_stamp(match) - stamp) < SAME_SCAN_S else None
+        match = min(self._scans, key=lambda scan: abs(stamp(scan) - at))
+        return (match, believed) if abs(stamp(match) - at) < SAME_SCAN_S else None
 
     def _recover(self, here: Pose2D) -> None:
         """Move AMCL only to a confident match that explains clearly more of the scan than where it is:
@@ -726,71 +720,15 @@ class GridLocalizer(Node):
         if self._verdict != "localized":
             return
         self._publish_status("localized_low_confidence")
-        self._watch_doubted = True
+        self._confirm_progress, self._confirm_from = 0.0, None
 
-    def _odom_cb(self, msg: Odometry) -> None:
-        pose = msg.pose.pose
-        theta = 2.0 * math.atan2(pose.orientation.z, pose.orientation.w)
-        self._odom.append((_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta)))
-        self._odom_received_at = time.monotonic()
-
-    def _odom_at(self, stamp: float) -> Pose2D | None:
-        if not self._odom:
-            return None
-        at, pose = min(self._odom, key=lambda sample: abs(sample[0] - stamp))
-        return pose if abs(at - stamp) <= ODOM_MATCH_S else None
-
-    def _check_stall(self) -> None:
-        """Count a stall when the wheels claim motion that the lidar shows did not happen."""
-        if time.monotonic() < self._stall_quiet_until:
-            return
-        claim = self._wheel_claim()
-        if claim is None:
-            self._stall_strikes = 0
-            return
-        before, after, claimed = claim
-        earlier, now = Scan.from_laser_scan(before, STALL_RANGE_M), Scan.from_laser_scan(after, STALL_RANGE_M)
-        if min(len(earlier), len(now)) < MIN_SCAN_POINTS:
-            self._stall_strikes = 0
-            return
-        field = Grid.from_scan(earlier, STALL_GRID_M)
-        still = evaluate(field, now, 0.0, 0.0, 0.0, STALL_INLIER_M)
-        moved = evaluate(field, now, claimed.x, claimed.y, claimed.theta, STALL_INLIER_M)
-        if still.fit < MIN_FIT or still.fit < moved.fit + STALL_MARGIN:
-            self._stall_strikes = 0
-            return
-        self._stall_strikes += 1
-        if self._stall_strikes >= STALL_STRIKES:
-            self._on_stall(claimed, still.fit, moved.fit, _stamp(after) - _stamp(before))
-
-    def _wheel_claim(self) -> tuple[LaserScan, LaserScan, Pose2D] | None:
-        """The newest scan, the latest earlier one the wheels claim to have clearly moved away from,
-        and that claimed motion in the earlier scan's frame; None when the wheels claim no such move."""
-        if len(self._scans) < 2 or not self._odom or self._odom[0][1] == self._odom[-1][1]:
-            return None  # parked wheels report the same pose for the whole buffer
-        after = self._scans[-1]
-        end = self._odom_at(_stamp(after))
-        if end is None:
-            return None
-        for before in reversed(list(self._scans)[:-1]):
-            if _stamp(after) - _stamp(before) > STALL_LOOKBACK_S:
-                return None
-            start = self._odom_at(_stamp(before))
-            if start is None:
-                continue
-            claimed = end.relative_to(start)
-            if math.hypot(claimed.x, claimed.y) >= STALL_MIN_MOVE_M or abs(claimed.theta) >= STALL_MIN_TURN:
-                return before, after, claimed
-        return None
-
-    def _on_stall(self, claimed: Pose2D, still_fit: float, moved_fit: float, window: float) -> None:
-        self._stall_strikes = 0
-        self._stall_quiet_until = time.monotonic() + STALL_QUIET_S
+    def _on_stall(self, stall: Stall) -> None:
+        claimed = stall.claimed
         self.get_logger().error(
             f"Stalled: the wheels claim {math.hypot(claimed.x, claimed.y):.2f} m and "
-            f"{math.degrees(abs(claimed.theta)):.0f}° in {window:.1f} s, but the lidar shows the robot standing "
-            f"still ({still_fit:.0%} of the scan unchanged, {moved_fit:.0%} where the wheels claim); "
-            "cancelling navigation and relocalizing"
+            f"{math.degrees(abs(claimed.theta)):.0f}° in {stall.window_s:.1f} s, but the lidar shows the robot "
+            f"standing still ({stall.still_fit:.0%} of the scan unchanged, {stall.moved_fit:.0%} where the wheels "
+            "claim); cancelling navigation and relocalizing"
         )
         if self._cancel_nav_client.service_is_ready():
             self._cancel_nav_client.call_async(Trigger.Request()).add_done_callback(self._on_nav_cancel_reply)
@@ -814,23 +752,10 @@ class GridLocalizer(Node):
             self.destroy_timer(self._stall_fix_timer)
             self._stall_fix_timer = None
 
-    def _wheels_turning(self, window_s: float) -> bool:
-        """Whether wheel odometry moved within the last window_s; True too while odometry cannot tell,
-        because it stopped arriving or the buffer is younger than the window."""
-        if not self._odom or time.monotonic() - self._odom_received_at > window_s:
-            return True
-        latest_at, latest = self._odom[-1]
-        for at, pose in reversed(self._odom):
-            if latest_at - at > window_s:
-                return False
-            if pose.distance(latest) > 0.005 or pose.heading_gap(latest) > 0.005:
-                return True
-        return True
-
     def _relocalize_after_stall(self) -> None:
         """The spinning wheels dragged AMCL while the robot stood still: once they stop (a cancelled goal
         keeps driving them until it ends), put AMCL back where the scan says."""
-        if self._wheels_turning(STALL_SETTLE_S):
+        if self._stalls.wheels_turning(STALL_SETTLE_S):
             if time.monotonic() < self._stall_fix_deadline:
                 return
             self._drop_stall_fix()
@@ -875,14 +800,6 @@ class GridLocalizer(Node):
         if estimate is None:
             raise RuntimeError("No pose on the map fits the scan")
         return estimate
-
-
-def _stamp(msg: LaserScan | PoseWithCovarianceStamped | Odometry) -> float:
-    return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-
-
-def _same_place(a: Pose2D, b: Pose2D) -> bool:
-    return a.distance(b) < MERGE_M and a.heading_gap(b) < math.radians(MERGE_DEG)
 
 
 def _describe(estimate: Estimate) -> str:
