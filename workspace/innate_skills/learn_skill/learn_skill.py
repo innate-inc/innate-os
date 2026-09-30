@@ -148,8 +148,10 @@ class LearnSkill(Skill):
         """The learned skill an `improve` request names, by tool name or id; None writes a new one."""
         if not name:
             return None
-        path = get_learned_skills_dir() / f"{name.removeprefix('local/')}.py"
-        if not path.exists():
+        stem = name.removeprefix("local/")
+        path = get_learned_skills_dir() / f"{stem}.py"
+        # a module name only: no separators, so the name cannot reach a file outside learned/
+        if not stem.isidentifier() or not path.is_file():
             self.fail(f"{name} is not a skill I learned, so I cannot rewrite it")
         return path
 
