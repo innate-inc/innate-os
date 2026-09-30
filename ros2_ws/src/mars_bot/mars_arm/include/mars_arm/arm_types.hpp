@@ -32,6 +32,10 @@ static constexpr int kDecayMaxLoad = 100;
 // commands the arm well within this.
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kAtRestRad = 0.05;
+// A trajectory waits this long for the pass-through to pick up its last goal
+// before giving up: a service holding the bus (torque_on's enable walk, a
+// head-only fix_error) stalls it for ~1-2.5 s; longer means a wedged bus.
+static constexpr double kPassThroughStallS = 5.0;
 
 // One leg of the rest fold: joints in /mars/arm/state radians, kHold keeps a
 // joint at its current target, then how long the spline takes.

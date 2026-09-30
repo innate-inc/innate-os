@@ -254,6 +254,7 @@ void MarsArmNode::controlTimerCallback() {
                     result_rad = latest_target_;
                     has_cmd = true;
                 }
+                target_pending_ = false;
             }
 
             if (has_cmd) {

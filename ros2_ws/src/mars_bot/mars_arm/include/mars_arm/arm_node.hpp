@@ -137,6 +137,7 @@ class MarsArmNode : public rclcpp::Node {
     // Direct pass-through (guarded by arm_command_mutex_)
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
+    bool target_pending_{false};  // a trajectory wrote it since the pass-through last ran
     // Who drives the arm, guarded by arm_command_mutex_ with the target it
     // governs. Anything that commands the arm takes a new claim; going limp
     // (end of boot, torque_off, reboot, a tripped servo) releases it. A skill

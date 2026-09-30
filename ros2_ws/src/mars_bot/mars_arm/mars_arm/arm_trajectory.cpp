@@ -192,18 +192,35 @@ void MarsArmNode::restartGraceIfReleased() {
     }
 }
 
-// The trajectory's next goal, unless its claim was lost — then it is over.
+// The trajectory's next goal, once the pass-through has picked up the last
+// one — a service holding the bus stalls the path rather than skipping part
+// of it — unless the claim was lost: then the trajectory is over.
 bool MarsArmNode::commandIfClaimed(uint64_t claim, const std::vector<double>& point) {
-    std::lock_guard<std::mutex> lock(arm_command_mutex_);
-    if (arm_claim_ != claim) {
-        RCLCPP_INFO(this->get_logger(), "Trajectory gave way: something else took the arm");
-        return false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(kPassThroughStallS);
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(arm_command_mutex_);
+            if (arm_claim_ != claim) {
+                RCLCPP_INFO(this->get_logger(), "Trajectory gave way: something else took the arm");
+                return false;
+            }
+            if (!target_pending_) {
+                for (size_t j = 0; j < 6 && j < point.size(); ++j) {
+                    latest_target_[j] = point[j];
+                }
+                has_target_ = true;
+                target_pending_ = true;
+                return true;
+            }
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "Trajectory abandoned: the pass-through has not reached the servos for %.0f s",
+                         kPassThroughStallS);
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    for (size_t j = 0; j < 6 && j < point.size(); ++j) {
-        latest_target_[j] = point[j];
-    }
-    has_target_ = true;
-    return true;
 }
 
 // ========== REST FOLD ==========
