@@ -10,6 +10,7 @@
 #include <sstream>
 #include <thread>
 #include <hdf5.h>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
@@ -60,6 +61,14 @@ RecorderNode::RecorderNode()
     odom_topic_ = this->get_parameter("odom_topic").as_string();
     image_size_ = this->get_parameter("image_size").as_integer_array();
     max_timesteps_ = this->get_parameter("max_timesteps").as_int();
+
+    // Load exactly the model used by mars_arm/ik.py; no separately maintained geometry.
+    const auto urdf_path = ament_index_cpp::get_package_share_directory("mars_sim") + "/urdf/mars.urdf";
+    std::ifstream urdf_file(urdf_path);
+    if (!urdf_file)
+        throw std::runtime_error("Cannot read recording URDF: " + urdf_path);
+    recording_urdf_ = std::string(std::istreambuf_iterator<char>(urdf_file), std::istreambuf_iterator<char>());
+    ee_kinematics_ = std::make_unique<EeKinematics>(recording_urdf_);
 
     // Initialize TaskManager
     task_manager_ = std::make_unique<TaskManager>(data_directory_);
@@ -371,9 +380,11 @@ void RecorderNode::timer_callback() {
     }
 
     try {
+        const auto ee_pose = ee_kinematics_->pose(latest_arm_state_->name, qpos);
+        current_episode_->set_kinematics(recording_urdf_, latest_arm_state_->name, image_topics_);
         current_episode_->add_timestep(
             action_data, qpos, qvel, images_converted, arm_timestamp, image_timestamps,
-            head_received_ ? latest_head_position_ : std::numeric_limits<double>::quiet_NaN());
+            head_received_ ? latest_head_position_ : std::numeric_limits<double>::quiet_NaN(), ee_pose);
         size_t timestep_count = current_episode_->get_episode_length();
 
         // Check if timestep limit reached

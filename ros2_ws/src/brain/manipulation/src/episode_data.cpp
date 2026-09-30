@@ -59,6 +59,7 @@ EpisodeData::EpisodeData()
       qpos_dset_(-1),
       qvel_dset_(-1),
       arm_ts_dset_(-1),
+      ee_dset_(-1),
       head_dset_(-1) {}
 
 EpisodeData::EpisodeData(const std::vector<std::string>& camera_names) : EpisodeData() {
@@ -88,6 +89,10 @@ void EpisodeData::steal_from(EpisodeData& other) noexcept {
     qvel_dset_ = other.qvel_dset_;
     arm_ts_dset_ = other.arm_ts_dset_;
     head_dset_ = other.head_dset_;
+    ee_dset_ = other.ee_dset_;
+    urdf_ = std::move(other.urdf_);
+    joint_names_ = std::move(other.joint_names_);
+    camera_topics_ = std::move(other.camera_topics_);
     image_dsets_ = std::move(other.image_dsets_);
     image_ts_dsets_ = std::move(other.image_ts_dsets_);
 
@@ -99,6 +104,7 @@ void EpisodeData::steal_from(EpisodeData& other) noexcept {
     other.qvel_dset_ = -1;
     other.arm_ts_dset_ = -1;
     other.head_dset_ = -1;
+    other.ee_dset_ = -1;
 }
 
 EpisodeData::EpisodeData(EpisodeData&& other) noexcept : EpisodeData() {
@@ -125,6 +131,7 @@ void EpisodeData::close_handles() {
     safe_close(qvel_dset_);
     safe_close(arm_ts_dset_);
     safe_close(head_dset_);
+    safe_close(ee_dset_);
     for (auto& [name, h] : image_dsets_) {
         if (h >= 0) {
             H5Dclose(h);
@@ -143,6 +150,18 @@ void EpisodeData::close_handles() {
         H5Fclose(file_id_);
         file_id_ = -1;
     }
+}
+
+void EpisodeData::set_kinematics(const std::string& urdf, const std::vector<std::string>& names,
+                                 const std::vector<std::string>& camera_topics) {
+    if (file_created_) {
+        if (urdf != urdf_ || names != joint_names_ || camera_topics != camera_topics_)
+            throw std::runtime_error("Recording kinematics or joint ordering changed");
+        return;
+    }
+    urdf_ = urdf;
+    joint_names_ = names;
+    camera_topics_ = camera_topics;
 }
 
 void EpisodeData::open_file(const std::string& path) {
@@ -191,6 +210,37 @@ void EpisodeData::create_file_and_datasets(const std::vector<double>& action, co
     file_id_ = H5Fcreate(file_path_.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
     if (file_id_ < 0) {
         throw std::runtime_error("Failed to create HDF5 file: " + file_path_);
+    }
+
+    if (!urdf_.empty()) {
+        const hsize_t initial[2] = {0, 7}, maximum[2] = {H5S_UNLIMITED, 7}, chunk[2] = {30, 7};
+        ee_dset_ =
+            create_chunked_dataset(file_id_, "/observations/ee_pose", H5T_NATIVE_DOUBLE, 2, initial, maximum, chunk);
+        auto attribute = [&](hid_t object, const char* name, const std::string& value) {
+            hid_t type = H5Tcopy(H5T_C_S1);
+            H5Tset_size(type, value.size() + 1);
+            hid_t space = H5Screate(H5S_SCALAR);
+            hid_t attr = H5Acreate2(object, name, type, space, H5P_DEFAULT, H5P_DEFAULT);
+            herr_t status = attr < 0 ? -1 : H5Awrite(attr, type, value.c_str());
+            if (attr >= 0)
+                H5Aclose(attr);
+            H5Sclose(space);
+            H5Tclose(type);
+            h5_check(status, std::string("attribute ") + name);
+        };
+        attribute(ee_dset_, "frame_id", "base_link");
+        attribute(ee_dset_, "tip_link", "ee_link");
+        attribute(ee_dset_, "columns", "x,y,z,qx,qy,qz,qw");
+        attribute(ee_dset_, "source", "forward_kinematics_of_observations_qpos");
+        attribute(ee_dset_, "urdf", urdf_);
+        std::string names;
+        for (const auto& name : joint_names_)
+            names += (names.empty() ? "" : ",") + name;
+        attribute(ee_dset_, "joint_names", names);
+        std::string topics;
+        for (const auto& topic : camera_topics_)
+            topics += (topics.empty() ? "" : ",") + topic;
+        attribute(ee_dset_, "camera_topics", topics);
     }
 
     // /action: width = action_dim + 2 trailing termination columns. Rows are
@@ -263,7 +313,11 @@ void EpisodeData::create_file_and_datasets(const std::vector<double>& action, co
 
 void EpisodeData::add_timestep(const std::vector<double>& action, const std::vector<double>& qpos,
                                const std::vector<double>& qvel, const std::vector<cv::Mat>& images,
-                               double arm_timestamp, const std::vector<double>& image_timestamps, double head_command) {
+                               double arm_timestamp, const std::vector<double>& image_timestamps, double head_command,
+                               const std::vector<double>& ee_pose) {
+    if (!urdf_.empty() && (ee_pose.size() != 7 ||
+                           !std::all_of(ee_pose.begin(), ee_pose.end(), [](double v) { return std::isfinite(v); })))
+        throw std::runtime_error("Missing or invalid EE pose");
     if (!file_created_) {
         create_file_and_datasets(action, qpos, qvel, images, head_command);
     } else if (images.size() != camera_names_.size()) {
@@ -323,6 +377,9 @@ void EpisodeData::add_timestep(const std::vector<double>& action, const std::vec
             std::copy(action.begin(), action.begin() + copy_n, row.begin());
             write_2d_row(action_dset_, action_dim_ + 2, row.data(), "/action");
         }
+
+        if (ee_dset_ >= 0)
+            write_2d_row(ee_dset_, 7, ee_pose.data(), "/observations/ee_pose");
 
         if (qpos_dset_ >= 0) {
             if (qpos.size() != qpos_dim_) {
@@ -415,6 +472,7 @@ void EpisodeData::truncate_datasets_to(size_t rows) noexcept {
         shrink_2d(qvel_dset_, qvel_dim_);
     shrink_1d(arm_ts_dset_);
     shrink_1d(head_dset_);
+    shrink_2d(ee_dset_, 7);
     for (auto& [name, dset] : image_dsets_) {
         if (dset < 0)
             continue;
