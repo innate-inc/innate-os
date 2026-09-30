@@ -158,13 +158,8 @@ void MarsArmNode::configureServosLocked(bool enable_torque) {
                     joint_configs_.size() - failed_servos.size(), joint_configs_.size(), ids.c_str());
     }
 
-    // Move head to default position
-    try {
-        RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
-        moveHeadToAngleLocked(0.0);
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to move head to default position: %s", e.what());
-    }
+    RCLCPP_INFO(this->get_logger(), "Levelling the head (0.0 deg)");
+    commandHead(0.0);
 }
 
 // ========== POSITION SYNC HELPER ==========
@@ -179,7 +174,6 @@ void MarsArmNode::syncTargetToMotorPositions() {
             latest_target_[i] = jointRad(positions[i], i);
         }
         has_target_ = false;
-        latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
     }
 }
 
@@ -211,41 +205,9 @@ void MarsArmNode::healthMonitorCallback() {
 
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-
-        for (const auto& config : joint_configs_) {
-            const int servo_id = config.servo_id;
-
-            uint8_t hw_status = dynamixel_->readHardwareErrorStatus(servo_id);
-            if (hw_status != 0) {
-                status_msg.is_ok = false;
-                status_msg.error = describeHardwareError(hw_status, servo_id);
-                // The servo latches this bit until a reboot/power cycle, so a
-                // low present load means the flag outlived its cause.
-                int16_t load_now = dynamixel_->readPresentLoad(servo_id);
-                if (std::abs(static_cast<int>(load_now)) < kLoadWarningThreshold) {
-                    status_msg.error +=
-                        " — present load is low, so this flag is likely latched from a past event;"
-                        " use 'Reboot arm' (/mars/arm/reboot) or power-cycle the arm to clear it";
-                }
-                break;
-            }
-
-            int16_t present_load = dynamixel_->readPresentLoad(servo_id);
-            if (std::abs(static_cast<int>(present_load)) >= kLoadWarningThreshold) {
-                status_msg.is_ok = false;
-                double load_percent = static_cast<double>(present_load) / 10.0;
-                status_msg.error =
-                    "Servo " + std::to_string(servo_id) + " high load (" + std::to_string(load_percent) + "%)";
-                break;
-            }
-
-            uint8_t temperature = dynamixel_->readPresentTemperature(servo_id);
-            if (temperature >= kTemperatureWarningC) {
-                status_msg.is_ok = false;
-                status_msg.error = "Servo " + std::to_string(servo_id) + " high temperature (" +
-                                   std::to_string(static_cast<int>(temperature)) + " C)";
-                break;
-            }
+        servo_tripped_ = reportTrippedServosLocked(status_msg);
+        if (status_msg.is_ok) {
+            reportLoadAndTemperatureLocked(status_msg);
         }
     } catch (const std::exception& e) {
         status_msg.is_ok = false;
@@ -261,6 +223,56 @@ void MarsArmNode::healthMonitorCallback() {
             RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.error.c_str());
         }
         last_arm_status_ = status_msg;
+    }
+}
+
+// Every servo is scanned so a trip behind the reported one is not missed;
+// returns whether an arm servo (not the head) is limp on a latched error.
+bool MarsArmNode::reportTrippedServosLocked(mars_msgs::msg::ArmStatus& status) {
+    bool arm_servo_tripped = false;
+    for (const auto& config : joint_configs_) {
+        const int servo_id = config.servo_id;
+        uint8_t hw_status = dynamixel_->readHardwareErrorStatus(servo_id);
+        if (hw_status == 0) {
+            continue;
+        }
+        arm_servo_tripped = arm_servo_tripped || servo_id <= 6;
+        if (!status.is_ok) {
+            continue;
+        }
+        status.is_ok = false;
+        status.error = describeHardwareError(hw_status, servo_id);
+        // The servo latches this bit until a reboot/power cycle, so a
+        // low present load means the flag outlived its cause.
+        int16_t load_now = dynamixel_->readPresentLoad(servo_id);
+        if (std::abs(static_cast<int>(load_now)) < kLoadWarningThreshold) {
+            status.error +=
+                " — present load is low, so this flag is likely latched from a past event;"
+                " use 'Reboot arm' (/mars/arm/reboot) or power-cycle the arm to clear it";
+        }
+    }
+    return arm_servo_tripped;
+}
+
+void MarsArmNode::reportLoadAndTemperatureLocked(mars_msgs::msg::ArmStatus& status) {
+    for (const auto& config : joint_configs_) {
+        const int servo_id = config.servo_id;
+
+        int16_t present_load = dynamixel_->readPresentLoad(servo_id);
+        if (std::abs(static_cast<int>(present_load)) >= kLoadWarningThreshold) {
+            status.is_ok = false;
+            double load_percent = static_cast<double>(present_load) / 10.0;
+            status.error = "Servo " + std::to_string(servo_id) + " high load (" + std::to_string(load_percent) + "%)";
+            return;
+        }
+
+        uint8_t temperature = dynamixel_->readPresentTemperature(servo_id);
+        if (temperature >= kTemperatureWarningC) {
+            status.is_ok = false;
+            status.error = "Servo " + std::to_string(servo_id) + " high temperature (" +
+                           std::to_string(static_cast<int>(temperature)) + " C)";
+            return;
+        }
     }
 }
 
@@ -344,9 +356,7 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
         arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
-        if (armReleased()) {
-            releaseArm();  // a fresh grace period before the fold; a claimed arm stays claimed
-        }
+        restartGraceIfReleased();
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
@@ -364,14 +374,14 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_off");
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        arm_torque_enabled_ = false;
+        releaseLimpArm();
 
         for (int id = 1; id <= 6; ++id) {
             RCLCPP_INFO(this->get_logger(), "  Disabling torque on servo %d", id);
             dynamixel_->disableTorque(id);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        arm_torque_enabled_ = false;
-        releaseArm();
         response->success = true;
         response->message = "Disabled torque for all arm servos";
         RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
@@ -387,6 +397,8 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/reboot");
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        arm_torque_enabled_ = false;
+        releaseLimpArm();
 
         RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
         robot_->rebootAllServos();
@@ -394,22 +406,10 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
         RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot (arm torque off)");
         configureServosLocked(false);
 
-        // Drop the pre-reboot command target. The 200 Hz pass-through keeps
-        // writing it into the goal registers while torque is off, and
-        // torque_on syncs to measured only AFTER its per-servo enable walk —
-        // so a stale target here makes the arm lunge back toward wherever it
-        // was headed when it tripped, the moment torque returns.
-        {
-            std::lock_guard<std::mutex> cmd_lock(arm_command_mutex_);
-            has_target_ = false;
-        }
-
         // Re-enable torque only for head servo
         RCLCPP_INFO(this->get_logger(), "Enabling torque on head servo (ID 7)");
         dynamixel_->enableTorque(7);
 
-        arm_torque_enabled_ = false;
-        releaseArm();
         response->success = true;
         response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
         RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
@@ -453,6 +453,8 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             return;
         }
 
+        releaseArm();  // a trajectory in flight stops before it can write over the retarget below
+
         // Reboot only the errored servos
         for (int servo_id : error_servo_ids) {
             RCLCPP_INFO(this->get_logger(), "Rebooting servo %d...", servo_id);
@@ -474,7 +476,7 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
                         e.what());
         }
-        releaseArm();
+        restartGraceIfReleased();
 
         // Build JSON response with error IDs and status
         json result;

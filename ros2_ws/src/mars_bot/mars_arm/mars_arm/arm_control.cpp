@@ -109,7 +109,7 @@ void MarsArmNode::controlTimerCallback() {
             // stays stiff instead; the temperature warning covers the rare
             // carry-for-hours case.
             const auto trajectory_end = last_trajectory_end_.load();
-            if (gain_mode_ == GainMode::SCHEDULED && !trajectory_executing_ &&
+            if (gain_mode_ == GainMode::SCHEDULED && trajectories_in_flight_ == 0 &&
                 trajectory_end.time_since_epoch().count() != 0) {
                 double idle_s =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - trajectory_end).count();
@@ -280,13 +280,13 @@ void MarsArmNode::controlTimerCallback() {
                 }
                 arm_command_state_pub_->publish(cmd_msg);
             } else if (has_head_command_.load()) {
-                std::lock_guard<std::mutex> head_lock(head_command_mutex_);
-                int head_enc = latest_head_command_;
-                has_head_command_ = false;
-                std::vector<int> full_command(latest_arm_command_);
-                full_command.resize(7);
-                full_command[6] = head_enc;
-                robot_->setGoalPos(full_command);
+                int head_enc = 0;
+                {
+                    std::lock_guard<std::mutex> head_lock(head_command_mutex_);
+                    head_enc = latest_head_command_;
+                    has_head_command_ = false;
+                }
+                dynamixel_->setGoalPosition(7, head_enc);  // head alone: no arm goal is invented
             }
         }
         ts[7] = std::chrono::steady_clock::now();

@@ -72,13 +72,16 @@ class MarsArmNode : public rclcpp::Node {
     void armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void healthMonitorCallback();
+    bool reportTrippedServosLocked(mars_msgs::msg::ArmStatus& status);
+    void reportLoadAndTemperatureLocked(mars_msgs::msg::ArmStatus& status);
     std::string describeHardwareError(uint8_t status, int servo_id) const;
 
     // ── Head servo (arm_head.cpp) ───────────────────────────────────────
     int logicalAngleToEncoder(double logical_angle_deg);
     double encoderToLogicalAngle(int encoder_value);
-    void moveHeadToAngle(double logical_angle_deg);
-    void moveHeadToAngleLocked(double logical_angle_deg);
+    // The pass-through sends it on its next tick and re-sends it with every
+    // arm command, so a head goal is never lost to one failed write.
+    void commandHead(double logical_angle_deg);
     void publishHeadPosition(int encoder_value);
     void headPositionCallback(const std_msgs::msg::Int32::SharedPtr msg);
     void headAiPositionCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -90,17 +93,18 @@ class MarsArmNode : public rclcpp::Node {
     std::vector<std::vector<double>> computeCubicSplineTrajectory(const std::vector<double>& start,
                                                                   const std::vector<double>& goal, double duration,
                                                                   double dt);
-    // Without a claim the trajectory takes the arm and runs to its end; run
-    // under one, it stops (false) as soon as anything else claims the arm.
+    // Every trajectory runs under a claim (its own unless given one) and stops
+    // (false) as soon as anything else claims the arm.
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                   GainMode trajectory_gain_mode = GainMode::SCHEDULED,
                                   std::optional<uint64_t> claim = std::nullopt);
+    bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
+                                               const std::vector<double>& segment_durations);
+    bool commandIfClaimed(uint64_t claim, const std::vector<double>& point);
     // Fold along kRestFold keeping the standing grip, once torque is back and
     // the arm has sat released for kRestWhenIdleS.
     void idleRestCallback();
-    void foldToRest(uint64_t claim);
-    bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
-                                               const std::vector<double>& segment_durations);
+    void foldToRest(uint64_t claim, std::vector<double> target);
     void armGotoJSCallback(const std::shared_ptr<mars_msgs::srv::GotoJS::Request> request,
                            std::shared_ptr<mars_msgs::srv::GotoJS::Response> response);
     void armGotoJSV2Callback(const std::shared_ptr<mars_msgs::srv::GotoJS::Request> request,
@@ -127,7 +131,6 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::Service<mars_msgs::srv::GotoJSTrajectory>::SharedPtr arm_goto_js_traj_service_;
     sensor_msgs::msg::JointState arm_state_msg_;    // 6-joint message for /mars/arm/state
     sensor_msgs::msg::JointState joint_state_msg_;  // 7-joint message for /joint_states
-    std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
 
@@ -143,7 +146,11 @@ class MarsArmNode : public rclcpp::Node {
     std::chrono::steady_clock::time_point released_at_{};  // zero while claimed
     uint64_t claimArm();
     void releaseArm();
-    bool armReleased();
+    // torque_off and reboot: released, and no goal is re-sent for the servos
+    // to lunge back to the moment torque returns.
+    void releaseLimpArm();
+    // Torque came back: a fresh grace before the fold; a claimed arm stays claimed.
+    void restartGraceIfReleased();
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
 
     // Joint state tracking for planning
@@ -167,6 +174,9 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::TimerBase::SharedPtr health_timer_;
     mars_msgs::msg::ArmStatus last_arm_status_;
     std::atomic<bool> arm_torque_enabled_{true};
+    // An arm servo is limp on a latched hardware error (as of the last health
+    // scan): the fold must not drag the rest of the arm around it.
+    std::atomic<bool> servo_tripped_{false};
 
     // Control timer
     rclcpp::TimerBase::SharedPtr control_timer_;
@@ -178,6 +188,8 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::CallbackGroup::SharedPtr health_callback_group_;
     // torque_off alone: it must land during a fold or goto, not queue behind it.
     rclcpp::CallbackGroup::SharedPtr stop_callback_group_;
+    // The fold alone: a goto preempts it by claim, so it must never queue behind it.
+    rclcpp::CallbackGroup::SharedPtr rest_callback_group_;
 
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
@@ -205,12 +217,12 @@ class MarsArmNode : public rclcpp::Node {
     // Atomic for the same reason as gain_mode_: stamped by the trajectory
     // threads (HoldGuard), read by the control loop.
     std::atomic<std::chrono::steady_clock::time_point> last_trajectory_end_{std::chrono::steady_clock::time_point{}};
-    // True while a trajectory is streaming waypoints. The idle decay must
-    // never fire mid-trajectory: last_trajectory_end_ is stale during
-    // execution, and the decay once flipped a 3 s carry move onto soft
-    // teleop gains 3 ms after it started — the shaken grip dropped the
-    // object it was carrying.
-    std::atomic<bool> trajectory_executing_{false};
+    // Trajectories streaming waypoints (a goto overlaps the fold it preempts
+    // for one waypoint). The idle decay must never fire while any is:
+    // last_trajectory_end_ is stale during execution, and the decay once
+    // flipped a 3 s carry move onto soft teleop gains 3 ms after it started —
+    // the shaken grip dropped the object it was carrying.
+    std::atomic<int> trajectories_in_flight_{0};
 
     // Control loop timing instrumentation
     std::array<TimingAccumulator, 10> timing_stats_{{TimingAccumulator{"total"}, TimingAccumulator{"lock_wait"},

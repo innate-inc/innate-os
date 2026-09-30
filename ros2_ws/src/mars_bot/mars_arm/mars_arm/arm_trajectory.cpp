@@ -58,17 +58,14 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                            GainMode trajectory_gain_mode, std::optional<uint64_t> claim) {
-    if (!claim) {
-        claimArm();
-    }
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
-    trajectory_executing_ = true;
+    ++trajectories_in_flight_;
     struct HoldGuard {
         MarsArmNode* n;
         ~HoldGuard() {
             n->last_trajectory_end_ = std::chrono::steady_clock::now();
-            n->trajectory_executing_ = false;
+            --n->trajectories_in_flight_;
         }
     } hold_guard{this};
 
@@ -138,21 +135,12 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     RCLCPP_INFO(this->get_logger(), "Executing trajectory with %zu waypoints over %.2f seconds",
                 interpolated_trajectory.size(), actual_duration);
 
-    // Execute trajectory by sending each waypoint with a sleep
+    // Claimed only now: a rejected request must not take the arm.
+    const uint64_t mine = claim ? *claim : claimArm();
     auto sleep_duration = std::chrono::duration<double>(dt);
     for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
-        const auto& point = interpolated_trajectory[i];
-
-        // Send command via the control loop's pass-through path
-        {
-            std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-            if (claim && arm_claim_ != *claim) {
-                return false;
-            }
-            for (size_t j = 0; j < 6 && j < point.size(); ++j) {
-                latest_target_[j] = point[j];
-            }
-            has_target_ = true;
+        if (!commandIfClaimed(mine, interpolated_trajectory[i])) {
+            return false;
         }
 
         // Re-assert per waypoint: an idle-decay check racing the switch above
@@ -174,7 +162,7 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     return true;
 }
 
-// ========== REST FOLD ==========
+// ========== ARM OWNERSHIP ==========
 
 uint64_t MarsArmNode::claimArm() {
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
@@ -188,14 +176,49 @@ void MarsArmNode::releaseArm() {
     ++arm_claim_;
 }
 
-bool MarsArmNode::armReleased() {
+// One lock for both: a trajectory in flight sees the new claim before it can
+// write its next waypoint, so has_target_ stays false until a new owner.
+void MarsArmNode::releaseLimpArm() {
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
-    return released_at_ != std::chrono::steady_clock::time_point{};
+    released_at_ = std::chrono::steady_clock::now();
+    ++arm_claim_;
+    has_target_ = false;
 }
 
+void MarsArmNode::restartGraceIfReleased() {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    if (released_at_ != std::chrono::steady_clock::time_point{}) {
+        released_at_ = std::chrono::steady_clock::now();
+    }
+}
+
+// The trajectory's next goal, unless its claim was lost — then it is over.
+bool MarsArmNode::commandIfClaimed(uint64_t claim, const std::vector<double>& point) {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    if (arm_claim_ != claim) {
+        RCLCPP_INFO(this->get_logger(), "Trajectory gave way: something else took the arm");
+        return false;
+    }
+    for (size_t j = 0; j < 6 && j < point.size(); ++j) {
+        latest_target_[j] = point[j];
+    }
+    has_target_ = true;
+    return true;
+}
+
+// ========== REST FOLD ==========
+
 void MarsArmNode::idleRestCallback() {
-    if (!arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
+    if (!arm_torque_enabled_ || servo_tripped_ || !this->get_parameter("auto_rest").as_bool()) {
         return;
+    }
+    std::vector<double> pose;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        pose = latest_joint_positions_;
+    }
+    if (pose.size() != 6) {
+        return;  // no joint state yet; the release is kept for the next tick
     }
     uint64_t claim = 0;
     {
@@ -208,19 +231,10 @@ void MarsArmNode::idleRestCallback() {
         released_at_ = {};
         claim = ++arm_claim_;
     }
-    foldToRest(claim);  // one attempt per release: a fold that gives way is not pushed again
+    foldToRest(claim, pose);  // one attempt per release: a fold that gives way is not pushed again
 }
 
-void MarsArmNode::foldToRest(uint64_t claim) {
-    std::vector<double> target;
-    {
-        std::lock_guard<std::mutex> lock(joint_state_mutex_);
-        target = latest_joint_positions_;
-    }
-    if (target.size() != 6) {
-        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: no joint state yet");
-        return;
-    }
+void MarsArmNode::foldToRest(uint64_t claim, std::vector<double> target) {
     const RestWaypoint& rest = kRestFold.back();
     double away = 0.0;
     for (size_t j = 0; j < kArmJoints; ++j) {
@@ -238,13 +252,16 @@ void MarsArmNode::foldToRest(uint64_t claim) {
     }
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest");
     for (const RestWaypoint& waypoint : kRestFold) {
+        if (servo_tripped_) {
+            RCLCPP_WARN(this->get_logger(), "Rest fold stopped: a servo tripped");
+            return;
+        }
         for (size_t j = 0; j < target.size(); ++j) {
             if (!std::isnan(waypoint.joints[j])) {
                 target[j] = clampToJointRange(j, waypoint.joints[j]);
             }
         }
         if (!planAndExecuteTrajectory(target, waypoint.duration_s, GainMode::SCHEDULED, claim)) {
-            RCLCPP_INFO(this->get_logger(), "Rest fold stopped: something else took the arm");
             return;
         }
     }
@@ -253,14 +270,13 @@ void MarsArmNode::foldToRest(uint64_t claim) {
 
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                         const std::vector<double>& segment_durations) {
-    claimArm();
     // See planAndExecuteTrajectory: block the idle gain decay while executing.
-    trajectory_executing_ = true;
+    ++trajectories_in_flight_;
     struct HoldGuard {
         MarsArmNode* n;
         ~HoldGuard() {
             n->last_trajectory_end_ = std::chrono::steady_clock::now();
-            n->trajectory_executing_ = false;
+            --n->trajectories_in_flight_;
         }
     } hold_guard{this};
 
@@ -318,21 +334,15 @@ bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::v
     RCLCPP_INFO(this->get_logger(), "Executing multi-waypoint trajectory: %zu segments, %zu total points",
                 segment_durations.size(), full_trajectory.size());
 
-    // Execute: send each point at dt intervals
+    const uint64_t mine = claimArm();
     auto sleep_duration = std::chrono::duration<double>(dt);
     for (size_t i = 0; i < full_trajectory.size(); ++i) {
-        const auto& point = full_trajectory[i];
+        if (!commandIfClaimed(mine, full_trajectory[i])) {
+            return false;
+        }
 
         // Re-assert per waypoint — see planAndExecuteTrajectory
         gain_mode_ = GainMode::SCHEDULED;
-
-        {
-            std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-            for (size_t j = 0; j < 6 && j < point.size(); ++j) {
-                latest_target_[j] = point[j];
-            }
-            has_target_ = true;
-        }
 
         if (i < full_trajectory.size() - 1) {
             std::this_thread::sleep_for(sleep_duration);

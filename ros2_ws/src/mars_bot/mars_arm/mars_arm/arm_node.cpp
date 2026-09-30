@@ -76,6 +76,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     service_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     health_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     stop_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rest_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Declare parameters
     this->declare_parameter("baud_rate", 1000000);
@@ -202,10 +203,8 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         this->add_on_set_parameters_callback(std::bind(&MarsArmNode::onParameterChange, this, std::placeholders::_1));
     RCLCPP_DEBUG(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
 
-    // Same callback group as the goto services: a fold and a goto never run
-    // at the same time, and a client's goto queues behind a fold in flight.
     idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
-                                               service_callback_group_);
+                                               rest_callback_group_);
     releaseArm();  // the boot grace counts from here: servo init above took seconds
 
     RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
@@ -217,9 +216,9 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_arm::MarsArmNode>();
 
-    // One thread per callback group (timer, service, health, stop, default)
-    // so torque_off never waits for a thread behind a fold.
-    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 5);
+    // One thread per callback group (timer, service, health, stop, rest,
+    // default) so nothing waits for a thread behind a fold or a goto.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 6);
     executor.add_node(node);
     executor.spin();
 
