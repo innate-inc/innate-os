@@ -23,6 +23,8 @@ Key features:
   then refines the best distinct candidates to about a centimetre and a degree
 - Always publishes the best pose to /initialpose with transient_local QoS (latched)
   and seeds AMCL with it; the status says whether it is trustworthy
+- Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
+  but only to a confident match that clearly fits better (`auto_recover`)
 - Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically localizes once a map and a scan are in.
@@ -32,7 +34,9 @@ as well take the rest), else 'localized_low_confidence'.
 Service remains available for manual triggers after auto-localize completes.
 """
 
+import math
 import time
+from collections import deque
 
 import numpy as np
 import rclpy
@@ -46,10 +50,19 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from mars_nav.scan_match import Estimate, Grid, Scan, locate
+from mars_nav.scan_match import MIN_FIT, Estimate, Grid, Pose2D, Scan, locate, refine
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
+MIN_SCAN_POINTS = 10
 LOW_CONFIDENCE = "Localized with LOW confidence"  # /localize reply prefix the relocalize skill keys on
+
+WATCH_PERIOD_S = 1.0
+LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map-wide search
+SETTLE_S = 5.0  # a new seed or map gets this long to take before AMCL's pose is judged
+RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner
+RECOVERY_MARGIN = 0.15  # a jump must put this much more of the scan on walls than AMCL's own pose
+SCAN_HISTORY = 20  # ~2.5 s of /scan_fast: holds the scan AMCL's latest estimate came from
+SAME_SCAN_S = 0.02  # AMCL's /scan is every other /scan_fast message, same stamps
 
 
 class GridLocalizer(Node):
@@ -60,10 +73,12 @@ class GridLocalizer(Node):
     map_sub: rclpy.subscription.Subscription | None = None
     pose_pub: Publisher | None = None
     status_pub: Publisher | None = None
+    amcl_sub: rclpy.subscription.Subscription | None = None
     srv = None
     hand_placed_srv = None
     _auto_timer = None
     _map_check_timer = None
+    _watch_timer = None
 
     # Map state
     map_received: bool = False
@@ -77,6 +92,13 @@ class GridLocalizer(Node):
     # Auto-localize state
     _auto_done: bool = False
     _auto_localize_enabled: bool = False
+
+    # Lost-AMCL watch state
+    _auto_recover: bool = False
+    _scans: deque[LaserScan]
+    _amcl: tuple[float, Pose2D] | None = None  # (scan stamp, AMCL's pose at that scan)
+    _lost_strikes: int = 0
+    _watch_quiet_until: float = 0.0
 
     # Node state tracking
     _is_active: bool = False
@@ -98,12 +120,14 @@ class GridLocalizer(Node):
             self.declare_parameter("auto_localize_timeout", 30.0)  # seconds
             self.declare_parameter("confidence_threshold", 0.95)  # evidence share for 'localized'
             self.declare_parameter("auto_localize", True)  # enable auto-localize on startup
+            self.declare_parameter("auto_recover", True)  # relocalize when AMCL loses the robot
 
         self.max_range = self.get_parameter("max_range").get_parameter_value().double_value
         scan_topic = self.get_parameter("scan_topic").value
         self.auto_timeout = self.get_parameter("auto_localize_timeout").value
         self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
         auto_localize = self.get_parameter("auto_localize").value
+        self._auto_recover = self.get_parameter("auto_recover").value
 
         # Reset map state
         self.map_received = False
@@ -111,6 +135,8 @@ class GridLocalizer(Node):
 
         # Latest scan storage
         self.latest_scan = None
+        self._scans = deque(maxlen=SCAN_HISTORY)
+        self._amcl = None
 
         # Auto-localize state
         self._auto_done = not auto_localize  # Skip if disabled
@@ -123,6 +149,8 @@ class GridLocalizer(Node):
             depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL
         )
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
+        if self._auto_recover:
+            self.amcl_sub = self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 1)
 
         # Publishers
         # Latched publishers - messages persist for late subscribers (AMCL, the memory recorder)
@@ -172,6 +200,13 @@ class GridLocalizer(Node):
                 f"Auto-localize enabled: {self.auto_timeout}s timeout, confidence threshold {self.confidence_threshold}"
             )
 
+        if self._auto_recover:
+            self._settle()
+            if self._watch_timer is None:
+                self._watch_timer = self.create_timer(WATCH_PERIOD_S, self._watch_tick)
+            else:
+                self._watch_timer.reset()
+
         # This call automatically activates lifecycle publishers (pose_pub and status_pub)
         return super().on_activate(state)
 
@@ -185,6 +220,8 @@ class GridLocalizer(Node):
             self._auto_timer.cancel()
         if self._map_check_timer:
             self._map_check_timer.cancel()
+        if self._watch_timer:
+            self._watch_timer.cancel()
         # Drop any pending AMCL seed: across a deactivate/reactivate (e.g. a
         # map switch) a surviving retry would deliver the PREVIOUS map's pose.
         if self._seed_retry_timer:
@@ -209,6 +246,9 @@ class GridLocalizer(Node):
         if self._seed_retry_timer:
             self.destroy_timer(self._seed_retry_timer)
             self._seed_retry_timer = None
+        if self._watch_timer:
+            self.destroy_timer(self._watch_timer)
+            self._watch_timer = None
         # Clear the pending seed too: an in-flight /set_initial_pose failing
         # after cleanup would otherwise see it as current and re-arm a retry
         # timer on a cleaned-up node.
@@ -237,6 +277,9 @@ class GridLocalizer(Node):
         if self.map_sub:
             self.destroy_subscription(self.map_sub)
             self.map_sub = None
+        if self.amcl_sub:
+            self.destroy_subscription(self.amcl_sub)
+            self.amcl_sub = None
         self.grid = None
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
@@ -290,6 +333,7 @@ class GridLocalizer(Node):
 
         self._publish_status("processing_map")
         self.grid = Grid.from_occupancy_grid(msg)
+        self._settle()
 
         # Record time map was received to allow for a startup delay
         self.map_received_time = self.get_clock().now()
@@ -298,6 +342,7 @@ class GridLocalizer(Node):
     def _scan_cb(self, msg: LaserScan):
         """Store latest scan."""
         self.latest_scan = msg
+        self._scans.append(msg)
         self._scan_received_at = time.monotonic()
 
     def _auto_localize_tick(self):
@@ -408,6 +453,7 @@ class GridLocalizer(Node):
         msg.pose.covariance[35] = 0.05
         self.pose_pub.publish(msg)
         self.get_logger().info(f"Published initial pose: ({x:.2f}, {y:.2f})")
+        self._settle()
         self._seed_amcl(msg)
 
     def _seed_amcl(self, pose_msg: PoseWithCovarianceStamped, retries_left: int = 15):
@@ -523,8 +569,73 @@ class GridLocalizer(Node):
             response.message = "Node not active"
             return response
         self._publish_status("localized")
+        self._settle()
         response.message = "Hand placement recorded"
         return response
+
+    def _amcl_cb(self, msg: PoseWithCovarianceStamped) -> None:
+        pose = msg.pose.pose
+        theta = 2.0 * math.atan2(pose.orientation.z, pose.orientation.w)
+        self._amcl = (_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta))
+
+    def _settle(self) -> None:
+        """A new seed or map: forget AMCL's earlier estimate and give the new one time to take."""
+        self._amcl = None
+        self._lost_strikes = 0
+        self._watch_quiet_until = time.monotonic() + SETTLE_S
+
+    def _watch_tick(self) -> None:
+        """Count AMCL as lost when even the best pose near its own leaves the scan unexplained."""
+        if self.grid is None or time.monotonic() < self._watch_quiet_until:
+            return
+        paired = self._scan_for_amcl_pose()
+        if paired is None:
+            return
+        msg, believed = paired
+        scan = Scan.from_laser_scan(msg, self.max_range)
+        if len(scan) < MIN_SCAN_POINTS:
+            return
+        here = refine(self.grid, scan, believed)
+        if here.fit >= MIN_FIT:
+            self._lost_strikes = 0
+            return
+        self._lost_strikes += 1
+        if self._lost_strikes >= LOST_STRIKES:
+            self._recover(here)
+
+    def _scan_for_amcl_pose(self) -> tuple[LaserScan, Pose2D] | None:
+        """The scan AMCL's latest estimate came from. AMCL re-estimates on any odometry change, so an
+        estimate older than every buffered scan means the robot has not moved: the newest scan stands in."""
+        if self._amcl is None or not self._scans:
+            return None
+        stamp, believed = self._amcl
+        if stamp < _stamp(self._scans[0]):
+            return self._scans[-1], believed
+        match = min(self._scans, key=lambda scan: abs(_stamp(scan) - stamp))
+        return (match, believed) if abs(_stamp(match) - stamp) < SAME_SCAN_S else None
+
+    def _recover(self, here: Pose2D) -> None:
+        """Move AMCL only to a confident match that explains clearly more of the scan than where it is:
+        a crowd around the robot or moved furniture lowers every pose's fit alike."""
+        self._lost_strikes = 0
+        self._watch_quiet_until = time.monotonic() + RETRY_S
+        lost_at = f"({here.x:.2f}, {here.y:.2f}, {math.degrees(here.theta):.1f}°), lidar fit {here.fit:.0%}"
+        try:
+            estimate = self._find_pose(self.latest_scan)
+        except (ValueError, RuntimeError) as e:
+            self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
+            return
+        if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
+            self.get_logger().warn(
+                f"AMCL's pose {lost_at} explains little of the scan, but no place on the map clearly does "
+                f"better (best: {_describe(estimate)}); keeping it: the map may be incomplete here or the "
+                f"surroundings changed. Next check in {RETRY_S:.0f} s"
+            )
+            return
+        self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}")
+        pose = estimate.pose
+        self._publish_pose(pose.x, pose.y, pose.theta)
+        self._publish_status("localized")
 
     def _find_pose(self, msg: LaserScan) -> Estimate:
         """The best pose for this scan over the whole map, and how sure it is."""
@@ -534,12 +645,16 @@ class GridLocalizer(Node):
         if age > MAX_SCAN_AGE_S:
             raise ValueError(f"The latest scan is {age:.1f} s old; is the lidar running?")
         scan = Scan.from_laser_scan(msg, self.max_range)
-        if len(scan) < 10:
+        if len(scan) < MIN_SCAN_POINTS:
             raise ValueError("Not enough valid scan points")
         estimate = locate(self.grid, scan)
         if estimate is None:
             raise RuntimeError("No pose on the map fits the scan")
         return estimate
+
+
+def _stamp(msg: LaserScan | PoseWithCovarianceStamped) -> float:
+    return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
 
 def _describe(estimate: Estimate) -> str:

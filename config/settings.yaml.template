@@ -197,6 +197,7 @@
 #     confidence_threshold: 0.95    # evidence share the best pose needs to count as confidently localized
 #     max_range: 12.0               # max lidar range used for matching (m)
 #     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
+#     auto_recover: true            # relocalize on its own when AMCL has lost the robot
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────
 # (Gemini credentials are connectivity and live in .env.) The TTS voice is global;
