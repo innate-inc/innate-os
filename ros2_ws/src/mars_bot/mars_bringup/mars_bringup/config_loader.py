@@ -197,7 +197,6 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         # navigation_grid_localizer
         "confidence_threshold",
         "max_range",
-        "auto_localize_timeout",
         # brain_client_node
         "vertical_fov",
         "x_cam",

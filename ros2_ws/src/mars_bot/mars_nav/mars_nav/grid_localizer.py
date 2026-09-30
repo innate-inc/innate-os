@@ -101,7 +101,6 @@ class GridLocalizer(Node):
     # Map state
     map_received: bool = False
     grid: Grid | None = None
-    map_received_time = None
 
     # Scan storage
     latest_scan: LaserScan | None = None
@@ -131,7 +130,6 @@ class GridLocalizer(Node):
 
     # Parameters (declared in on_configure)
     max_range: float
-    auto_timeout = None
     confidence_threshold: float
 
     def __init__(self, node_name="grid_localizer", **kwargs):
@@ -146,7 +144,6 @@ class GridLocalizer(Node):
         if not self.has_parameter("max_range"):
             self.declare_parameter("max_range", 12.0)  # max lidar range
             self.declare_parameter("scan_topic", "/scan_fast")
-            self.declare_parameter("auto_localize_timeout", 30.0)  # seconds
             self.declare_parameter("confidence_threshold", 0.75)  # evidence share for 'localized' (swept on real scans)
             self.declare_parameter("auto_localize", True)  # enable auto-localize on startup
             self.declare_parameter("auto_recover", True)  # relocalize when AMCL loses the robot
@@ -154,7 +151,6 @@ class GridLocalizer(Node):
 
         self.max_range = self.get_parameter("max_range").get_parameter_value().double_value
         scan_topic = self.get_parameter("scan_topic").value
-        self.auto_timeout = self.get_parameter("auto_localize_timeout").value
         self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
         auto_localize = self.get_parameter("auto_localize").value
         self._auto_recover = self.get_parameter("auto_recover").get_parameter_value().bool_value
@@ -232,9 +228,7 @@ class GridLocalizer(Node):
         # Start auto-localize timer now that publishers are active
         if self._auto_localize_enabled and self._auto_timer is None:
             self._auto_timer = self.create_timer(0.5, self._auto_localize_tick)
-            self.get_logger().info(
-                f"Auto-localize enabled: {self.auto_timeout}s timeout, confidence threshold {self.confidence_threshold}"
-            )
+            self.get_logger().info(f"Auto-localize enabled: confidence threshold {self.confidence_threshold}")
 
         if self._auto_recover:
             self._settle()
@@ -381,8 +375,6 @@ class GridLocalizer(Node):
         self.grid = Grid.from_occupancy_grid(msg)
         self._settle()
 
-        # Record time map was received to allow for a startup delay
-        self.map_received_time = self.get_clock().now()
         self.map_received = True
 
     def _scan_cb(self, msg: LaserScan):

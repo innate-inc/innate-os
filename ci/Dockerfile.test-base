@@ -76,13 +76,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     ln -sf /root/.local/bin/uv /usr/local/bin/uv
 
-# Install Python deps with uv. Test image is non-Jetson, so we drop Jetson-only
-# entries (cupy, jetson-ai-lab index) and runtime-only packages that don't
-# install on CI runners (pynput, bluezero).
+# Install Python deps with uv. Test image is non-Jetson, so we drop the Jetson-only
+# index (jetson-ai-lab) and runtime-only packages that don't install on CI
+# runners (pynput, bluezero).
 COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
-        grep -v -E '^cupy' | \
         grep -v -E '^pynput' | \
         grep -v -E '^bluezero' > /tmp/pip-requirements.filtered.txt && \
     uv pip install --system meson ninja && \
@@ -110,7 +109,7 @@ RUN cd /root/innate-os/ros2_ws/src && \
 # E2_HIGHCPU_8 has 8 vCPUs but only 8 GB RAM, and >3 concurrent C++ link jobs
 # (mars_cam etc.) can OOM with no useful error.
 # mars_cam/nav/control build fine on non-Jetson: cam's VPI stereo component is
-# guarded by if(VPI_FOUND), nav's only Jetson dep (python3-cupy) is runtime-only.
+# guarded by if(VPI_FOUND); nav has no Jetson-only dependency.
 WORKDIR /root/innate-os/ros2_ws
 RUN . /opt/ros/humble/setup.sh && \
     rosdep install --from-paths src --ignore-src -r -y || true && \

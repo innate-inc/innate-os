@@ -107,7 +107,6 @@ def generate_launch_description():
         parameters=[
             {
                 "auto_localize": True,
-                "auto_localize_timeout": 30.0,
                 "confidence_threshold": 0.75,
             },
             *settings_params(),
