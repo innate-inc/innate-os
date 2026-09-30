@@ -23,7 +23,7 @@ from httpx import HTTPError
 
 import innate
 from brain_client.common.script_paths import get_innate_skills_dir
-from innate import Head, HeadState, Manipulation, Mobility, Odometry
+from innate import Head, HeadState, Llm, Manipulation, Mobility, Odometry
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
@@ -40,6 +40,8 @@ HEAD_STATE = ("pitch_degrees", "min_degrees", "max_degrees", "default_degrees")
 HEAD_METHODS = ("set_position",)
 ODOMETRY = ("x", "y", "theta", "theta_degrees", "linear_velocity", "angular_velocity")
 BASE_METHODS = ("send_cmd_vel", "rotate_in_place")
+LLM_STATE = ("available",)
+LLM_METHODS = ("ask",)
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
 _REFUSAL = re.compile(r"^\s*CANNOT:\s*(.+?)\s*$", re.MULTILINE)
 _MODULE_PREFIX = re.compile(r"\b(?:[a-z_]+\.)+(?=[A-Z])")
@@ -103,6 +105,14 @@ to read its pose in the odom frame (metres; theta in radians, counter-clockwise 
 commands return at once; give each a duration so the base stops by itself.
 """
 
+VISION = """\
+Declare `image: MainImage` (the head camera) or `wrist_image: WristImage` (the camera in the gripper) \
+to read the newest frame; the value is the JPEG as base64 text, ready to hand to the model. Declare \
+`llm: Llm` to ask the robot's model about a frame: self.llm.ask(self.image, "Is there a ball in view? \
+Answer yes or no.") returns the reply text, or None when the model is unreachable. Ask short questions \
+with a fixed answer format and parse the reply yourself; the model knows only the frame and the question.
+"""
+
 
 def system_prompt() -> str:
     exemplars = "\n\n".join(
@@ -111,7 +121,7 @@ def system_prompt() -> str:
     return (
         f"{RULES}\n# The `innate` API\n{innate.__doc__}\n\n# The arm\n{arm_reference()}\n\n"
         f"# The head\n{head_reference()}\n\n# The base\n{base_reference()}\n\n"
-        f"# Example skills\n{exemplars}"
+        f"# The cameras and the model\n{vision_reference()}\n\n# Example skills\n{exemplars}"
     )
 
 
@@ -127,6 +137,10 @@ def head_reference() -> str:
 
 def base_reference() -> str:
     return f"{BASE}```python\n{_attributes(Odometry, ODOMETRY)}\n\n{_method_stubs(Mobility, BASE_METHODS)}\n```"
+
+
+def vision_reference() -> str:
+    return f"{VISION}```python\n{_attributes(Llm, LLM_STATE)}\n\n{_method_stubs(Llm, LLM_METHODS)}\n```"
 
 
 def _attributes(cls: type, names: tuple[str, ...]) -> str:
@@ -145,7 +159,7 @@ def _method_stubs(cls: type, names: tuple[str, ...]) -> str:
 
 
 def _method_stub(method: Callable[..., object]) -> str:
-    signature = _MODULE_PREFIX.sub("", str(inspect.signature(method)))
+    signature = _MODULE_PREFIX.sub("", str(inspect.signature(method, eval_str=True)))
     doc = (inspect.getdoc(method) or "").replace("\n", "\n    ")
     return f'def {method.__name__}{signature}:\n    """{doc}"""'
 
