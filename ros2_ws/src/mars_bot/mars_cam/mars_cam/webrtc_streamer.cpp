@@ -611,6 +611,9 @@ void WebRTCStreamer::poll_pipeline_health() {
 // =============================================================================
 
 void WebRTCStreamer::publish_status() {
+    if (active_streams_pub_->get_subscription_count() == 0) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(now - prev_status_time_).count();
     if (dt <= 1e-3)

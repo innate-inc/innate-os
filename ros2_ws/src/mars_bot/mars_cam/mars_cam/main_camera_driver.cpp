@@ -526,33 +526,32 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
         }
     }
 
-    // -------------------------
-    // (A1) Stereo msg: Frame is already at publish_stereo_width x publish_stereo_height
-    // -------------------------
-    auto stereo_msg = std::make_unique<sensor_msgs::msg::Image>();
-    stereo_msg->header.stamp = current_time;
-    stereo_msg->header.frame_id = frame_id_;
-    stereo_msg->height = publish_stereo_height_;
-    stereo_msg->width = publish_stereo_width_;
-    stereo_msg->encoding = "bgr8";
-    stereo_msg->is_bigendian = false;
-    stereo_msg->step = publish_stereo_width_ * 3;
-    stereo_msg->data.resize(stereo_msg->height * stereo_msg->step);
-
-    // Wrap the ROS message data buffer as a cv::Mat view
-    cv::Mat stereo_out(publish_stereo_height_, publish_stereo_width_, CV_8UC3, stereo_msg->data.data(),
-                       stereo_msg->step);
-
-    // Copy frame directly (already rotated and downscaled by GStreamer)
-    // Ensure frame is BGR format (GStreamer might output RGB)
-    if (frame.type() == CV_8UC3) {
-        // Check if we need to convert RGB to BGR
-        // GStreamer videoconvert typically outputs BGR, but verify
-        frame.copyTo(stereo_out);
-    } else {
+    if (frame.type() != CV_8UC3) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                              "Unexpected frame type: %d, expected CV_8UC3", frame.type());
         return;
+    }
+
+    // -------------------------
+    // (A1) Stereo msg: Frame is already at publish_stereo_width x publish_stereo_height.
+    // The 1.8 MB copy is made only when the stereo topic is published; the eyes are
+    // split straight from the capture frame otherwise.
+    // -------------------------
+    std::unique_ptr<sensor_msgs::msg::Image> stereo_msg;
+    cv::Mat stereo_src = frame;
+    if (publish_stereo_) {
+        stereo_msg = std::make_unique<sensor_msgs::msg::Image>();
+        stereo_msg->header.stamp = current_time;
+        stereo_msg->header.frame_id = frame_id_;
+        stereo_msg->height = publish_stereo_height_;
+        stereo_msg->width = publish_stereo_width_;
+        stereo_msg->encoding = "bgr8";
+        stereo_msg->is_bigendian = false;
+        stereo_msg->step = publish_stereo_width_ * 3;
+        stereo_msg->data.resize(stereo_msg->height * stereo_msg->step);
+        stereo_src =
+            cv::Mat(publish_stereo_height_, publish_stereo_width_, CV_8UC3, stereo_msg->data.data(), stereo_msg->step);
+        frame.copyTo(stereo_src);
     }
 
     // -------------------------
@@ -560,7 +559,7 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     // After 180° rotation in GStreamer, original right half appears on the left half.
     // -------------------------
     cv::Rect left_roi(0, 0, left_width_, left_height_);
-    cv::Mat left_view = stereo_out(left_roi);  // Use stereo_out which is guaranteed BGR
+    cv::Mat left_view = stereo_src(left_roi);
 
     // -------------------------
     // (A3) Left msg: Use publish_left_width x publish_left_height, scale only if needed
@@ -591,7 +590,7 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     // (A4) Right ROI view and msg
     // -------------------------
     cv::Rect right_roi(left_width_, 0, left_width_, left_height_);
-    cv::Mat right_view = stereo_out(right_roi);
+    cv::Mat right_view = stereo_src(right_roi);
 
     auto right_msg = std::make_unique<sensor_msgs::msg::Image>();
     right_msg->header.stamp = current_time;
@@ -637,6 +636,9 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
         compressed_frame_counter_++;
         if (compressed_frame_counter_ >= compressed_frame_interval_) {
             compressed_frame_counter_ = 0;
+            if (compressed_pub_->get_subscription_count() == 0) {
+                return;
+            }
 
             auto left_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
             left_compressed_msg->header.stamp = current_time;
