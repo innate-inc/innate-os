@@ -177,10 +177,8 @@ void MarsArmNode::syncTargetToMotorPositions() {
     }
 }
 
-// A rebooted servo comes back holding where it is, but the pass-through still
-// carries the goal it tripped on and would send it back there at profile
-// speed on the next tick. Only the rebooted joints: the others keep their
-// targets (j6's is the grip preload).
+// Otherwise the pass-through sends a rebooted servo straight back to the goal
+// it tripped on. The others keep their targets (j6's is the grip preload).
 void MarsArmNode::holdRebootedJointsLocked(const std::vector<int>& servo_ids) {
     auto [positions, velocities, loads] = robot_->readState();
     (void)velocities;
@@ -213,8 +211,7 @@ void MarsArmNode::healthMonitorCallback() {
         status_msg.error = std::string("Health check error: ") + e.what();
     }
 
-    // The torque flag is read and the status published under the one lock
-    // announceTorque uses, so the two never reach the wire out of order.
+    // Under announceTorque's lock, so the two never publish out of order.
     std::lock_guard<std::mutex> lock(arm_status_mutex_);
     status_msg.is_torque_enabled = arm_torque_enabled_.load();
     arm_status_pub_->publish(status_msg);
@@ -228,16 +225,14 @@ void MarsArmNode::healthMonitorCallback() {
     last_arm_status_ = status_msg;
 }
 
-// The scan publishes every 5 s; a torque change goes out at once, so a client
-// waiting to drive the arm does not wait out a scan.
+// The scan publishes only every 5 s.
 void MarsArmNode::announceTorque() {
     std::lock_guard<std::mutex> lock(arm_status_mutex_);
     last_arm_status_.is_torque_enabled = arm_torque_enabled_.load();
     arm_status_pub_->publish(last_arm_status_);
 }
 
-// Every servo is scanned so a trip behind the reported one is not missed;
-// returns whether an arm servo (not the head) is limp on a latched error.
+// Whether an arm servo (not the head) is limp on a latched error.
 bool MarsArmNode::reportTrippedServosLocked(mars_msgs::msg::ArmStatus& status) {
     bool arm_servo_tripped = false;
     for (const auto& config : joint_configs_) {
@@ -466,7 +461,6 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             return;
         }
 
-        // A head-only repair leaves the arm's owner alone.
         const bool arm_rebooted =
             std::any_of(error_servo_ids.begin(), error_servo_ids.end(), [](int id) { return id <= 6; });
         if (arm_rebooted) {

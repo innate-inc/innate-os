@@ -80,8 +80,7 @@ class MarsArmNode : public rclcpp::Node {
     // ── Head servo (arm_head.cpp) ───────────────────────────────────────
     int logicalAngleToEncoder(double logical_angle_deg);
     double encoderToLogicalAngle(int encoder_value);
-    // The pass-through sends it on its next tick and re-sends it with every
-    // arm command, so a head goal is never lost to one failed write.
+    // Recorded, not written: the pass-through sends it with every arm command.
     void commandHead(double logical_angle_deg);
     void publishHeadPosition(int encoder_value);
     void headPositionCallback(const std_msgs::msg::Int32::SharedPtr msg);
@@ -94,16 +93,13 @@ class MarsArmNode : public rclcpp::Node {
     std::vector<std::vector<double>> computeCubicSplineTrajectory(const std::vector<double>& start,
                                                                   const std::vector<double>& goal, double duration,
                                                                   double dt);
-    // Every trajectory runs under a claim (its own unless given one) and stops
-    // (false) as soon as anything else claims the arm.
+    // False as soon as anything else claims the arm.
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                   GainMode trajectory_gain_mode = GainMode::SCHEDULED,
                                   std::optional<uint64_t> claim = std::nullopt);
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                const std::vector<double>& segment_durations);
     bool commandIfClaimed(uint64_t claim, const std::vector<double>& point);
-    // Fold along kRestFold keeping the standing grip, once torque is back and
-    // the arm has sat released for kRestWhenIdleS.
     void idleRestCallback();
     void foldToRest(uint64_t claim, std::vector<double> target);
     void armGotoJSCallback(const std::shared_ptr<mars_msgs::srv::GotoJS::Request> request,
@@ -139,20 +135,15 @@ class MarsArmNode : public rclcpp::Node {
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
     bool target_pending_{false};  // a trajectory wrote it since the pass-through last ran
-    // Who drives the arm, guarded by arm_command_mutex_ with the target it
-    // governs. Anything that commands the arm takes a new claim; going limp
-    // (end of boot, torque_off, reboot, a tripped servo) releases it. A skill
-    // that parked the arm at the floor still holds its claim, so the fold
-    // leaves it alone.
+    // Anything that commands the arm takes a new claim; going limp releases it,
+    // and a released arm folds after kRestWhenIdleS.
     uint64_t arm_claim_{0};
     std::chrono::steady_clock::time_point released_at_{};  // zero while claimed
     uint64_t claimArm();
     void releaseArm();
     void releaseArmIfClaimed(uint64_t claim);
-    // torque_off and reboot: released, and no goal is re-sent for the servos
-    // to lunge back to the moment torque returns.
+    // Also drops the target, so the servos don't lunge back to it when torque returns.
     void releaseLimpArm();
-    // Torque came back: a fresh grace before the fold; a claimed arm stays claimed.
     void restartGraceIfReleased();
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
 
@@ -178,8 +169,7 @@ class MarsArmNode : public rclcpp::Node {
     mars_msgs::msg::ArmStatus last_arm_status_;
     std::mutex arm_status_mutex_;  // guards last_arm_status_ and orders the scan's and announceTorque's publishes
     std::atomic<bool> arm_torque_enabled_{true};
-    // An arm servo is limp on a latched hardware error (as of the last health
-    // scan): the fold must not drag the rest of the arm around it.
+    // An arm servo is limp on a latched error: the fold must not drag the arm around it.
     std::atomic<bool> servo_tripped_{false};
 
     // Control timer
@@ -221,11 +211,8 @@ class MarsArmNode : public rclcpp::Node {
     // Atomic for the same reason as gain_mode_: stamped by the trajectory
     // threads (HoldGuard), read by the control loop.
     std::atomic<std::chrono::steady_clock::time_point> last_trajectory_end_{std::chrono::steady_clock::time_point{}};
-    // Trajectories streaming waypoints (a goto overlaps the fold it preempts
-    // for one waypoint). The idle decay must never fire while any is:
-    // last_trajectory_end_ is stale during execution, and the decay once
-    // flipped a 3 s carry move onto soft teleop gains 3 ms after it started —
-    // the shaken grip dropped the object it was carrying.
+    // The idle decay waits for all of them: it once flipped a carry move onto
+    // soft gains mid-flight, and the shaken grip dropped the object.
     std::atomic<int> trajectories_in_flight_{0};
 
     // Control loop timing instrumentation

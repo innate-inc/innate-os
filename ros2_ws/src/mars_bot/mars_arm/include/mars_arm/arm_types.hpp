@@ -27,44 +27,34 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold: how long a released arm waits, after going limp or after torque
-// comes back, before folding itself; a skill recovering a tripped servo
-// commands the arm well within this.
+// A skill recovering a tripped servo re-commands the arm well within this.
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kAtRestRad = 0.05;
-// A trajectory waits this long for the pass-through to pick up its last goal
-// before giving up: a service holding the bus (torque_on's enable walk, a
-// head-only fix_error) stalls it for ~1-2.5 s; longer means a wedged bus.
+// torque_on's enable walk or a head-only fix_error holds the bus 1-2.5 s; a
+// trajectory stalled longer than this is on a wedged bus.
 static constexpr double kPassThroughStallS = 5.0;
 
-// One leg of the rest fold: joints in /mars/arm/state radians, kHold keeps a
-// joint at its current target, then how long the spline takes.
+// kHold keeps a joint at its current target.
 struct RestWaypoint {
     std::array<double, 6> joints;
     double duration_s;
 };
 constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
-// A collapsed arm rests its weight on the gripper tip, and pitching the wrist
-// up under that load stalled it at its 1.75 A limit, so shoulder and elbow
-// raise the wrist first (forearm level, ~10 cm above the shoulder), slower
-// than the fold: at 1.5 s the shoulder fell 0.22 rad behind. Up there the
-// wrist levels and the base turns to the side before the arm folds down:
-// folding with the gripper still pointing down sweeps its tip through the
-// floor. The grip holds throughout so a held object is not dropped. The last
-// row is Manipulation.REST (brain_client); keep the two in step.
+// Shoulder and elbow lift first: pitching the wrist under a collapsed arm's
+// weight stalls it. The gripper levels before the arm folds down, or its tip
+// sweeps the floor. The last row must match Manipulation.REST.
 // clang-format off
 //                                                     yaw     shoulder  elbow   wrist  roll   grip    seconds
 static constexpr std::array<RestWaypoint, 3> kRestFold{{{{kHold,  -0.9,     0.9,    kHold, kHold, kHold}, 2.5},
                                                         {{1.5708, kHold,    kHold,  -0.3,  0.0,   kHold}, 2.0},
                                                         {{1.5708, -1.2195,  1.5723, -0.3,  0.0,   kHold}, 2.0}}};
 // clang-format on
-// Swung back past kShoulderClearanceRad the arm hits the body, unless the base
-// yaw is out to the side. The limit ramps from the joint's own limit at the
-// outer yaws to the clearance angle at the inner ones (see shoulderMinLimit).
+// Swung back past this the arm hits the body, unless the base yaw is out to
+// the side (see shoulderMinLimit).
 static constexpr double kShoulderClearanceRad = -0.5;
 static constexpr std::array<double, 4> kShoulderClearanceYaws{-1.35, -1.0, 1.0, 1.25};
 
-// Linear between knots, flat beyond the ends; xs ascending.
+// Flat beyond the ends; xs ascending.
 template <size_t N>
 double piecewiseLinear(const std::array<double, N>& xs, const std::array<double, N>& ys, double x) {
     if (x <= xs.front()) {
@@ -78,8 +68,7 @@ double piecewiseLinear(const std::array<double, N>& xs, const std::array<double,
     }
     return ys.back();
 }
-// j1-j5. The gripper (j6) is never retargeted: a gripping claw's standing
-// position error IS the grip force.
+// j1-j5: the gripper is never retargeted, its standing position error is the grip force.
 static constexpr size_t kArmJoints = 5;
 
 // Per joint, whether the /mars/arm/state sign is the servo's negated.

@@ -176,8 +176,7 @@ void MarsArmNode::releaseArm() {
     ++arm_claim_;
 }
 
-// One lock for both: a trajectory in flight sees the new claim before it can
-// write its next waypoint, so has_target_ stays false until a new owner.
+// One lock, so a trajectory in flight cannot write another waypoint after it.
 void MarsArmNode::releaseLimpArm() {
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
     released_at_ = std::chrono::steady_clock::now();
@@ -185,8 +184,7 @@ void MarsArmNode::releaseLimpArm() {
     has_target_ = false;
 }
 
-// A fold that gave up on a stalled bus hands the arm back so the watchdog
-// retries; one that gave way is no longer the owner and leaves it alone.
+// A fold that gave up on a stalled bus hands the arm back, so the watchdog retries.
 void MarsArmNode::releaseArmIfClaimed(uint64_t claim) {
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
     if (arm_claim_ != claim) {
@@ -203,9 +201,8 @@ void MarsArmNode::restartGraceIfReleased() {
     }
 }
 
-// The trajectory's next goal, once the pass-through has picked up the last
-// one — a service holding the bus stalls the path rather than skipping part
-// of it — unless the claim was lost: then the trajectory is over.
+// Waits for the pass-through to take the last goal, so a busy bus stalls the
+// path instead of skipping part of it.
 bool MarsArmNode::commandIfClaimed(uint64_t claim, const std::vector<double>& point) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(kPassThroughStallS);
     for (;;) {
@@ -274,8 +271,7 @@ void MarsArmNode::foldToRest(uint64_t claim, std::vector<double> target) {
     }
     {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
-        // j6 is current-based position control: re-commanding it above the
-        // standing grip target zeroes the preload and drops a held object.
+        // Re-commanding j6 above the standing grip zeroes the preload and drops the object.
         target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : target[5]);
     }
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest");

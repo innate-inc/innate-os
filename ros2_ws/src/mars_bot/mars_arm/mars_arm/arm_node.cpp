@@ -197,8 +197,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     RCLCPP_DEBUG(this->get_logger(), "Creating health monitor timer at 0.2 Hz");
     health_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(5000), std::bind(&MarsArmNode::healthMonitorCallback, this), health_callback_group_);
-    // A status at boot, not 5 s in: a torque change before the first scan
-    // repeats it, and the tripped-servo latch is set before the first fold.
+    // Now, not 5 s in: the tripped-servo latch must be set before the first fold.
     healthMonitorCallback();
 
     // Register parameter change callback for PID hot-reload
@@ -219,8 +218,7 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_arm::MarsArmNode>();
 
-    // One thread per callback group (timer, service, health, stop, rest,
-    // default) so nothing waits for a thread behind a fold or a goto.
+    // One thread per callback group, so nothing waits behind a fold or a goto.
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 6);
     executor.add_node(node);
     executor.spin();

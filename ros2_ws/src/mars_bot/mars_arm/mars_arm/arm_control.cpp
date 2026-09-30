@@ -335,8 +335,6 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
                           robot_->last_write_txrx_us);
 }
 
-// The shoulder's back limit as a function of base yaw: the joint's own limit
-// out at the sides, the body-clearance angle through the middle.
 double MarsArmNode::shoulderMinLimit(double yaw) const {
     const double clear = -joint_configs_[1].max_pos_rad;
     const std::array<double, 4> limits{clear, kShoulderClearanceRad, kShoulderClearanceRad, clear};
@@ -351,12 +349,8 @@ double MarsArmNode::clampToJointRange(size_t joint, double rad) const {
     return std::clamp(rad, c.min_pos_rad, c.max_pos_rad);
 }
 
-// Where a trajectory from `pose` can start: every joint inside the limits the
-// pass-through applies, each pitch joint's clamped excess carried to the next
-// one down the chain so every link keeps its pitch. A collapsed shoulder rests
-// past its limit and the servo clamps any goal beyond it, so this first step
-// cannot be splined, only shared: a shoulder stepping alone swung the gripper
-// tip 3 cm into the floor, and with the elbow carrying it the tip rises.
+// Each pitch joint's clamped excess is carried to the next, so every link keeps
+// its pitch: clamping a collapsed shoulder alone swung the tip 3 cm into the floor.
 std::vector<double> MarsArmNode::insideLimitsKeepingPitch(std::vector<double> pose) const {
     pose[0] = clampToJointRange(0, pose[0]);
     double excess = 0.0;
