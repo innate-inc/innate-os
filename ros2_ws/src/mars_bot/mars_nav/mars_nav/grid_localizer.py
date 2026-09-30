@@ -181,7 +181,7 @@ class GridLocalizer(Node):
             depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL
         )
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
-        if self._auto_recover:
+        if self._auto_recover or self._stall_detection:  # the stall correction pairs AMCL's pose with its scan too
             self.amcl_sub = self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 1)
         if self._stall_detection:
             self._stalls.reset()
