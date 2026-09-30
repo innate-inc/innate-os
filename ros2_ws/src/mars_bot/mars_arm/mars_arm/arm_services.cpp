@@ -453,7 +453,12 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             return;
         }
 
-        releaseArm();  // a trajectory in flight stops before it can write over the retarget below
+        // A head-only repair leaves the arm's owner alone.
+        const bool arm_rebooted =
+            std::any_of(error_servo_ids.begin(), error_servo_ids.end(), [](int id) { return id <= 6; });
+        if (arm_rebooted) {
+            releaseArm();  // a trajectory in flight stops before it can write over the retarget below
+        }
 
         // Reboot only the errored servos
         for (int servo_id : error_servo_ids) {
@@ -476,7 +481,9 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
                         e.what());
         }
-        restartGraceIfReleased();
+        if (arm_rebooted) {
+            restartGraceIfReleased();
+        }
 
         // Build JSON response with error IDs and status
         json result;
