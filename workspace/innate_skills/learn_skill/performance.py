@@ -104,11 +104,12 @@ class LearningMode:
         notes = LADDER[: max(PHRASE_FLOOR, rung + 1)]
         return _synth([*((note, 0.5) for note in notes[:-1]), (notes[-1], 2.0)], soft=True)
 
-    def celebrate(self, display_name: str) -> None:
+    def celebrate(self, display_name: str, *, improved: bool = False) -> None:
         """The fanfare and the line, in that order, from the robot's own speaker."""
         self._quiet()
         self._skill.play_clip(_synth(JINGLE), "level-up fanfare")
-        self._skill.say(f"New skill: {display_name}. Acquired.", wait=True)
+        line = f"Skill: {display_name}. Improved." if improved else f"New skill: {display_name}. Acquired."
+        self._skill.say(line, wait=True)
 
     def _quiet(self) -> None:
         self._stop.set()

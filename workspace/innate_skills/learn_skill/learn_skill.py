@@ -32,7 +32,9 @@ class LearnSkill(Skill):
     """Write a NEW skill for something you have no tool for: a dance, a beep melody or sound,
     a phrase routine, a head or arm gesture, or a combination of existing skills. Give a precise
     description of what it should do and when to use it. Takes a minute or two; tell the user
-    you are learning it first. The new skill appears in your tools when this completes."""
+    you are learning it first. The new skill appears in your tools when this completes. To fix a
+    skill you learned earlier that failed or misbehaved, pass improve=<its tool name> and describe
+    what went wrong: the fixed version replaces it, or the old one stays if no fix passes."""
 
     def guidelines_when_running(self) -> str:
         return (
@@ -40,7 +42,7 @@ class LearnSkill(Skill):
             "they talk, do not narrate progress, and do not stop it unless asked."
         )
 
-    def execute(self, description: str) -> SkillReturn:
+    def execute(self, description: str, improve: str = "") -> SkillReturn:
         client = ProxyClient()
         if not client.is_available():
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
@@ -49,11 +51,15 @@ class LearnSkill(Skill):
         except ValueError as misconfigured:
             self.fail(str(misconfigured))
         forge = Forge(client, coder, system_prompt())
-        prompt = f"Write a skill: {description}"
-        written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted
+        _drop_orphan_drafts()
+        target = self._improving(improve)
+        prompt = _improve_prompt(target, description) if target else f"Write a skill: {description}"
+        written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted or put back
         draft: Draft | None = None
         problem: str | None = None
-        _drop_orphan_drafts()
+        if target:
+            _backup(target).write_text(target.read_text())  # outlives a crash mid-trial: see _drop_orphan_drafts
+            written.add(target)
         try:
             with LearningMode(self) as show:
                 for round_number in range(1, ROUNDS + 1):
@@ -63,22 +69,29 @@ class LearnSkill(Skill):
                         if (reason := refusal(reply)) is not None:
                             self.fail(f"Not learnable with the robot's current interfaces: {reason}")
                         draft = check(extract_code(reply))
+                        if target and draft.module != target.stem:
+                            raise DraftRejected(f"keep the class name: the skill stays local/{target.stem}")
                         problem = self._install(draft, written) or self._trial(draft)
                     except (DraftRejected, ForgeUnreachable) as failure:
                         problem = str(failure)
                     if problem is None and draft is not None:
                         advertised = self._acquire(draft, written)
-                        show.celebrate(draft.display_name)
+                        show.celebrate(draft.display_name, improved=target is not None)
+                        verb = "Improved" if target else "Learned"
                         if advertised:
-                            return f"Learned {draft.skill_id}: it is now one of your tools."
+                            return f"{verb} {draft.skill_id}: it is now one of your tools."
                         return (
-                            f"Learned {draft.skill_id}; it joins your tools once the skill catalog finishes reloading."
+                            f"{verb} {draft.skill_id}; it joins your tools once the skill catalog finishes reloading."
                         )
                     self.feedback(f"round {round_number} failed: {problem}")
                     prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
         finally:
             for path in written:  # every draft of this run that did not pass its trial
-                path.unlink(missing_ok=True)
+                _restore_or_drop(path)
+            if target:
+                _backup(target).unlink(missing_ok=True)
+        if target:
+            self.fail(f"Could not improve {target.stem} after {ROUNDS} rounds: {problem}. The old version is back.")
         self.fail(f"Could not learn it after {ROUNDS} rounds: {problem}")
 
     def _draft(self, forge: Forge, show: LearningMode, prompt: str) -> str:
@@ -131,9 +144,38 @@ class LearnSkill(Skill):
         outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
         return None if outcome.ok else outcome.message
 
+    def _improving(self, name: str) -> Path | None:
+        """The learned skill an `improve` request names, by tool name or id; None writes a new one."""
+        if not name:
+            return None
+        path = get_learned_skills_dir() / f"{name.removeprefix('local/')}.py"
+        if not path.exists():
+            self.fail(f"{name} is not a skill I learned, so I cannot rewrite it")
+        return path
+
 
 def _learned_path(draft: Draft) -> Path:
     return get_learned_skills_dir() / f"{draft.module}.py"
+
+
+def _improve_prompt(target: Path, description: str) -> str:
+    return (
+        f"Improve a skill you wrote earlier. Its current file:\n```python\n{target.read_text()}```\n"
+        f"When the robot ran it: {description}\nFix it, keep the class name, and reply with the complete file."
+    )
+
+
+def _backup(path: Path) -> Path:
+    return path.with_name(f"{path.name}.bak")  # not a .py: neither the catalog nor the watcher sees it
+
+
+def _restore_or_drop(path: Path) -> None:
+    """Put back the version an improvement replaced, or drop a draft that never was a skill."""
+    backup = _backup(path)
+    if backup.exists():
+        backup.replace(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _drop_orphan_drafts() -> None:
@@ -141,7 +183,9 @@ def _drop_orphan_drafts() -> None:
     time): loaded but withheld, it would hide from the roster and hold its class name forever."""
     for stale in get_learned_skills_dir().glob("*.py"):
         if is_draft(stale):
-            stale.unlink()
+            _restore_or_drop(stale)
+    for orphan in get_learned_skills_dir().glob("*.py.bak"):
+        orphan.unlink()
 
 
 def _roster_stamp() -> int:
