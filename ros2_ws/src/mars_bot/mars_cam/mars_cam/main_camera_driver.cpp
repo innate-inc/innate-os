@@ -3,6 +3,8 @@
 #include "mars_cam/main_camera_driver.hpp"
 #include <filesystem>
 
+#include "mars_cam/camera_by_id.hpp"
+
 using namespace std::chrono_literals;
 
 namespace mars_cam {
@@ -37,7 +39,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
 
     // Get parameter values
     data_directory_ = this->get_parameter("data_directory").as_string();
-    std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
+    camera_pattern_ = this->get_parameter("camera_symlink").as_string();
     capture_width_ = this->get_parameter("width").as_int();
     capture_height_ = this->get_parameter("height").as_int();
     publish_left_width_ = this->get_parameter("publish_left_width").as_int();
@@ -64,74 +66,13 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     ae_kp_ = this->get_parameter("ae_kp").as_double();
     auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
 
-    // Find camera symlink by pattern matching
-    std::string camera_pattern = camera_symlink;  // Parameter now contains pattern
-    std::string symlink_path;
-    std::string v4l_dir = "/dev/v4l/by-id/";
-
-    std::vector<std::string> matching_symlinks;
-    if (std::filesystem::exists(v4l_dir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find(camera_pattern) != std::string::npos) {
-                matching_symlinks.push_back(entry.path().string());
-            }
-        }
-    }
-
-    if (matching_symlinks.empty()) {
-        RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", camera_pattern.c_str(),
-                     v4l_dir.c_str());
-        throw std::runtime_error("Camera symlink not found");
-    }
-
-    // Prefer -video-index0 if available (typically the capture device)
-    // Otherwise use the first match
-    bool found_index0 = false;
-    for (const auto& symlink : matching_symlinks) {
-        std::string filename = std::filesystem::path(symlink).filename().string();
-        if (filename.find("-video-index0") != std::string::npos) {
-            symlink_path = symlink;
-            found_index0 = true;
-            RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s (preferred -video-index0)",
-                        camera_pattern.c_str(), filename.c_str());
-            break;
-        }
-    }
-
-    if (!found_index0) {
-        // Fall back to first match
-        symlink_path = matching_symlinks[0];
-        std::string filename = std::filesystem::path(symlink_path).filename().string();
-        RCLCPP_INFO(this->get_logger(),
-                    "Found camera symlink matching pattern '%s': %s (no -video-index0 found, using first match)",
-                    camera_pattern.c_str(), filename.c_str());
-    }
-
-    // Resolve the symlink to get actual device path
-    std::string resolved_path = std::filesystem::read_symlink(symlink_path).string();
-
-    // Handle relative paths properly
-    if (resolved_path.find("/dev/") == 0) {
-        // Already absolute path
-        camera_device_ = resolved_path;
-    } else {
-        // Relative path, resolve it properly
-        std::filesystem::path symlink_dir = std::filesystem::path(symlink_path).parent_path();
-        std::filesystem::path full_path = std::filesystem::canonical(symlink_dir / resolved_path);
-        camera_device_ = full_path.string();
-    }
-
     // Calculate left image dimensions (half width for stereo camera at publish resolution)
     // Note: Frame is downscaled in GStreamer pipeline, so left is half of publish_stereo_width
     left_width_ = publish_stereo_width_ / 2;
     left_height_ = publish_stereo_height_;
 
     RCLCPP_DEBUG(this->get_logger(), "=== Mars Main Camera Driver ===");
-    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
-    RCLCPP_DEBUG(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
-    RCLCPP_INFO(this->get_logger(), "Resolved device: %s @ %dx%d, %.1f FPS", camera_device_.c_str(), capture_width_,
-                capture_height_, fps_);
+    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
     RCLCPP_DEBUG(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_,
                  publish_stereo_height_);
@@ -187,23 +128,20 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     checkCalibrationFile();
     calib_watch_timer_ = this->create_wall_timer(3s, std::bind(&MainCameraDriver::checkCalibrationFile, this));
 
-    // Initialize camera
-    if (initializeCamera()) {
+    if (openCamera()) {
         camera_initialized_ = true;
-
-        // Initialize frame timing tracking
-        frame_timestamps_.clear();
-        last_stats_print_ = this->now();
-
-        // Start frame processing thread
-        frame_thread_running_ = true;
-        frame_thread_ = std::thread(&MainCameraDriver::frameProcessingLoop, this);
-
+        RCLCPP_INFO(this->get_logger(), "Camera device: %s (%s) @ %dx%d, %.1f FPS", camera_device_.c_str(),
+                    currentVideoNode(camera_device_).c_str(), capture_width_, capture_height_, fps_);
         RCLCPP_INFO(this->get_logger(), "Main camera driver initialized successfully");
     } else {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initialize main camera");
-        throw std::runtime_error("Main camera initialization failed");
+        RCLCPP_WARN(this->get_logger(), "Main camera '%s' not available yet; retrying every second",
+                    camera_pattern_.c_str());
     }
+
+    frame_timestamps_.clear();
+    last_stats_print_ = this->now();
+    frame_thread_running_ = true;
+    frame_thread_ = std::thread(&MainCameraDriver::frameProcessingLoop, this);
 }
 
 MainCameraDriver::~MainCameraDriver() {
@@ -217,16 +155,7 @@ MainCameraDriver::~MainCameraDriver() {
         }
     }
 
-    // Release camera
-    if (cap_.isOpened()) {
-        cap_.release();
-    }
-
-    // Close V4L2 control file descriptor
-    if (camera_fd_ != -1) {
-        close(camera_fd_);
-        camera_fd_ = -1;
-    }
+    closeCamera();
 
     RCLCPP_INFO(this->get_logger(), "Main camera driver shutdown complete");
 }
@@ -236,7 +165,8 @@ bool MainCameraDriver::initializeCamera() {
 
     // Check if device exists
     if (!std::filesystem::exists(camera_device_)) {
-        RCLCPP_ERROR(this->get_logger(), "Camera device not found: %s", camera_device_.c_str());
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Camera device not found: %s",
+                              camera_device_.c_str());
         return false;
     }
 
@@ -248,7 +178,7 @@ bool MainCameraDriver::initializeCamera() {
     cap_.open(pipeline, cv::CAP_GSTREAMER);
 
     if (!cap_.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer");
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to open camera with GStreamer");
         return false;
     }
 
@@ -261,83 +191,115 @@ bool MainCameraDriver::initializeCamera() {
     RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
     RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
-    if (actual_width != capture_width_ || actual_height != capture_height_) {
-        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Requested: %dx%d, Got: %dx%d", capture_width_,
-                    capture_height_, actual_width, actual_height);
+    // cap_ reports the appsink caps, which the pipeline scales to the publish size, not the capture size.
+    if (actual_width != publish_stereo_width_ || actual_height != publish_stereo_height_) {
+        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Expected: %dx%d, Got: %dx%d", publish_stereo_width_,
+                    publish_stereo_height_, actual_width, actual_height);
     }
 
-    // Initialize V4L2 controls
+    applyV4L2Controls();
+    return true;
+}
+
+bool MainCameraDriver::applyV4L2Controls() {
     if (!initializeV4L2Controls()) {
-        RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
-    } else {
-        // Configure V4L2 and initialize AE controller based on mode
-        switch (auto_exposure_mode_) {
-            case AutoExposureMode::HARDWARE:
-                // Camera built-in AE (aperture priority) — no PID, reset gain to default
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: HARDWARE (aperture priority)");
-                    if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
-                        current_gain_ = default_gain_param_;
-                        RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
-                    }
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Failed to initialize V4L2 controls");
+        return false;
+    }
+
+    // Configure V4L2 and initialize AE controller based on mode
+    switch (auto_exposure_mode_) {
+        case AutoExposureMode::HARDWARE:
+            // Camera built-in AE (aperture priority) — no PID, reset gain to default
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: HARDWARE (aperture priority)");
+                if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
+                    current_gain_ = default_gain_param_;
+                    RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
                 }
-                break;
-
-            case AutoExposureMode::CUSTOM_PID:
-                // Custom PID AE — set V4L2 manual mode, initialize and run PID controller
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: CUSTOM_PID (manual V4L2 + PID controller)");
-                }
-                auto_exposure_controller_.initialize(exposure_min_, exposure_max_, target_brightness_, ae_kp_);
-                RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
-                RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
-                RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
-                RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)",
-                             auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
-                break;
-
-            case AutoExposureMode::MANUAL:
-                // Pure manual — set V4L2 manual mode, no PID controller
-                if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-                    RCLCPP_DEBUG(this->get_logger(), "AE mode: MANUAL (pure manual, no PID)");
-                }
-                break;
-        }
-
-        // Anti-flicker filter: match the camera's banding filter to the local mains
-        // frequency so indoor lighting doesn't flicker in auto-exposure mode.
-        int flicker_ctrl = -1;
-        if (power_line_frequency_ == 0) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_DISABLED;
-        } else if (power_line_frequency_ == 50) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_50HZ;
-        } else if (power_line_frequency_ == 60) {
-            flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_60HZ;
-        }
-        if (flicker_ctrl < 0) {
-            RCLCPP_WARN(this->get_logger(),
-                        "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
-                        power_line_frequency_);
-        } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
-            RCLCPP_INFO(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
-        }
-
-        if (exposure_setting_ >= 0) {
-            if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
-                current_exposure_ = exposure_setting_;
-                RCLCPP_DEBUG(this->get_logger(), "Set exposure to %d", exposure_setting_);
             }
-        }
+            break;
 
-        if (gain_setting_ >= 0) {
-            if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
-                current_gain_ = gain_setting_;
-                RCLCPP_DEBUG(this->get_logger(), "Set gain to %d", gain_setting_);
+        case AutoExposureMode::CUSTOM_PID:
+            // Custom PID AE — set V4L2 manual mode, initialize and run PID controller
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: CUSTOM_PID (manual V4L2 + PID controller)");
             }
+            auto_exposure_controller_.initialize(exposure_min_, exposure_max_, target_brightness_, ae_kp_);
+            RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
+            RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
+            RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
+            RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)",
+                         auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
+            break;
+
+        case AutoExposureMode::MANUAL:
+            // Pure manual — set V4L2 manual mode, no PID controller
+            if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+                RCLCPP_DEBUG(this->get_logger(), "AE mode: MANUAL (pure manual, no PID)");
+            }
+            break;
+    }
+
+    // Anti-flicker filter: match the camera's banding filter to the local mains
+    // frequency so indoor lighting doesn't flicker in auto-exposure mode.
+    int flicker_ctrl = -1;
+    if (power_line_frequency_ == 0) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_DISABLED;
+    } else if (power_line_frequency_ == 50) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_50HZ;
+    } else if (power_line_frequency_ == 60) {
+        flicker_ctrl = V4L2_CID_POWER_LINE_FREQUENCY_60HZ;
+    }
+    if (flicker_ctrl < 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Invalid power_line_frequency %d (expected 0, 50 or 60), keeping camera default",
+                    power_line_frequency_);
+    } else if (setV4L2Control(V4L2_CID_POWER_LINE_FREQUENCY, flicker_ctrl)) {
+        RCLCPP_INFO_ONCE(this->get_logger(), "Anti-flicker (power line) filter set to %d Hz", power_line_frequency_);
+    }
+
+    if (exposure_setting_ >= 0) {
+        if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
+            current_exposure_ = exposure_setting_;
+            RCLCPP_DEBUG(this->get_logger(), "Set exposure to %d", exposure_setting_);
+        }
+    }
+
+    if (gain_setting_ >= 0) {
+        if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
+            current_gain_ = gain_setting_;
+            RCLCPP_DEBUG(this->get_logger(), "Set gain to %d", gain_setting_);
         }
     }
 
     return true;
+}
+
+bool MainCameraDriver::openCamera() {
+    camera_device_ = findCameraByIdPath(camera_pattern_);
+    if (camera_device_.empty() || !initializeCamera()) {
+        closeCamera();
+        return false;
+    }
+    return true;
+}
+
+void MainCameraDriver::closeCamera() {
+    cap_.release();
+    if (camera_fd_ != -1) {
+        close(camera_fd_);
+        camera_fd_ = -1;
+    }
+    v4l2_controls_initialized_ = false;
+}
+
+void MainCameraDriver::reconnectCamera() {
+    closeCamera();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (frame_thread_running_ && rclcpp::ok()) {
+        openCamera();
+    }
 }
 
 std::string MainCameraDriver::createGStreamerPipeline() {
@@ -389,7 +351,8 @@ bool MainCameraDriver::initializeV4L2Controls() {
     // Open camera device for control access
     camera_fd_ = open(camera_device_.c_str(), O_RDWR);
     if (camera_fd_ == -1) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera for V4L2 controls: %s", strerror(errno));
+        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                              "Failed to open camera for V4L2 controls: %s", strerror(errno));
         return false;
     }
 
@@ -469,6 +432,8 @@ void MainCameraDriver::frameProcessingLoop() {
     RCLCPP_INFO(this->get_logger(), "Frame processing loop started");
 
     cv::Mat frame;
+    bool reconnecting = false;
+    auto next_control_retry = std::chrono::steady_clock::now();
 
     while (frame_thread_running_ && rclcpp::ok()) {
         try {
@@ -476,9 +441,25 @@ void MainCameraDriver::frameProcessingLoop() {
             bool success = cap_.read(frame);
 
             if (!success || frame.empty()) {
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Failed to capture frame");
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                     "No frames from main camera '%s', reconnecting", camera_pattern_.c_str());
+                reconnecting = true;
+                reconnectCamera();
                 continue;
+            }
+
+            if (reconnecting) {
+                reconnecting = false;
+                RCLCPP_INFO(this->get_logger(), "Main camera reconnected (%s)",
+                            currentVideoNode(camera_device_).c_str());
+            }
+
+            // Keep a working stream even if its control fd failed to open; retrying here is what gets
+            // exposure, gain and anti-flicker applied once the control device answers.
+            const auto now = std::chrono::steady_clock::now();
+            if (camera_fd_ == -1 && now >= next_control_retry) {
+                next_control_retry = now + std::chrono::seconds(1);
+                applyV4L2Controls();
             }
 
             // Increment frame counter
