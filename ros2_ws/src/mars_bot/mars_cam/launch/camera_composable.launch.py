@@ -21,7 +21,7 @@ Usage:
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -207,8 +207,16 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_calibration_manager")),
     )
 
+    # The fleet default SHM segment (4 MiB, config/dds/setup_dds.zsh) is sized
+    # for point clouds; the 12 MB full-res stereo frames the video recorder
+    # subscribes to would fall back to loopback TCP. This is the per-process
+    # override that file's TODO anticipates — only the camera processes pay
+    # the locked /dev/shm cost.
+    camera_shm_size = SetEnvironmentVariable("ZENOH_SHM_ALLOC_SIZE", "67108864")
+
     return LaunchDescription(
         [
+            camera_shm_size,
             use_sim_time_arg,
             camera_config_arg,
             start_calibration_manager_arg,

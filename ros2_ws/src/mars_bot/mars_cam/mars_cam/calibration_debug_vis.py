@@ -207,6 +207,41 @@ def generate_debug_mosaic(node, result):
         node.get_logger().warn(f"Failed to generate debug mosaic: {e}")
 
 
+# Coverage grid: the image plane divided into cols x rows cells; a cell counts
+# as covered once any captured ChArUco corner lands in it. The managed
+# calibration run only finishes when every cell is covered in BOTH cameras
+# (see _execute_run_calibration), so intrinsics are constrained across the
+# whole frame — not just wherever the operator happened to hold the board.
+COVERAGE_GRID_COLS = 4
+COVERAGE_GRID_ROWS = 3
+
+
+def compute_coverage(node):
+    """Covered coverage-grid cells per camera from corners captured so far.
+
+    Args:
+        node: StereoCalibrator node instance (needs ``indiv_corners_left/right``,
+              ``image_width``/``image_height``).
+
+    Returns:
+        tuple(left_covered, right_covered, total_cells) — the first two are
+        sets of (col, row) cells containing at least one captured corner.
+    """
+    w, h = node.image_width, node.image_height
+
+    def _covered_cells(all_corners):
+        cells = set()
+        for corners in all_corners:
+            for corner in corners:
+                x, y = corner[0, 0], corner[0, 1]
+                if 0 <= x < w and 0 <= y < h:
+                    cells.add((int(x * COVERAGE_GRID_COLS // w), int(y * COVERAGE_GRID_ROWS // h)))
+        return cells
+
+    total = COVERAGE_GRID_COLS * COVERAGE_GRID_ROWS
+    return _covered_cells(node.indiv_corners_left), _covered_cells(node.indiv_corners_right), total
+
+
 def generate_coverage_images(node):
     """Build per-camera corner-coverage dot maps from corners captured so far.
 
@@ -214,10 +249,9 @@ def generate_coverage_images(node):
     this is cheap enough to call after every single capture and returns the
     images directly for use as action feedback.
 
-    TODO: alongside these two debug renders, compute and report a coverage
-    percentage metric (e.g. fraction of the image plane, gridded into cells,
-    that has at least one captured corner nearby) so the operator gets a
-    number to target, not just a visual dot map.
+    Coverage-grid cells that still have no corner are tinted red behind a
+    hairline grid, so the operator can see exactly where the board still needs
+    to go before the run can finish.
 
     Args:
         node: StereoCalibrator node instance (needs ``indiv_corners_left/right``,
@@ -227,9 +261,17 @@ def generate_coverage_images(node):
         tuple(left_coverage, right_coverage) as BGR ``np.ndarray`` images.
     """
     w, h = node.image_width, node.image_height
+    left_covered, right_covered, _ = compute_coverage(node)
 
-    def _coverage_canvas(all_corners):
+    def _coverage_canvas(all_corners, covered):
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        for col in range(COVERAGE_GRID_COLS):
+            for row in range(COVERAGE_GRID_ROWS):
+                x0, y0 = col * w // COVERAGE_GRID_COLS, row * h // COVERAGE_GRID_ROWS
+                x1, y1 = (col + 1) * w // COVERAGE_GRID_COLS, (row + 1) * h // COVERAGE_GRID_ROWS
+                if (col, row) not in covered:
+                    canvas[y0:y1, x0:x1] = (16, 16, 56)  # BGR: dim red = still uncovered
+                cv2.rectangle(canvas, (x0, y0), (x1 - 1, y1 - 1), (60, 60, 60), 1)
         for corners in all_corners:
             for corner in corners:
                 x, y = int(corner[0, 0]), int(corner[0, 1])
@@ -237,8 +279,8 @@ def generate_coverage_images(node):
                     cv2.circle(canvas, (x, y), 3, (255, 255, 0), -1)
         return canvas
 
-    left_coverage = _coverage_canvas(node.indiv_corners_left)
-    right_coverage = _coverage_canvas(node.indiv_corners_right)
+    left_coverage = _coverage_canvas(node.indiv_corners_left, left_covered)
+    right_coverage = _coverage_canvas(node.indiv_corners_right, right_covered)
     return left_coverage, right_coverage
 
 
