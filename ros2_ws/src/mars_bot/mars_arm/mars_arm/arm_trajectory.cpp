@@ -185,6 +185,17 @@ void MarsArmNode::releaseLimpArm() {
     has_target_ = false;
 }
 
+// A fold that gave up on a stalled bus hands the arm back so the watchdog
+// retries; one that gave way is no longer the owner and leaves it alone.
+void MarsArmNode::releaseArmIfClaimed(uint64_t claim) {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    if (arm_claim_ != claim) {
+        return;
+    }
+    released_at_ = std::chrono::steady_clock::now();
+    ++arm_claim_;
+}
+
 void MarsArmNode::restartGraceIfReleased() {
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
     if (released_at_ != std::chrono::steady_clock::time_point{}) {
@@ -279,6 +290,7 @@ void MarsArmNode::foldToRest(uint64_t claim, std::vector<double> target) {
             }
         }
         if (!planAndExecuteTrajectory(target, waypoint.duration_s, GainMode::SCHEDULED, claim)) {
+            releaseArmIfClaimed(claim);
             return;
         }
     }

@@ -147,6 +147,7 @@ class MarsArmNode : public rclcpp::Node {
     std::chrono::steady_clock::time_point released_at_{};  // zero while claimed
     uint64_t claimArm();
     void releaseArm();
+    void releaseArmIfClaimed(uint64_t claim);
     // torque_off and reboot: released, and no goal is re-sent for the servos
     // to lunge back to the moment torque returns.
     void releaseLimpArm();
