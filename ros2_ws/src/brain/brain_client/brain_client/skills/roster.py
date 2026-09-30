@@ -16,7 +16,10 @@ import json
 from brain_messages.msg import AvailableSkills
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
+from brain_client.common.script_paths import LEARNED_GROUP
 from brain_client.skills.registry import SkillMeta, SkillRegistry
+
+LEARN_SKILL_ID = "innate-os/learn_skill"
 
 AVAILABLE_SKILLS_QOS = QoSProfile(
     depth=1,
@@ -62,6 +65,9 @@ class SkillRoster:
         self._sub = node.create_subscription(
             AvailableSkills, "/brain/available_skills", self._on_available_skills, AVAILABLE_SKILLS_QOS
         )
+        # Learned skills ride with learn_skill by default; the ones an explicit
+        # set left out, by directive id, so a toggle in the webapp holds.
+        self._muted_learned: dict[str, set[str]] = {}
 
     def _on_available_skills(self, msg: AvailableSkills) -> None:
         # The roster is latched and re-published on a heartbeat so late
@@ -87,16 +93,26 @@ class SkillRoster:
     def available_skill_ids(self) -> list[str]:
         return [p["id"] for p in self._state.registry.metadata]
 
+    def learned_skill_ids(self) -> list[str]:
+        """Skills the robot wrote for itself (custom_skills/learned/)."""
+        return [
+            meta["id"]
+            for meta in self._state.registry.metadata
+            if meta["group"] == LEARNED_GROUP and meta["id"].startswith("local/")
+        ]
+
     def active_skill_ids(self) -> list[str]:
-        """The available skills the current directive has enabled, in roster order."""
-        if self._state.current_directive is None:
+        """The available skills the current directive has enabled, in roster order.
+        A directive that can learn also uses what it learned."""
+        directive = self._state.current_directive
+        if directive is None:
             return []
         current_skill_ids = (
-            self._state.active_skill_ids
-            if self._state.active_skill_ids is not None
-            else list(self._state.current_directive.skill_ids())
+            self._state.active_skill_ids if self._state.active_skill_ids is not None else list(directive.skill_ids())
         )
         current_skill_set = set(current_skill_ids)
+        if LEARN_SKILL_ID in current_skill_set:
+            current_skill_set.update(set(self.learned_skill_ids()) - self._muted_learned.get(directive.id, set()))
         return [skill_id for skill_id in self.available_skill_ids() if skill_id in current_skill_set]
 
     def set_active_skill_ids(self, requested_skills: list[str]) -> list[str]:
@@ -104,4 +120,6 @@ class SkillRoster:
         available_skill_ids = self.available_skill_ids()
         requested_skill_set = set(requested_skills)
         self._state.active_skill_ids = [skill_id for skill_id in available_skill_ids if skill_id in requested_skill_set]
+        if self._state.current_directive is not None:
+            self._muted_learned[self._state.current_directive.id] = set(self.learned_skill_ids()) - requested_skill_set
         return sorted(requested_skill_set - set(available_skill_ids))
