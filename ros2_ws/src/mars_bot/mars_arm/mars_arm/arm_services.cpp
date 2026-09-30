@@ -201,7 +201,6 @@ void MarsArmNode::healthMonitorCallback() {
     mars_msgs::msg::ArmStatus status_msg;
     status_msg.is_ok = true;
     status_msg.error = "All servos nominal";
-    status_msg.is_torque_enabled = arm_torque_enabled_.load();
 
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
@@ -214,16 +213,35 @@ void MarsArmNode::healthMonitorCallback() {
         status_msg.error = std::string("Health check error: ") + e.what();
     }
 
+    // Read after the scan: it can queue behind a torque walk, and an earlier
+    // read would re-publish the state that walk just replaced.
+    status_msg.is_torque_enabled = arm_torque_enabled_.load();
     arm_status_pub_->publish(status_msg);
 
+    std::lock_guard<std::mutex> lock(arm_status_mutex_);
     if (status_msg.is_ok != last_arm_status_.is_ok || status_msg.error != last_arm_status_.error) {
         if (status_msg.is_ok) {
             RCLCPP_INFO(this->get_logger(), "Arm health nominal: %s", status_msg.error.c_str());
         } else {
             RCLCPP_ERROR(this->get_logger(), "Arm health issue: %s", status_msg.error.c_str());
         }
-        last_arm_status_ = status_msg;
     }
+    last_arm_status_ = status_msg;
+}
+
+// The scan publishes every 5 s; a torque change goes out at once, so a client
+// waiting to drive the arm does not wait out a scan.
+void MarsArmNode::announceTorque() {
+    mars_msgs::msg::ArmStatus status;
+    {
+        std::lock_guard<std::mutex> lock(arm_status_mutex_);
+        if (last_arm_status_.error.empty()) {
+            return;  // no scan yet, so no health to repeat
+        }
+        status = last_arm_status_;
+    }
+    status.is_torque_enabled = arm_torque_enabled_.load();
+    arm_status_pub_->publish(status);
 }
 
 // Every servo is scanned so a trip behind the reported one is not missed;
@@ -367,6 +385,7 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
     response->success = true;
     response->message = "Enabled torque for all arm servos";
     RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
+    announceTorque();
 }
 
 void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
@@ -385,6 +404,7 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
         response->success = true;
         response->message = "Disabled torque for all arm servos";
         RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
+        announceTorque();
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
@@ -413,6 +433,7 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
         response->success = true;
         response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
         RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
+        announceTorque();
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();

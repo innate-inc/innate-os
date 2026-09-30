@@ -72,6 +72,7 @@ class MarsArmNode : public rclcpp::Node {
     void armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void healthMonitorCallback();
+    void announceTorque();
     bool reportTrippedServosLocked(mars_msgs::msg::ArmStatus& status);
     void reportLoadAndTemperatureLocked(mars_msgs::msg::ArmStatus& status);
     std::string describeHardwareError(uint8_t status, int servo_id) const;
@@ -175,6 +176,7 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::Publisher<mars_msgs::msg::ArmStatus>::SharedPtr arm_status_pub_;
     rclcpp::TimerBase::SharedPtr health_timer_;
     mars_msgs::msg::ArmStatus last_arm_status_;
+    std::mutex arm_status_mutex_;  // guards last_arm_status_: the scan writes it, torque changes read it
     std::atomic<bool> arm_torque_enabled_{true};
     // An arm servo is limp on a latched hardware error (as of the last health
     // scan): the fold must not drag the rest of the arm around it.
