@@ -51,6 +51,13 @@ class Pose2D:
     def heading_gap(self, other: Pose2D) -> float:
         return abs(math.atan2(math.sin(self.theta - other.theta), math.cos(self.theta - other.theta)))
 
+    def relative_to(self, origin: Pose2D) -> Pose2D:
+        """This pose in origin's frame."""
+        dx, dy = self.x - origin.x, self.y - origin.y
+        cos, sin = math.cos(origin.theta), math.sin(origin.theta)
+        turn = math.atan2(math.sin(self.theta - origin.theta), math.cos(self.theta - origin.theta))
+        return Pose2D(cos * dx + sin * dy, -sin * dx + cos * dy, turn)
+
 
 @dataclass(frozen=True)
 class Scan:
@@ -93,6 +100,16 @@ class Grid:
         occupied = cells >= OCCUPIED_MIN
         dist = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, 5).astype(np.float32)
         return Grid(cells == 0, dist * info.resolution, info.resolution, info.origin.position.x, info.origin.position.y)
+
+    @staticmethod
+    def from_scan(scan: Scan, resolution: float = 0.05) -> Grid:
+        """The scan's endpoints as walls, in its own base frame: what a later scan is matched against."""
+        half = float(max(np.abs(scan.px).max(), np.abs(scan.py).max())) + 1.0
+        size = int(2 * half / resolution) + 1
+        occupied = np.zeros((size, size), dtype=bool)
+        occupied[((scan.py + half) / resolution).astype(int), ((scan.px + half) / resolution).astype(int)] = True
+        dist = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, 5).astype(np.float32)
+        return Grid(~occupied, dist * resolution, resolution, -half, -half)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -159,7 +176,7 @@ def score_grid(grid: Grid, scan: Scan, xs: np.ndarray, ys: np.ndarray, thetas: n
     return out
 
 
-def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float) -> Pose2D:
+def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float, inlier_m: float = INLIER_M) -> Pose2D:
     cos, sin = math.cos(theta), math.sin(theta)
     ex, ey = x + scan.px * cos - scan.py * sin, y + scan.px * sin + scan.py * cos
     rows = np.floor((ey - grid.origin_y) / grid.resolution).astype(np.int32)
@@ -169,7 +186,7 @@ def evaluate(grid: Grid, scan: Scan, x: float, y: float, theta: float) -> Pose2D
     d = np.full(rows.shape, 1.0, dtype=np.float32)
     d[inside] = grid.dist[rows[inside], cols[inside]]
     score = float(np.exp(-(d * d) / (2 * FINE_SIGMA_M**2)).mean()) if len(d) else 0.0
-    fit = float((d < INLIER_M).mean()) if len(d) else 0.0
+    fit = float((d < inlier_m).mean()) if len(d) else 0.0
     return Pose2D(x, y, math.atan2(sin, cos), fit, score)
 
 

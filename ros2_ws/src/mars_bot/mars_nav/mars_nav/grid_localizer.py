@@ -25,6 +25,8 @@ Key features:
   and seeds AMCL with it; the status says whether it is trustworthy
 - Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
   but only to a confident match that clearly fits better (`auto_recover`)
+- Catches stalls, wheels spinning while the lidar shows the robot standing still: stops
+  navigation and pulls AMCL back to where the scan puts the robot (`auto_recover`)
 - Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically localizes once a map and a scan are in.
@@ -42,15 +44,16 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.srv import SetInitialPose
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.lifecycle import Node, Publisher, State, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.subscription import Subscription
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from mars_nav.scan_match import MIN_FIT, Estimate, Grid, Pose2D, Scan, locate, refine
+from mars_nav.scan_match import MIN_FIT, Estimate, Grid, Pose2D, Scan, evaluate, locate, refine
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
 MIN_SCAN_POINTS = 10
@@ -61,24 +64,43 @@ LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map
 SETTLE_S = 5.0  # a new seed or map gets this long to take before AMCL's pose is judged
 RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner
 RECOVERY_MARGIN = 0.15  # a jump must put this much more of the scan on walls than AMCL's own pose
-SCAN_HISTORY = 20  # ~2.5 s of /scan_fast: holds the scan AMCL's latest estimate came from
+SCAN_HISTORY = 32  # ~4 s of /scan_fast: the scan AMCL's latest estimate came from, and the stall lookback
 SAME_SCAN_S = 0.02  # AMCL's /scan is every other /scan_fast message, same stamps
+
+STALL_LOOKBACK_S = 3.0  # how far back a stall check looks for a scan the wheels claim to have left
+STALL_MIN_MOVE_M = 0.08  # wheel motion smaller than this, and than STALL_MIN_TURN, the lidar cannot judge
+STALL_MIN_TURN = math.radians(8)
+STALL_RANGE_M = 4.0  # nearby structure shows motion; far returns only slow the check
+STALL_GRID_M = 0.02
+STALL_INLIER_M = 0.03  # tight enough to tell a few centimetres of motion from none
+STALL_MARGIN = 0.25  # "stood still" must fit this much more of the scan than the wheels' claimed motion
+STALL_STRIKES = 3  # consecutive scans
+STALL_QUIET_S = 3.0  # the base needs this long to stop before a stall can be judged again
+STALL_SETTLE_S = 1.0  # AMCL is judged once the base has stopped feeding it odometry
+STALL_SEARCH_M = 0.35  # at full speed AMCL absorbs up to ~0.3 m / 20° of phantom motion before a stall is caught
+STALL_SEARCH_DEG = 25.0
+STALL_DRIFT_M = 0.05  # an AMCL pose this close to the scan's after a stall is left alone
+STALL_DRIFT_TURN = math.radians(3)
+ODOM_HISTORY = 120  # ~4 s of /odom at 30 Hz
+ODOM_MATCH_S = 0.1
 
 
 class GridLocalizer(Node):
     """Global lidar localization lifecycle node."""
 
     # Subscriptions and publishers (created in on_configure)
-    scan_sub: rclpy.subscription.Subscription | None = None
-    map_sub: rclpy.subscription.Subscription | None = None
+    scan_sub: Subscription | None = None
+    map_sub: Subscription | None = None
     pose_pub: Publisher | None = None
     status_pub: Publisher | None = None
-    amcl_sub: rclpy.subscription.Subscription | None = None
+    amcl_sub: Subscription | None = None
+    odom_sub: Subscription | None = None
     srv = None
     hand_placed_srv = None
     _auto_timer = None
     _map_check_timer = None
     _watch_timer = None
+    _stall_fix_timer = None
 
     # Map state
     map_received: bool = False
@@ -100,6 +122,11 @@ class GridLocalizer(Node):
     _lost_strikes: int = 0
     _watch_quiet_until: float = 0.0
 
+    # Stall watch state
+    _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
+    _stall_strikes: int = 0
+    _stall_quiet_until: float = 0.0
+
     # Node state tracking
     _is_active: bool = False
 
@@ -110,6 +137,9 @@ class GridLocalizer(Node):
 
     def __init__(self, node_name="grid_localizer", **kwargs):
         super().__init__(node_name, **kwargs)
+        self._scans = deque(maxlen=SCAN_HISTORY)
+        self._odom = deque(maxlen=ODOM_HISTORY)
+        self._cancel_nav_client = self.create_client(Trigger, "/nav/cancel_navigation")
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """Unconfigured → Inactive: Declare parameters and create resources."""
@@ -127,7 +157,7 @@ class GridLocalizer(Node):
         self.auto_timeout = self.get_parameter("auto_localize_timeout").value
         self.confidence_threshold = self.get_parameter("confidence_threshold").get_parameter_value().double_value
         auto_localize = self.get_parameter("auto_localize").value
-        self._auto_recover = self.get_parameter("auto_recover").value
+        self._auto_recover = self.get_parameter("auto_recover").get_parameter_value().bool_value
 
         # Reset map state
         self.map_received = False
@@ -135,7 +165,7 @@ class GridLocalizer(Node):
 
         # Latest scan storage
         self.latest_scan = None
-        self._scans = deque(maxlen=SCAN_HISTORY)
+        self._scans.clear()
         self._amcl = None
 
         # Auto-localize state
@@ -151,6 +181,8 @@ class GridLocalizer(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
         if self._auto_recover:
             self.amcl_sub = self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 1)
+            self._odom.clear()
+            self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_cb, 10)
 
         # Publishers
         # Latched publishers - messages persist for late subscribers (AMCL, the memory recorder)
@@ -206,6 +238,7 @@ class GridLocalizer(Node):
                 self._watch_timer = self.create_timer(WATCH_PERIOD_S, self._watch_tick)
             else:
                 self._watch_timer.reset()
+            self._stall_strikes = 0
 
         # This call automatically activates lifecycle publishers (pose_pub and status_pub)
         return super().on_activate(state)
@@ -222,6 +255,9 @@ class GridLocalizer(Node):
             self._map_check_timer.cancel()
         if self._watch_timer:
             self._watch_timer.cancel()
+        if self._stall_fix_timer:
+            self.destroy_timer(self._stall_fix_timer)
+            self._stall_fix_timer = None
         # Drop any pending AMCL seed: across a deactivate/reactivate (e.g. a
         # map switch) a surviving retry would deliver the PREVIOUS map's pose.
         if self._seed_retry_timer:
@@ -249,6 +285,9 @@ class GridLocalizer(Node):
         if self._watch_timer:
             self.destroy_timer(self._watch_timer)
             self._watch_timer = None
+        if self._stall_fix_timer:
+            self.destroy_timer(self._stall_fix_timer)
+            self._stall_fix_timer = None
         # Clear the pending seed too: an in-flight /set_initial_pose failing
         # after cleanup would otherwise see it as current and re-arm a retry
         # timer on a cleaned-up node.
@@ -280,6 +319,9 @@ class GridLocalizer(Node):
         if self.amcl_sub:
             self.destroy_subscription(self.amcl_sub)
             self.amcl_sub = None
+        if self.odom_sub:
+            self.destroy_subscription(self.odom_sub)
+            self.odom_sub = None
         self.grid = None
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
@@ -344,6 +386,8 @@ class GridLocalizer(Node):
         self.latest_scan = msg
         self._scans.append(msg)
         self._scan_received_at = time.monotonic()
+        if self._auto_recover and self._is_active:
+            self._check_stall()
 
     def _auto_localize_tick(self):
         """Auto-localize on startup.
@@ -620,6 +664,8 @@ class GridLocalizer(Node):
         self._lost_strikes = 0
         self._watch_quiet_until = time.monotonic() + RETRY_S
         lost_at = f"({here.x:.2f}, {here.y:.2f}, {math.degrees(here.theta):.1f}°), lidar fit {here.fit:.0%}"
+        if self.latest_scan is None:
+            return
         try:
             estimate = self._find_pose(self.latest_scan)
         except (ValueError, RuntimeError) as e:
@@ -637,6 +683,99 @@ class GridLocalizer(Node):
         self._publish_pose(pose.x, pose.y, pose.theta)
         self._publish_status("localized")
 
+    def _odom_cb(self, msg: Odometry) -> None:
+        pose = msg.pose.pose
+        theta = 2.0 * math.atan2(pose.orientation.z, pose.orientation.w)
+        self._odom.append((_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta)))
+
+    def _odom_at(self, stamp: float) -> Pose2D | None:
+        if not self._odom:
+            return None
+        at, pose = min(self._odom, key=lambda sample: abs(sample[0] - stamp))
+        return pose if abs(at - stamp) <= ODOM_MATCH_S else None
+
+    def _check_stall(self) -> None:
+        """Count a stall when the wheels claim motion that the lidar shows did not happen."""
+        if time.monotonic() < self._stall_quiet_until:
+            return
+        claim = self._wheel_claim()
+        if claim is None:
+            self._stall_strikes = 0
+            return
+        before, after, claimed = claim
+        earlier, now = Scan.from_laser_scan(before, STALL_RANGE_M), Scan.from_laser_scan(after, STALL_RANGE_M)
+        if min(len(earlier), len(now)) < MIN_SCAN_POINTS:
+            return
+        field = Grid.from_scan(earlier, STALL_GRID_M)
+        still = evaluate(field, now, 0.0, 0.0, 0.0, STALL_INLIER_M)
+        moved = evaluate(field, now, claimed.x, claimed.y, claimed.theta, STALL_INLIER_M)
+        if still.fit < MIN_FIT or still.fit < moved.fit + STALL_MARGIN:
+            self._stall_strikes = 0
+            return
+        self._stall_strikes += 1
+        if self._stall_strikes >= STALL_STRIKES:
+            self._on_stall(claimed, still.fit, moved.fit, _stamp(after) - _stamp(before))
+
+    def _wheel_claim(self) -> tuple[LaserScan, LaserScan, Pose2D] | None:
+        """The newest scan, the latest earlier one the wheels claim to have clearly moved away from,
+        and that claimed motion in the earlier scan's frame; None when the wheels claim no such move."""
+        if len(self._scans) < 2:
+            return None
+        after = self._scans[-1]
+        end = self._odom_at(_stamp(after))
+        if end is None:
+            return None
+        for before in reversed(list(self._scans)[:-1]):
+            if _stamp(after) - _stamp(before) > STALL_LOOKBACK_S:
+                return None
+            start = self._odom_at(_stamp(before))
+            if start is None:
+                continue
+            claimed = end.relative_to(start)
+            if math.hypot(claimed.x, claimed.y) >= STALL_MIN_MOVE_M or abs(claimed.theta) >= STALL_MIN_TURN:
+                return before, after, claimed
+        return None
+
+    def _on_stall(self, claimed: Pose2D, still_fit: float, moved_fit: float, window: float) -> None:
+        self._stall_strikes = 0
+        self._stall_quiet_until = time.monotonic() + STALL_QUIET_S
+        self.get_logger().error(
+            f"Stalled: the wheels claim {math.hypot(claimed.x, claimed.y):.2f} m and "
+            f"{math.degrees(abs(claimed.theta)):.0f}° in {window:.1f} s, but the lidar shows the robot standing "
+            f"still ({still_fit:.0%} of the scan unchanged, {moved_fit:.0%} where the wheels claim); "
+            "cancelling navigation and relocalizing"
+        )
+        if self._cancel_nav_client.service_is_ready():
+            self._cancel_nav_client.call_async(Trigger.Request())
+        if self._stall_fix_timer is None:
+            self._stall_fix_timer = self.create_timer(STALL_SETTLE_S, self._relocalize_after_stall)
+
+    def _relocalize_after_stall(self) -> None:
+        """The spinning wheels dragged AMCL while the robot stood still: put it back where the scan says."""
+        if self._stall_fix_timer is not None:
+            self.destroy_timer(self._stall_fix_timer)
+            self._stall_fix_timer = None
+        paired = self._scan_for_amcl_pose()
+        if self.grid is None or paired is None:
+            return
+        msg, believed = paired
+        scan = Scan.from_laser_scan(msg, self.max_range)
+        if len(scan) < MIN_SCAN_POINTS:
+            return
+        here = refine(
+            self.grid, scan, believed, span_m=STALL_SEARCH_M, step_m=0.05, span_deg=STALL_SEARCH_DEG, step_deg=2.5
+        )
+        if here.fit < MIN_FIT:
+            self._recover(here)
+            return
+        if here.distance(believed) <= STALL_DRIFT_M and here.heading_gap(believed) <= STALL_DRIFT_TURN:
+            return
+        self.get_logger().warn(
+            f"After the stall AMCL was at ({believed.x:.2f}, {believed.y:.2f}); the scan puts the robot at "
+            f"({here.x:.2f}, {here.y:.2f}, {math.degrees(here.theta):.1f}°), lidar fit {here.fit:.0%}"
+        )
+        self._publish_pose(here.x, here.y, here.theta)
+
     def _find_pose(self, msg: LaserScan) -> Estimate:
         """The best pose for this scan over the whole map, and how sure it is."""
         if self.grid is None:
@@ -653,7 +792,7 @@ class GridLocalizer(Node):
         return estimate
 
 
-def _stamp(msg: LaserScan | PoseWithCovarianceStamped) -> float:
+def _stamp(msg: LaserScan | PoseWithCovarianceStamped | Odometry) -> float:
     return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
 
