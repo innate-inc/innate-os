@@ -1104,11 +1104,20 @@ def mapping_observe(recorder, clock, jpeg: bytes, advance: float = 1.0):
     recorder.tick()
 
 
-def announce_save(recorder, clock, name: str, age: float = 0.0, mapping_started: float | None = 1000.0):
+def announce_save(
+    recorder,
+    clock,
+    name: str,
+    age: float = 0.0,
+    mapping_started: float | None = 1000.0,
+    rotation: float | None = None,
+):
     """mode_manager's /nav/map_saved payload, stamped ``age`` seconds ago;
     ``mapping_started`` defaults to see_mapping_world's session, None mimics a
-    legacy announcement."""
+    legacy announcement, as does a missing ``rotation``."""
     payload = {"map": name, "stamp": clock.now - age}
+    if rotation is not None:
+        payload["rotation"] = rotation
     if mapping_started is not None:
         payload["mapping_started"] = mapping_started
     recorder._on_map_saved(SimpleNamespace(data=json.dumps(payload)))
@@ -1157,6 +1166,23 @@ def test_a_saved_map_adopts_the_mapping_memories(data_dir, clock):
     assert stored_image(store, snapshot.memories[0].id) == GOOD_JPEG
 
 
+def test_a_straightened_save_turns_the_tour_into_the_saved_frame(data_dir, clock):
+    # The save squared the map by turning the slam frame: the promoted tour
+    # must turn with it, while the stage keeps the session's frame for a re-save.
+    recorder, store = make_recorder(data_dir)  # records at (1, 2, 0.5)
+    see_mapping_world(recorder)
+    recorder.tick()
+    mapping_observe(recorder, clock, GOOD_JPEG, advance=3.1)
+
+    (data_dir / "maps" / "tour.pgm").write_bytes(b"tour-map-content")
+    announce_save(recorder, clock, "tour.yaml", rotation=math.pi / 2)
+    store.switch_map("tour.yaml")
+    (memory,) = store.snapshot().memories
+    assert (memory.x, memory.y, memory.theta) == pytest.approx((-2.0, 1.0, 0.5 + math.pi / 2))
+    (staged,) = json.loads((data_dir / "spatial_memory" / MAPPING_SESSION / "index.json").read_text())["memories"]
+    assert (staged["x"], staged["y"], staged["theta"]) == (1.0, 2.0, 0.5)
+
+
 def test_a_promotion_landing_after_the_mode_switch_still_adopts(data_dir, clock):
     # /nav/map_saved and /nav/current_mode arrive on independent topics: the
     # tick may switch the store onto the just-saved map (finding it empty)
@@ -1183,7 +1209,7 @@ def test_a_failing_promotion_never_escapes_the_callback(data_dir, clock):
     # disk mid-promotion must log, not kill the node.
     recorder, store = make_recorder(data_dir)
 
-    def full_disk(_name, _started):
+    def full_disk(_name, _started, _rotation):
         raise OSError("disk full")
 
     store.promote_mapping_session = full_disk
