@@ -8,6 +8,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extract_code, refusal, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
@@ -24,6 +25,7 @@ ROSTER_TIMEOUT_S = (
 TRIAL_TIMEOUT_S = 60.0
 # The skills server rewrites its contracts cache on every roster rebuild: the "your file is loaded" signal.
 CONTRACTS = Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
+T = TypeVar("T")
 
 
 class LearnSkill(Skill):
@@ -65,8 +67,7 @@ class LearnSkill(Skill):
                     except (DraftRejected, ForgeUnreachable) as failure:
                         problem = str(failure)
                     if problem is None and draft is not None:
-                        written.discard(_learned_path(draft))  # it passed its trial: this file stays
-                        advertised = self._acquire(draft)
+                        advertised = self._acquire(draft, written)
                         show.celebrate(draft.display_name)
                         if advertised:
                             return f"Learned {draft.skill_id}: it is now one of your tools."
@@ -98,15 +99,22 @@ class LearnSkill(Skill):
         path.parent.mkdir(parents=True, exist_ok=True)
         written.add(path)
         source = f"{draft.source.rstrip()}\n{DRAFT_MARKER}"
-        loaded = self._publish(path, source, lambda: _roster_has(draft, on_trial=True))
+        loaded = self._publish(path, source, lambda: _on_trial(draft))
         return None if loaded else "the skill catalog did not pick the file up in time"
 
-    def _acquire(self, draft: Draft) -> bool:
-        """Drop the trial marker so the roster advertises the skill. False when the rebuild is still
-        running at the deadline: the file is final and will be listed, but it is not a tool yet."""
-        return bool(self._publish(_learned_path(draft), draft.source, lambda: _roster_has(draft, on_trial=False)))
+    def _acquire(self, draft: Draft, written: set[Path]) -> bool:
+        """Drop the trial marker so the roster advertises the skill; it passed its trial, so the file
+        leaves this run's cleanup. False when the rebuild is still running at the deadline: the file
+        is final and will be listed, but it is not a tool yet. A final load that fails ends the run."""
+        path = _learned_path(draft)
+        written.discard(path)
+        entry = self._publish(path, draft.source, lambda: _settled(draft))
+        if entry is not None and entry.get("load_error"):
+            written.add(path)  # a file that no longer loads is not kept
+            self.fail(f"{draft.skill_id} passed its trial but failed to load once acquired: {entry['load_error']}")
+        return entry is not None
 
-    def _publish(self, path: Path, source: str, listed: Callable[[], bool | None]) -> bool | None:
+    def _publish(self, path: Path, source: str, settled: Callable[[], T | None]) -> T | None:
         staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         roster_before = _roster_stamp()
         try:
@@ -114,7 +122,7 @@ class LearnSkill(Skill):
             staging.replace(path)  # atomic: the watcher never imports a half-written file
         finally:
             staging.unlink(missing_ok=True)
-        return self.wait_for(lambda: listed() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
+        return self.wait_for(lambda: settled() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
 
     def _trial(self, draft: Draft) -> str | None:
         if self.skills is None:
@@ -156,11 +164,20 @@ def _roster_lists(draft: Draft) -> bool:
     )
 
 
-def _roster_has(draft: Draft, *, on_trial: bool) -> bool | None:
-    """True once the rebuilt roster carries the draft's skill in that state, or its load error."""
+def _roster_entry(draft: Draft) -> dict | None:
+    """The roster's entry for the draft's file: its skill, or its module's load error."""
     # a module that never imported clean is keyed by its path; one that did keeps its class id
     ids = (draft.skill_id, f"local/{LEARNED_GROUP}.{draft.module}")
-    for skill in _roster():
-        if skill["id"] in ids and (skill.get("load_error") or bool(skill.get("draft")) == on_trial):
-            return True
-    return None
+    return next((skill for skill in _roster() if skill["id"] in ids), None)
+
+
+def _on_trial(draft: Draft) -> bool | None:
+    """True once the rebuilt roster carries the draft on trial, or its load error for the trial to report."""
+    entry = _roster_entry(draft)
+    return True if entry is not None and (entry.get("draft") or entry.get("load_error")) else None
+
+
+def _settled(draft: Draft) -> dict | None:
+    """The acquired file's entry once the rebuilt roster has it: listed as a plain skill, or broken."""
+    entry = _roster_entry(draft)
+    return entry if entry is not None and not entry.get("draft") else None

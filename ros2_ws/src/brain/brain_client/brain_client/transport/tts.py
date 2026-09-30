@@ -88,9 +88,10 @@ class _Utterance:
     delivery: Delivery | None = None
 
 
-def _ready_clip(delivery: Delivery | None) -> bool:
-    """A clip that arrives as PCM plays without Cartesia: the speaker is all it needs."""
-    return delivery is not None and delivery.pcm is not None
+def _needs_cartesia(delivery: Delivery | None) -> bool:
+    """Only words are read by Cartesia: a sound effect comes from the sound generator, a ready
+    PCM clip needs nothing but the speaker."""
+    return delivery is None or not delivery.sound_effect
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -158,7 +159,9 @@ class TTSHandler:
         self._speech_cv = threading.Condition()
         self._playing_reply_id: str | None = None
         self._closing = threading.Event()
-        self._sound_lock = threading.Lock()  # one generation at a time: a prefetch and the worker never race
+        # one lock per sound: a prefetch and the worker never generate the same one twice, and a
+        # prefetch's long request never holds up a different sound the worker is ready to play
+        self._sound_locks: dict[Path, threading.Lock] = {}
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
     def _init_client(self):
@@ -232,7 +235,7 @@ class TTSHandler:
         Returns:
             True if speech was successfully generated and played, False otherwise
         """
-        if not self.is_available() and not _ready_clip(delivery):
+        if not self.is_available() and _needs_cartesia(delivery):
             self.logger.debug("🔇 TTS not available, skipping speech")
             return False
 
@@ -288,10 +291,10 @@ class TTSHandler:
         """
         if delivery is not None and delivery.pcm is not None:
             return iter([delivery.pcm])  # a ready clip needs no synthesis, only the speaker
-        if self._cartesia_client is None:
-            raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
         if delivery is not None and delivery.sound_effect:
             return self._sound_effect_bytes(text, delivery.seconds)
+        if self._cartesia_client is None:
+            raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
             base_speed = self.SPEAKER_SPEED
@@ -327,7 +330,7 @@ class TTSHandler:
             body["duration_seconds"] = min(max(seconds, shortest), longest)
         key = json.dumps(body, sort_keys=True)
         cached = self.SOUND_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.pcm"
-        with self._sound_lock:
+        with self._sound_locks.setdefault(cached, threading.Lock()):  # setdefault is atomic under the GIL
             if not cached.exists():
                 self._generate_sound(body, cached)
         return cached
@@ -351,7 +354,8 @@ class TTSHandler:
 
     def _prefetch_sound(self, text: str, seconds: float | None) -> None:
         """Generate a queued sound while earlier speech plays: generated on the worker instead,
-        it would hold every later reply and keep the mic ducked for the whole request."""
+        it would hold every later reply and keep the mic ducked for the whole request. A sound
+        flushed from the queue before its turn still lands in the cache, which is harmless."""
 
         def generate() -> None:
             try:
@@ -545,7 +549,7 @@ class TTSHandler:
             protected: Exempt from replace_pending flushes.
             delivery: Optional speed/volume override for this clip.
         """
-        if not self.is_available() and not _ready_clip(delivery):
+        if not self.is_available() and _needs_cartesia(delivery):
             self.logger.debug("🔇 TTS not available, skipping async speech")
             return False
         dropped_callbacks = []
