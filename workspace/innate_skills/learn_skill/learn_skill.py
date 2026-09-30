@@ -15,7 +15,7 @@ from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
 from brain_client.common.script_paths import DRAFT_MARKER, LEARNED_GROUP, get_learned_skills_dir, is_draft
-from innate import Skill, SkillReturn
+from innate import MainImage, Skill, SkillOutput, SkillReturn
 from innate_proxy import ProxyClient
 
 ROUNDS = 3
@@ -28,18 +28,26 @@ CONTRACTS = Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contrac
 T = TypeVar("T")
 
 
+class RoundFailed(Exception):
+    """The draft did not install or did not run; the message goes back to the coder."""
+
+
 class LearnSkill(Skill):
     """Write a NEW skill for something you have no tool for: a dance, a beep melody or sound,
     a phrase routine, a head or arm gesture, or a combination of existing skills. Give a precise
     description of what it should do and when to use it. Takes a minute or two; tell the user
-    you are learning it first. The new skill appears in your tools when this completes. To fix a
-    skill you learned earlier that failed or misbehaved, pass improve=<its tool name> and describe
+    you are learning it first. The new skill appears in your tools when this completes, and the
+    result tells you what its trial did: judge that against what was asked. To fix a skill you
+    learned earlier that failed or did the wrong thing, pass improve=<its tool name> and describe
     what went wrong: the fixed version replaces it, or the old one stays if no fix passes."""
+
+    image: MainImage | None
 
     def guidelines_when_running(self) -> str:
         return (
             "You are learning a new skill; it takes a minute or two. Answer the user briefly if "
-            "they talk, do not narrate progress, and do not stop it unless asked."
+            "they talk, do not narrate progress, and do not stop it unless asked. When the update "
+            "says it is trying the skill, watch what the robot does: you judge the result after."
         )
 
     def execute(self, description: str, improve: str = "") -> SkillReturn:
@@ -55,8 +63,7 @@ class LearnSkill(Skill):
         target = self._improving(improve)
         prompt = _improve_prompt(target, description) if target else f"Write a skill: {description}"
         written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted or put back
-        draft: Draft | None = None
-        problem: str | None = None
+        problem = ""
         if target:
             _backup(target).write_text(target.read_text())  # outlives a crash mid-trial: see _drop_orphan_drafts
             written.add(target)
@@ -71,20 +78,14 @@ class LearnSkill(Skill):
                         draft = check(extract_code(reply))
                         if target and draft.module != target.stem:
                             raise DraftRejected(f"keep the class name: the skill stays local/{target.stem}")
-                        problem = self._install(draft, written) or self._trial(draft)
-                    except (DraftRejected, ForgeUnreachable) as failure:
+                        self._install(draft, written)
+                        report = self._trial(draft)
+                    except (DraftRejected, ForgeUnreachable, RoundFailed) as failure:
                         problem = str(failure)
-                    if problem is None and draft is not None:
-                        advertised = self._acquire(draft, written)
-                        show.celebrate(draft.display_name, improved=target is not None)
-                        verb = "Improved" if target else "Learned"
-                        if advertised:
-                            return f"{verb} {draft.skill_id}: it is now one of your tools."
-                        return (
-                            f"{verb} {draft.skill_id}; it joins your tools once the skill catalog finishes reloading."
-                        )
-                    self.feedback(f"round {round_number} failed: {problem}")
-                    prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
+                        self.feedback(f"round {round_number} failed: {problem}")
+                        prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
+                        continue
+                    return self._keep(draft, written, show, report, improved=target is not None)
         finally:
             for path in written:  # every draft of this run that did not pass its trial
                 _restore_or_drop(path)
@@ -104,7 +105,7 @@ class LearnSkill(Skill):
                 drafted(len(delta))
         return "".join(reply)
 
-    def _install(self, draft: Draft, written: set[Path]) -> str | None:
+    def _install(self, draft: Draft, written: set[Path]) -> None:
         """Write the draft, marked as on trial, where the catalog looks and wait for the roster to load it."""
         path = _learned_path(draft)
         if path not in written and (path.exists() or _roster_lists(draft)):
@@ -112,8 +113,8 @@ class LearnSkill(Skill):
         path.parent.mkdir(parents=True, exist_ok=True)
         written.add(path)
         source = f"{draft.source.rstrip()}\n{DRAFT_MARKER}"
-        loaded = self._publish(path, source, lambda: _on_trial(draft))
-        return None if loaded else "the skill catalog did not pick the file up in time"
+        if not self._publish(path, source, lambda: _on_trial(draft)):
+            raise RoundFailed("the skill catalog did not pick the file up in time")
 
     def _acquire(self, draft: Draft, written: set[Path]) -> bool:
         """Drop the trial marker so the roster advertises the skill; it passed its trial, so the file
@@ -137,12 +138,28 @@ class LearnSkill(Skill):
             staging.unlink(missing_ok=True)
         return self.wait_for(lambda: settled() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
 
-    def _trial(self, draft: Draft) -> str | None:
+    def _trial(self, draft: Draft) -> str:
+        """Run the draft once with no inputs: its report when it passes, RoundFailed with its reason otherwise."""
         if self.skills is None:
             self.fail("skill invoker unavailable")
         self.feedback(f"trying {draft.skill_id}")
         outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
-        return None if outcome.ok else outcome.message
+        if not outcome.ok:
+            raise RoundFailed(outcome.message)
+        return outcome.message
+
+    def _keep(
+        self, draft: Draft, written: set[Path], show: LearningMode, report: str, *, improved: bool
+    ) -> SkillReturn:
+        """Acquire the draft that passed and hand the brain what its trial did, so it can judge the result."""
+        advertised = self._acquire(draft, written)
+        show.celebrate(draft.display_name, improved=improved)
+        verb = "Improved" if improved else "Learned"
+        listed = "it is now one of your tools" if advertised else "it joins your tools once the catalog reloads"
+        return SkillOutput(
+            f"{verb} {draft.skill_id}: {listed}. Its trial just ran and reported: {report or 'nothing'}",
+            image=self.image.jpeg if self.image else None,
+        )
 
     def _improving(self, name: str) -> Path | None:
         """The learned skill an `improve` request names, by tool name or id; None writes a new one."""
