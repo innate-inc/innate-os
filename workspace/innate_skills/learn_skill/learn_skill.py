@@ -79,13 +79,13 @@ class LearnSkill(Skill):
                         if target and draft.module != target.stem:
                             raise DraftRejected(f"keep the class name: the skill stays local/{target.stem}")
                         self._install(draft, written)
-                        report = self._trial(draft)
+                        trial = self._trial(draft)
                     except (DraftRejected, ForgeUnreachable, RoundFailed) as failure:
                         problem = str(failure)
                         self.feedback(f"round {round_number} failed: {problem}")
                         prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
                         continue
-                    return self._keep(draft, written, show, report, improved=target is not None)
+                    return self._keep(draft, written, show, trial, improved=target is not None)
         finally:
             for path in written:  # every draft of this run that did not pass its trial
                 _restore_or_drop(path)
@@ -138,27 +138,28 @@ class LearnSkill(Skill):
             staging.unlink(missing_ok=True)
         return self.wait_for(lambda: settled() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
 
-    def _trial(self, draft: Draft) -> str:
-        """Run the draft once with no inputs: its report when it passes, RoundFailed with its reason otherwise."""
+    def _trial(self, draft: Draft) -> SkillOutput:
+        """Run the draft once with no inputs: its output when it passes, RoundFailed with its reason otherwise."""
         if self.skills is None:
             self.fail("skill invoker unavailable")
         self.feedback(f"trying {draft.skill_id}")
         outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
         if not outcome.ok:
             raise RoundFailed(outcome.message)
-        return outcome.message
+        return outcome
 
     def _keep(
-        self, draft: Draft, written: set[Path], show: LearningMode, report: str, *, improved: bool
+        self, draft: Draft, written: set[Path], show: LearningMode, trial: SkillOutput, *, improved: bool
     ) -> SkillReturn:
-        """Acquire the draft that passed and hand the brain what its trial did, so it can judge the result."""
+        """Acquire the draft that passed and hand the brain what its trial did, so it can judge the result:
+        the trial's own evidence image when it attached one, else what the head camera sees now."""
         advertised = self._acquire(draft, written)
         show.celebrate(draft.display_name, improved=improved)
         verb = "Improved" if improved else "Learned"
         listed = "it is now one of your tools" if advertised else "it joins your tools once the catalog reloads"
         return SkillOutput(
-            f"{verb} {draft.skill_id}: {listed}. Its trial just ran and reported: {report or 'nothing'}",
-            image=self.image.jpeg if self.image else None,
+            f"{verb} {draft.skill_id}: {listed}. Its trial just ran and reported: {trial.message or 'nothing'}",
+            image=trial.image or (self.image.jpeg if self.image else None),
         )
 
     def _improving(self, name: str) -> Path | None:
