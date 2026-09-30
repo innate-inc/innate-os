@@ -129,6 +129,7 @@ class GridLocalizer(Node):
 
     # Stall watch state
     _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
+    _odom_received_at: float = 0.0
     _stall_strikes: int = 0
     _stall_quiet_until: float = 0.0
     _stall_fix_deadline: float = 0.0
@@ -673,10 +674,8 @@ class GridLocalizer(Node):
         try:
             estimate = self._find_pose(scan)
         except (ValueError, RuntimeError):
-            return
-        pose = estimate.pose
-        agrees = pose.distance(here) < MERGE_M and pose.heading_gap(here) < math.radians(MERGE_DEG)
-        if estimate.confident(self.confidence_threshold) and agrees:
+            estimate = None
+        if estimate is not None and estimate.confident(self.confidence_threshold) and _same_place(estimate.pose, here):
             self._publish_status("localized")
             return
         self._watch_quiet_until = time.monotonic() + RETRY_S
@@ -732,6 +731,7 @@ class GridLocalizer(Node):
         pose = msg.pose.pose
         theta = 2.0 * math.atan2(pose.orientation.z, pose.orientation.w)
         self._odom.append((_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta)))
+        self._odom_received_at = time.monotonic()
 
     def _odom_at(self, stamp: float) -> Pose2D | None:
         if not self._odom:
@@ -814,8 +814,9 @@ class GridLocalizer(Node):
             self._stall_fix_timer = None
 
     def _wheels_turning(self, window_s: float) -> bool:
-        """Whether wheel odometry moved within the last window_s; True too while the buffer cannot tell."""
-        if not self._odom:
+        """Whether wheel odometry moved within the last window_s; True too while odometry cannot tell,
+        because it stopped arriving or the buffer is younger than the window."""
+        if not self._odom or time.monotonic() - self._odom_received_at > window_s:
             return True
         latest_at, latest = self._odom[-1]
         for at, pose in reversed(self._odom):
@@ -833,8 +834,8 @@ class GridLocalizer(Node):
                 return
             self._drop_stall_fix()
             self.get_logger().warn(
-                f"The wheels kept turning for {STALL_FIX_TIMEOUT_S:.0f} s after the stall, so navigation did not "
-                "stop; leaving AMCL to the next stall check"
+                f"Wheel odometry did not show the base still within {STALL_FIX_TIMEOUT_S:.0f} s of the stall "
+                "(navigation did not stop, or odometry stopped arriving); leaving AMCL to the next stall check"
             )
             return
         self._drop_stall_fix()
@@ -877,6 +878,10 @@ class GridLocalizer(Node):
 
 def _stamp(msg: LaserScan | PoseWithCovarianceStamped | Odometry) -> float:
     return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+
+def _same_place(a: Pose2D, b: Pose2D) -> bool:
+    return a.distance(b) < MERGE_M and a.heading_gap(b) < math.radians(MERGE_DEG)
 
 
 def _describe(estimate: Estimate) -> str:
