@@ -26,8 +26,9 @@ Key features:
 - Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
   but only to a confident match that clearly fits better (`auto_recover`)
 - Catches stalls, wheels spinning while the lidar shows the robot standing still: stops
-  navigation and pulls AMCL back to where the scan puts the robot (`stall_detection`,
-  off by default until it has been tested against a real stall)
+  navigation, says why on /nav/stall (JSON: stamp, reason; the brain relays it to the
+  agent and the chat) and pulls AMCL back to where the scan puts the robot
+  (`stall_detection`, off by default until it has been tested against a real stall)
 - Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically localizes once a map and a scan are in.
@@ -37,6 +38,7 @@ as well take the rest), else 'localized_low_confidence'.
 Service remains available for manual triggers after auto-localize completes.
 """
 
+import json
 import math
 import time
 from collections import deque
@@ -56,7 +58,6 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from mars_nav.localize_reply import LOW_CONFIDENCE, describe_pose
 from mars_nav.scan_match import MIN_FIT, MIN_SCAN_POINTS, Estimate, Grid, Pose2D, Scan, locate, refine
 from mars_nav.stall_detection import Stall, StallDetector, stamp
 
@@ -87,6 +88,7 @@ class GridLocalizer(Node):
     map_sub: Subscription | None = None
     pose_pub: Publisher | None = None
     status_pub: Publisher | None = None
+    stall_pub: Publisher | None = None
     amcl_sub: Subscription | None = None
     odom_sub: Subscription | None = None
     srv = None
@@ -195,6 +197,7 @@ class GridLocalizer(Node):
         )
         self.pose_pub = self.create_lifecycle_publisher(PoseWithCovarianceStamped, "/initialpose", latched_qos)
         self.status_pub = self.create_lifecycle_publisher(String, "/localization/status", latched_qos)
+        self.stall_pub = self.create_lifecycle_publisher(String, "/nav/stall", 10)
 
         # Service (manual trigger)
         self.srv = self.create_service(Trigger, "localize", self._localize_cb)
@@ -306,6 +309,9 @@ class GridLocalizer(Node):
         if self.status_pub:
             self.destroy_publisher(self.status_pub)
             self.status_pub = None
+        if self.stall_pub:
+            self.destroy_publisher(self.stall_pub)
+            self.stall_pub = None
 
         # Destroy subscriptions
         if self.scan_sub:
@@ -598,7 +604,7 @@ class GridLocalizer(Node):
             confident = estimate.confident(self.confidence_threshold)
             self._publish_status("localized" if confident else "localized_low_confidence")
             response.success = True
-            confidence = "Localized" if confident else LOW_CONFIDENCE
+            confidence = "Localized" if confident else "Localized with LOW confidence"
             response.message = f"{confidence} at {_describe(estimate)}"
             self.get_logger().info(response.message)
 
@@ -691,7 +697,7 @@ class GridLocalizer(Node):
         a crowd around the robot or moved furniture lowers every pose's fit alike."""
         self._lost_strikes = 0
         self._watch_quiet_until = time.monotonic() + RETRY_S
-        lost_at = f"{describe_pose(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
+        lost_at = f"{_pose_text(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         scan = self.latest_scan
         if scan is None:
             return
@@ -724,12 +730,18 @@ class GridLocalizer(Node):
 
     def _on_stall(self, stall: Stall) -> None:
         claimed = stall.claimed
+        reason = (
+            f"the wheels turned {math.hypot(claimed.x, claimed.y):.2f} m and {math.degrees(abs(claimed.theta)):.0f}° "
+            f"in {stall.window_s:.1f} s but the lidar shows the robot standing still, so it is pushing against "
+            "something below the lidar"
+        )
         self.get_logger().error(
-            f"Stalled: the wheels claim {math.hypot(claimed.x, claimed.y):.2f} m and "
-            f"{math.degrees(abs(claimed.theta)):.0f}° in {stall.window_s:.1f} s, but the lidar shows the robot "
-            f"standing still ({stall.still_fit:.0%} of the scan unchanged, {stall.moved_fit:.0%} where the wheels "
+            f"Stalled: {reason} ({stall.still_fit:.0%} of the scan unchanged, {stall.moved_fit:.0%} where the wheels "
             "claim); cancelling navigation and relocalizing"
         )
+        if self.stall_pub is not None and self.stall_pub.is_activated:
+            verdict = {"stamp": self.get_clock().now().nanoseconds / 1e9, "reason": reason}
+            self.stall_pub.publish(String(data=json.dumps(verdict)))
         if self._cancel_nav_client.service_is_ready():
             self._cancel_nav_client.call_async(Trigger.Request()).add_done_callback(self._on_nav_cancel_reply)
         else:
@@ -782,7 +794,7 @@ class GridLocalizer(Node):
             return
         self.get_logger().warn(
             f"After the stall AMCL was at ({believed.x:.2f}, {believed.y:.2f}); the scan puts the robot at "
-            f"{describe_pose(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
+            f"{_pose_text(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         )
         self._publish_pose(here.x, here.y, here.theta)
 
@@ -802,11 +814,13 @@ class GridLocalizer(Node):
         return estimate
 
 
+def _pose_text(x: float, y: float, theta: float) -> str:
+    return f"({x:.2f}, {y:.2f}, {math.degrees(theta):.1f}°)"
+
+
 def _describe(estimate: Estimate) -> str:
     pose = estimate.pose
-    return (
-        f"{describe_pose(pose.x, pose.y, pose.theta)}, {estimate.share:.0%} of the evidence, lidar fit {pose.fit:.0%}"
-    )
+    return f"{_pose_text(pose.x, pose.y, pose.theta)}, {estimate.share:.0%} of the evidence, lidar fit {pose.fit:.0%}"
 
 
 def main(args=None):
