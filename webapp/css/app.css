@@ -2245,15 +2245,25 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   top: 123px;
 }
 
-/* On the Agent page the studio dock owns that corner, closed or open: hang the
-   column under its lower edge (agent/main.js measures it into
-   --agent-studio-dock-bottom, cockpit-relative) and flush with its left. */
+/* On the Agent page the studio dock owns that corner: hang the column under the
+   closed pill, flush with its left. Open, the editor can run to the floor, so
+   the column stands beside it instead. agent/main.js measures the dock's edges
+   into --agent-studio-dock-bottom / -right, cockpit-relative. */
 .agent-cockpit:not(.agent-compact) .cam-map-host.big .map-controls {
+  --dock-corner: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) - var(--cam-map-inset, 0px));
   top: max(
     var(--agent-overlay-inset),
     calc(var(--agent-studio-dock-bottom, 0px) + 10px - var(--cam-map-inset, 0px))
   );
-  left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) - var(--cam-map-inset, 0px));
+  left: var(--dock-corner);
+}
+
+.agent-cockpit:not(.agent-compact):has(.agent-studio-dock.open) .cam-map-host.big .map-controls {
+  top: var(--dock-corner);
+  left: max(
+    var(--agent-overlay-inset),
+    calc(var(--agent-studio-dock-right, 0px) + 10px - var(--cam-map-inset, 0px))
+  );
 }
 
 /* Map promoted to the big stage: full-bleed under the control overlays. Inserted as the stage's first

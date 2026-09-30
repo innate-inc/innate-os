@@ -288,12 +288,14 @@ function buildAgentView(root) {
   };
 
   // The studio dock floats over the map's top-left corner, where the map's own
-  // controls start; app.css hangs them under its lower edge.
+  // controls start; app.css lays them out against its edges.
   const studioDock = root.querySelector(".agent-studio-dock");
   const reportStudioDock = () => {
     if (!studioDock) return;
-    const below = studioDock.getBoundingClientRect().bottom - root.getBoundingClientRect().top;
-    root.style.setProperty("--agent-studio-dock-bottom", `${Math.max(0, below)}px`);
+    const dock = studioDock.getBoundingClientRect();
+    const cockpit = root.getBoundingClientRect();
+    root.style.setProperty("--agent-studio-dock-bottom", `${Math.max(0, dock.bottom - cockpit.top)}px`);
+    root.style.setProperty("--agent-studio-dock-right", `${Math.max(0, dock.right - cockpit.left)}px`);
   };
 
   const applyLayout = () => {
