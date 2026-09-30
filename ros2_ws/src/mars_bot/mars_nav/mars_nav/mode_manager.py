@@ -22,13 +22,11 @@ from geometry_msgs.msg import TransformStamped
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
-from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -215,8 +213,16 @@ class ModeManager(Node):
         # Map persistence file
         self.map_file = os.path.join(state_dir, ".last_map")
 
-        # BasicNavigator for map operations
-        self.navigator = None
+        # /mapping_pose (map->base_link at odom rate) feeds the webapp while
+        # mapping, and the switch into navigation polls map->base_link to
+        # confirm AMCL's seed. Idle in any other mode the /tf and /odom
+        # subscriptions cost ~16% of a core in Python, so the current_mode
+        # setter creates them for mapping/switching and drops them after.
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener: tf2_ros.TransformListener | None = None
+        self.odom_sub = None
+        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
+        self._current_mode = "none"
 
         # Discover available maps first (needed for loading last map)
         self.available_maps = self.discover_maps()
@@ -260,27 +266,6 @@ class ModeManager(Node):
             callback_group=self._internal_callbacks_group,
         )
 
-        # One-shot check: the costmaps' camera voxel layer is silently inert
-        # when /mars/main_camera/points never publishes (e.g. missing stereo
-        # calibration). Warn once so lidar-only operation is visible.
-        self._camera_points_seen = False
-        self._camera_points_sub = self.create_subscription(
-            PointCloud2, "/mars/main_camera/points", self._camera_points_cb, qos_profile_sensor_data
-        )
-        self._camera_check_timer = self.create_timer(30.0, self._check_camera_obstacle_source)
-
-        # --- TF2: Mapping pose publisher ---
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
-        # Subscribe to odometry topic (for mapping_pose publishing)
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            20,  # queue size
-        )
-
         self.get_logger().info("Mode Manager starting with map management capabilities.")
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
         self.get_logger().info(
@@ -309,6 +294,27 @@ class ModeManager(Node):
         self._lifecycle_watchdog_timer = self.create_timer(
             5.0, self._lifecycle_watchdog, callback_group=self._internal_callbacks_group
         )
+
+    @property
+    def current_mode(self) -> str:
+        return self._current_mode
+
+    @current_mode.setter
+    def current_mode(self, mode: str) -> None:
+        self._current_mode = mode
+        self._set_mapping_pose_bridge(mode in ("mapping", "switching"))
+
+    def _set_mapping_pose_bridge(self, enabled: bool) -> None:
+        if enabled and self.odom_sub is None:
+            self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+            self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 20)
+        elif not enabled and self.odom_sub is not None:
+            self.destroy_subscription(self.odom_sub)
+            self.odom_sub = None
+            if self.tf_listener is not None:
+                self.tf_listener.unregister()
+                self.tf_listener = None
+            self.tf_buffer.clear()
 
     def odom_callback(self, msg):
         # Only publish mapping_pose in mapping mode
@@ -1039,20 +1045,6 @@ class ModeManager(Node):
                 "Re-localization after map switch failed or timed out; AMCL may still hold the previous map's pose"
             )
 
-    def _camera_points_cb(self, _msg):
-        self._camera_points_seen = True
-        if self._camera_points_sub is not None:
-            self.destroy_subscription(self._camera_points_sub)
-            self._camera_points_sub = None
-
-    def _check_camera_obstacle_source(self):
-        self._camera_check_timer.cancel()
-        if not self._camera_points_seen:
-            self.get_logger().warning(
-                "No camera pointcloud on /mars/main_camera/points 30s after start: the costmaps' camera "
-                "obstacle layer is inert (missing stereo calibration?) — navigating with lidar obstacles only"
-            )
-
     def change_map_callback(self, request, response):
         """
         Service callback to change the map for navigation mode
@@ -1502,13 +1494,6 @@ class ModeManager(Node):
                 response.message = f"Successfully switched to {target_mode} mode"
                 if target_mode == "navigation":
                     response.message += f" with map '{self.current_map}'"
-                    # Initialize BasicNavigator for navigation mode
-                    try:
-                        if self.navigator is None:
-                            self.navigator = BasicNavigator()
-                        self.get_logger().info("BasicNavigator initialized for navigation mode")
-                    except Exception as e:
-                        self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
                 elif target_mode == "mapping":
                     # Every slam_toolbox activation is a new coordinate frame;
                     # stamp it before the mode flips so no subscriber pairs

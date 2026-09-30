@@ -260,17 +260,11 @@ class StereoCalibrator(Node):
         if self.use_legacy_pattern:
             self.get_logger().debug("Legacy pattern enabled (for calib.io boards)")
 
-        # Create synchronized subscriptions for left and right images
-        self.left_sub = message_filters.Subscriber(self, Image, self.left_topic)
-        self.right_sub = message_filters.Subscriber(self, Image, self.right_topic)
-
-        # Use ApproximateTimeSynchronizer since timestamps may differ slightly
-        self.sync = message_filters.ApproximateTimeSynchronizer(
-            [self.left_sub, self.right_sub],
-            queue_size=10,
-            slop=0.1,  # 100ms tolerance
-        )
-        self.sync.registerCallback(self.image_callback)
+        self.left_sub = None
+        self.right_sub = None
+        self.sync = None
+        if self.interactive and self.auto_start:
+            self._ensure_image_subscriptions()
 
         # Start keyboard input only in CLI interactive mode.
         if self.interactive and self.auto_start:
@@ -477,6 +471,7 @@ class StereoCalibrator(Node):
                 self.min_corners = int(goal.min_corners)
 
             setup_head(self)
+            self._ensure_image_subscriptions()
 
             self._capture_enabled = True
             self._last_capture_time = time.time()
@@ -555,6 +550,21 @@ class StereoCalibrator(Node):
                 # slow-to-exit old run can never clobber a newer goal's slot.
                 if self._active_goal is goal_handle:
                     self._active_goal = None
+
+    def _ensure_image_subscriptions(self) -> None:
+        # Created on the first goal and kept: calibration runs once per robot,
+        # and two raw 15 Hz streams cost the camera container 27 MB/s of
+        # serialization plus 5% of a core here for as long as they exist.
+        if self.sync is not None:
+            return
+        self.left_sub = message_filters.Subscriber(self, Image, self.left_topic)
+        self.right_sub = message_filters.Subscriber(self, Image, self.right_topic)
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            [self.left_sub, self.right_sub],
+            queue_size=10,
+            slop=0.1,  # 100ms tolerance
+        )
+        self.sync.registerCallback(self.image_callback)
 
     def image_callback(self, left_msg, right_msg):
         """Store latest left and right frames."""

@@ -73,34 +73,8 @@ RecorderNode::RecorderNode()
     topics_received_[leader_command_topic_] = false;
     topics_received_[velocity_topic_] = false;
 
-    // Create QoS profile for image topics
-    rclcpp::QoS image_qos(2);
-    image_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
-    image_qos.history(rclcpp::HistoryPolicy::KeepLast);
-
-    // Create subscribers for image topics
-    for (const auto& topic : image_topics_) {
-        auto sub = this->create_subscription<sensor_msgs::msg::Image>(
-            topic, image_qos,
-            [this, topic](const sensor_msgs::msg::Image::SharedPtr msg) { this->image_callback(msg, topic); });
-        image_subs_.push_back(sub);
-    }
-
-    // Create other subscribers
-    arm_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
-        arm_state_topic_, 10, std::bind(&RecorderNode::arm_state_callback, this, std::placeholders::_1));
-
-    leader_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
-        leader_command_topic_, 10, std::bind(&RecorderNode::leader_command_callback, this, std::placeholders::_1));
-
-    head_position_sub_ = this->create_subscription<std_msgs::msg::String>(
-        head_position_topic_, 10, std::bind(&RecorderNode::head_position_callback, this, std::placeholders::_1));
-
-    cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-        velocity_topic_, 10, std::bind(&RecorderNode::cmd_vel_callback, this, std::placeholders::_1));
-
-    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        odom_topic_, 10, std::bind(&RecorderNode::odom_callback, this, std::placeholders::_1));
+    // Sensor subscriptions exist only while a task is active (subscribe_sensors):
+    // idle, the two raw image streams alone are 42 MB/s deserialized for nothing.
 
     // Log subscriptions (debug — detail; the "initialized" line below is the summary)
     RCLCPP_DEBUG(this->get_logger(), "Subscribing to image topics:");
@@ -228,6 +202,51 @@ void RecorderNode::check_all_topics_received() {
             RCLCPP_INFO(this->get_logger(), "All topics have received at least one message.");
         }
     }
+}
+
+void RecorderNode::subscribe_sensors() {
+    if (arm_state_sub_) {
+        return;
+    }
+    rclcpp::QoS image_qos(2);
+    image_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
+    image_qos.history(rclcpp::HistoryPolicy::KeepLast);
+    for (const auto& topic : image_topics_) {
+        image_subs_.push_back(this->create_subscription<sensor_msgs::msg::Image>(
+            topic, image_qos,
+            [this, topic](const sensor_msgs::msg::Image::SharedPtr msg) { this->image_callback(msg, topic); }));
+    }
+    arm_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        arm_state_topic_, 10, std::bind(&RecorderNode::arm_state_callback, this, std::placeholders::_1));
+    leader_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
+        leader_command_topic_, 10, std::bind(&RecorderNode::leader_command_callback, this, std::placeholders::_1));
+    head_position_sub_ = this->create_subscription<std_msgs::msg::String>(
+        head_position_topic_, 10, std::bind(&RecorderNode::head_position_callback, this, std::placeholders::_1));
+    cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+        velocity_topic_, 10, std::bind(&RecorderNode::cmd_vel_callback, this, std::placeholders::_1));
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+        odom_topic_, 10, std::bind(&RecorderNode::odom_callback, this, std::placeholders::_1));
+}
+
+void RecorderNode::unsubscribe_sensors() {
+    image_subs_.clear();
+    arm_state_sub_.reset();
+    leader_command_sub_.reset();
+    head_position_sub_.reset();
+    cmd_vel_sub_.reset();
+    odom_sub_.reset();
+    for (auto& [topic, image] : latest_images_) {
+        image = nullptr;
+    }
+    latest_arm_state_ = nullptr;
+    latest_leader_command_ = nullptr;
+    latest_cmd_vel_ = nullptr;
+    latest_odom_ = nullptr;
+    head_received_ = false;
+    for (auto& [topic, received] : topics_received_) {
+        received = false;
+    }
+    all_topics_received_ = false;
 }
 
 void RecorderNode::image_callback(const sensor_msgs::msg::Image::SharedPtr msg, const std::string& topic) {
@@ -522,6 +541,7 @@ void RecorderNode::activate_physical_primitive(
     current_task_name_ = display_name;
     current_task_dir_ = task_dir;
     state_ = State::TASK_ACTIVE;
+    subscribe_sensors();
     RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' started at %s.", display_name.c_str(),
                 task_dir.c_str());
     publish_status("active");
@@ -746,6 +766,7 @@ void RecorderNode::handle_end_task(const std::shared_ptr<std_srvs::srv::Trigger:
 
     task_manager_->end_task();
     state_ = State::IDLE;
+    unsubscribe_sensors();
     RCLCPP_INFO(this->get_logger(), "Task ended; recorder state set to IDLE.");
     publish_status("idle");
     current_task_name_.clear();

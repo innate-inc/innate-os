@@ -92,6 +92,8 @@ class RecorderNode : public rclcpp::Node {
 
     // Helper methods
     void check_all_topics_received();
+    void subscribe_sensors();
+    void unsubscribe_sensors();
     void publish_status(const std::string& status, const std::string& episode_number = "");
     void set_head_ai_position();
     std::string state_to_string(State state);
