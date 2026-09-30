@@ -57,3 +57,17 @@ def apply_pose_delta(
     x, y, z = (a + d for a, d in zip(anchor_xyz, delta_xyz, strict=True))
     roll, pitch, yaw = quat_to_rpy(*quat_multiply(delta_quat, anchor_quat))
     return (x, y, z, roll, pitch, yaw)
+
+
+def rebase_anchor(
+    anchor_xyz: tuple[float, float, float],
+    anchor_quat: Quat,
+    delta_xyz: tuple[float, float, float],
+    delta_quat: Quat,
+) -> tuple[tuple[float, float, float], Quat]:
+    """The anchor with which :func:`apply_pose_delta` maps ``delta`` onto the
+    anchor pose itself, so later deltas move the target only by what changed
+    since ``delta``."""
+    qx, qy, qz, qw = delta_quat
+    x, y, z = (a - d for a, d in zip(anchor_xyz, delta_xyz, strict=True))
+    return (x, y, z), quat_multiply((-qx, -qy, -qz, qw), anchor_quat)
