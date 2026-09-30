@@ -105,6 +105,7 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
         RCLCPP_ERROR(this->get_logger(), "Current state has %zu joints, expected 6", current_positions.size());
         return false;
     }
+    current_positions = insideLimitsKeepingPitch(current_positions);
 
     // Gripper (j6) is current-based position control: the standing position
     // error IS the grip force, so spline from the last COMMANDED goal — the
@@ -377,7 +378,7 @@ void MarsArmNode::armGotoJSTrajectoryCallback(const std::shared_ptr<mars_msgs::s
     {
         std::lock_guard<std::mutex> lock(joint_state_mutex_);
         if (!latest_joint_positions_.empty()) {
-            std::vector<double> start = latest_joint_positions_;
+            std::vector<double> start = insideLimitsKeepingPitch(latest_joint_positions_);
             // Gripper starts from the last COMMANDED goal (see
             // planAndExecuteTrajectory): seeding it at the measured stall
             // position would zero the grip preload.

@@ -43,13 +43,16 @@ constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
 // A collapsed arm rests its weight on the gripper tip, and pitching the wrist
 // up under that load stalled it at its 1.75 A limit, so shoulder and elbow
 // raise the wrist first (forearm level, ~10 cm above the shoulder), slower
-// than the fold: at 1.5 s the shoulder fell 0.22 rad behind. The grip holds
-// throughout so a held object is not dropped. The last row is
-// Manipulation.REST (brain_client); keep the two in step.
+// than the fold: at 1.5 s the shoulder fell 0.22 rad behind. Up there the
+// wrist levels and the base turns to the side before the arm folds down:
+// folding with the gripper still pointing down sweeps its tip through the
+// floor. The grip holds throughout so a held object is not dropped. The last
+// row is Manipulation.REST (brain_client); keep the two in step.
 // clang-format off
 //                                                     yaw     shoulder  elbow   wrist  roll   grip    seconds
-static constexpr std::array<RestWaypoint, 2> kRestFold{{{{kHold,  -0.9,     0.9,    kHold, kHold, kHold}, 2.5},
-                                                        {{1.5708, -1.2195,  1.5723, -0.3,  0.0,   kHold}, 3.0}}};
+static constexpr std::array<RestWaypoint, 3> kRestFold{{{{kHold,  -0.9,     0.9,    kHold, kHold, kHold}, 2.5},
+                                                        {{1.5708, kHold,    kHold,  -0.3,  0.0,   kHold}, 2.0},
+                                                        {{1.5708, -1.2195,  1.5723, -0.3,  0.0,   kHold}, 2.0}}};
 // clang-format on
 // Swung back past kShoulderClearanceRad the arm hits the body, unless the base
 // yaw is out to the side. The limit ramps from the joint's own limit at the

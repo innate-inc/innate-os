@@ -59,6 +59,7 @@ class MarsArmNode : public rclcpp::Node {
     std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data);
     double shoulderMinLimit(double yaw) const;
     double clampToJointRange(size_t joint, double rad) const;
+    std::vector<double> insideLimitsKeepingPitch(std::vector<double> pose) const;
 
     // ── Service & topic callbacks (arm_services.cpp) ────────────────────
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
