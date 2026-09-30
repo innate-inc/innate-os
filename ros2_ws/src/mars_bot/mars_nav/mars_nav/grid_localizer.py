@@ -50,12 +50,13 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.lifecycle import Node, Publisher, State, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.subscription import Subscription
+from rclpy.task import Future
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from mars_nav.localize_reply import LOW_CONFIDENCE, describe_pose
-from mars_nav.scan_match import MIN_FIT, Estimate, Grid, Pose2D, Scan, evaluate, locate, refine
+from mars_nav.scan_match import MERGE_DEG, MERGE_M, MIN_FIT, Estimate, Grid, Pose2D, Scan, evaluate, locate, refine
 
 MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lidar stopped
 MIN_SCAN_POINTS = 10
@@ -77,7 +78,8 @@ STALL_INLIER_M = 0.03  # tight enough to tell a few centimetres of motion from n
 STALL_MARGIN = 0.25  # "stood still" must fit this much more of the scan than the wheels' claimed motion
 STALL_STRIKES = 3  # consecutive scans
 STALL_QUIET_S = 3.0  # the base needs this long to stop before a stall can be judged again
-STALL_SETTLE_S = 1.0  # AMCL is judged once the base has stopped feeding it odometry
+STALL_SETTLE_S = 1.0  # AMCL is judged once the wheels have been still this long
+STALL_FIX_TIMEOUT_S = 8.0  # a cancelled goal can take mode_manager up to 5 s to end; past this the wheels never stopped
 STALL_SEARCH_M = 0.35  # at full speed AMCL absorbs up to ~0.3 m / 20° of phantom motion before a stall is caught
 STALL_SEARCH_DEG = 25.0
 STALL_DRIFT_M = 0.05  # an AMCL pose this close to the scan's after a stall is left alone
@@ -129,6 +131,7 @@ class GridLocalizer(Node):
     _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
     _stall_strikes: int = 0
     _stall_quiet_until: float = 0.0
+    _stall_fix_deadline: float = 0.0
 
     # Node state tracking
     _is_active: bool = False
@@ -260,9 +263,7 @@ class GridLocalizer(Node):
             self._map_check_timer.cancel()
         if self._watch_timer:
             self._watch_timer.cancel()
-        if self._stall_fix_timer:
-            self.destroy_timer(self._stall_fix_timer)
-            self._stall_fix_timer = None
+        self._drop_stall_fix()
         # Drop any pending AMCL seed: across a deactivate/reactivate (e.g. a
         # map switch) a surviving retry would deliver the PREVIOUS map's pose.
         if self._seed_retry_timer:
@@ -290,9 +291,7 @@ class GridLocalizer(Node):
         if self._watch_timer:
             self.destroy_timer(self._watch_timer)
             self._watch_timer = None
-        if self._stall_fix_timer:
-            self.destroy_timer(self._stall_fix_timer)
-            self._stall_fix_timer = None
+        self._drop_stall_fix()
         # Clear the pending seed too: an in-flight /set_initial_pose failing
         # after cleanup would otherwise see it as current and re-arm a retry
         # timer on a cleaned-up node.
@@ -633,10 +632,12 @@ class GridLocalizer(Node):
         self._amcl = (_stamp(msg), Pose2D(pose.position.x, pose.position.y, theta))
 
     def _settle(self) -> None:
-        """A new seed or map: forget AMCL's earlier estimate and give the new one time to take."""
+        """A new seed or map: forget AMCL's earlier estimate, give the new one time to take, and drop a
+        pending stall correction, which belongs to the pose and map before it."""
         self._amcl = None
         self._lost_strikes = 0
         self._watch_quiet_until = time.monotonic() + SETTLE_S
+        self._drop_stall_fix()
 
     def _watch_tick(self) -> None:
         """Count AMCL as lost when even the best pose near its own leaves the scan unexplained.
@@ -657,11 +658,28 @@ class GridLocalizer(Node):
         if here.fit >= MIN_FIT:
             self._lost_strikes = 0
             if self._watch_doubted:
-                self._publish_status("localized")
+                self._reaffirm(here)
             return
         self._lost_strikes += 1
         if self._lost_strikes >= LOST_STRIKES:
             self._recover(here)
+
+    def _reaffirm(self, here: Pose2D) -> None:
+        """A doubted pose fits the scan again: restore 'localized' only when the map-wide search
+        confidently agrees it is the one place that does, since a wrong place can fit locally too."""
+        scan = self.latest_scan
+        if scan is None:
+            return
+        try:
+            estimate = self._find_pose(scan)
+        except (ValueError, RuntimeError):
+            return
+        pose = estimate.pose
+        agrees = pose.distance(here) < MERGE_M and pose.heading_gap(here) < math.radians(MERGE_DEG)
+        if estimate.confident(self.confidence_threshold) and agrees:
+            self._publish_status("localized")
+            return
+        self._watch_quiet_until = time.monotonic() + RETRY_S
 
     def _scan_for_amcl_pose(self) -> tuple[LaserScan, Pose2D] | None:
         """The scan AMCL's latest estimate came from. AMCL re-estimates on any odometry change, so an
@@ -687,6 +705,7 @@ class GridLocalizer(Node):
             estimate = self._find_pose(scan)
         except (ValueError, RuntimeError) as e:
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
+            self._doubt()
             return
         if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
             self.get_logger().warn(
@@ -773,15 +792,52 @@ class GridLocalizer(Node):
             "cancelling navigation and relocalizing"
         )
         if self._cancel_nav_client.service_is_ready():
-            self._cancel_nav_client.call_async(Trigger.Request())
+            self._cancel_nav_client.call_async(Trigger.Request()).add_done_callback(self._on_nav_cancel_reply)
+        else:
+            self.get_logger().warn("/nav/cancel_navigation is unavailable; correcting AMCL once the wheels stop")
         if self._stall_fix_timer is None:
+            self._stall_fix_deadline = time.monotonic() + STALL_FIX_TIMEOUT_S
             self._stall_fix_timer = self.create_timer(STALL_SETTLE_S, self._relocalize_after_stall)
 
-    def _relocalize_after_stall(self) -> None:
-        """The spinning wheels dragged AMCL while the robot stood still: put it back where the scan says."""
+    def _on_nav_cancel_reply(self, future: Future) -> None:
+        try:
+            reply = future.result()
+        except Exception as e:  # noqa: BLE001 — the reply is informational; the wheels decide when to correct
+            self.get_logger().warn(f"/nav/cancel_navigation failed: {e}")
+            return
+        if reply is not None and not reply.success:
+            self.get_logger().warn(f"/nav/cancel_navigation refused: {reply.message}")
+
+    def _drop_stall_fix(self) -> None:
         if self._stall_fix_timer is not None:
             self.destroy_timer(self._stall_fix_timer)
             self._stall_fix_timer = None
+
+    def _wheels_turning(self, window_s: float) -> bool:
+        """Whether wheel odometry moved within the last window_s; True too while the buffer cannot tell."""
+        if not self._odom:
+            return True
+        latest_at, latest = self._odom[-1]
+        for at, pose in reversed(self._odom):
+            if latest_at - at > window_s:
+                return False
+            if pose.distance(latest) > 0.005 or pose.heading_gap(latest) > 0.005:
+                return True
+        return True
+
+    def _relocalize_after_stall(self) -> None:
+        """The spinning wheels dragged AMCL while the robot stood still: once they stop (a cancelled goal
+        keeps driving them until it ends), put AMCL back where the scan says."""
+        if self._wheels_turning(STALL_SETTLE_S):
+            if time.monotonic() < self._stall_fix_deadline:
+                return
+            self._drop_stall_fix()
+            self.get_logger().warn(
+                f"The wheels kept turning for {STALL_FIX_TIMEOUT_S:.0f} s after the stall, so navigation did not "
+                "stop; leaving AMCL to the next stall check"
+            )
+            return
+        self._drop_stall_fix()
         paired = self._scan_for_amcl_pose()
         if self.grid is None or paired is None:
             return
