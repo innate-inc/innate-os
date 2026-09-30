@@ -126,6 +126,7 @@ class GridLocalizer(Node):
     _watch_quiet_until: float = 0.0
     _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
     _watch_doubted: bool = False  # the watch downgraded a 'localized' verdict; restored once AMCL's pose fits again
+    _reaffirm_after: float = 0.0  # a reaffirm search that failed is not repeated sooner; the watch itself goes on
 
     # Stall watch state
     _odom: deque[tuple[float, Pose2D]]  # (stamp, wheel-odometry pose)
@@ -658,7 +659,7 @@ class GridLocalizer(Node):
         here = refine(self.grid, scan, believed)
         if here.fit >= MIN_FIT:
             self._lost_strikes = 0
-            if self._watch_doubted:
+            if self._watch_doubted and time.monotonic() >= self._reaffirm_after:
                 self._reaffirm(here)
             return
         self._lost_strikes += 1
@@ -678,7 +679,7 @@ class GridLocalizer(Node):
         if estimate is not None and estimate.confident(self.confidence_threshold) and _same_place(estimate.pose, here):
             self._publish_status("localized")
             return
-        self._watch_quiet_until = time.monotonic() + RETRY_S
+        self._reaffirm_after = time.monotonic() + RETRY_S
 
     def _scan_for_amcl_pose(self) -> tuple[LaserScan, Pose2D] | None:
         """The scan AMCL's latest estimate came from. AMCL re-estimates on any odometry change, so an
