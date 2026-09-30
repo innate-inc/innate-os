@@ -35,6 +35,7 @@ STRIKES = 3  # consecutive scans
 QUIET_S = 3.0  # the base needs this long to stop before a stall can be judged again
 SECTORS = 8
 MIN_SECTORS = 3  # the unchanged points must span this many sectors: a person walking alongside fills one, walls several
+MIN_EXTENT_M = 1.5  # ...or stretch this far: a wall on one side of an open area counts, a person is under a metre
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ class StallDetector:
         unchanged = endpoint_distances(field, now, 0.0, 0.0, 0.0) < INLIER_M
         still_fit = float(unchanged.mean())
         moved = evaluate(field, now, claimed.x, claimed.y, claimed.theta, INLIER_M)
-        if still_fit < MIN_FIT or still_fit < moved.fit + MARGIN or _sectors(now, unchanged) < MIN_SECTORS:
+        if still_fit < MIN_FIT or still_fit < moved.fit + MARGIN or _person_sized(now, unchanged):
             self._strikes = 0
             return None
         self._strikes += 1
@@ -138,7 +139,19 @@ class StallDetector:
         return pose if abs(nearest - at) <= ODOM_MATCH_S else None
 
 
+def _person_sized(scan: Scan, points: np.ndarray) -> bool:
+    """Whether the selected endpoints could be one person walking alongside: within few bearing sectors
+    and under MIN_EXTENT_M across. Walls and furniture spread wider on at least one of the two."""
+    return _sectors(scan, points) < MIN_SECTORS and _extent(scan, points) < MIN_EXTENT_M
+
+
 def _sectors(scan: Scan, points: np.ndarray) -> int:
     """How many of SECTORS equal bearing sectors around the robot the selected endpoints fall in."""
     bearings = np.arctan2(scan.py[points], scan.px[points])
     return len(np.unique(((bearings + math.pi) * SECTORS / (2 * math.pi)).astype(int) % SECTORS))
+
+
+def _extent(scan: Scan, points: np.ndarray) -> float:
+    """Diagonal of the selected endpoints' bounding box, metres."""
+    px, py = scan.px[points], scan.py[points]
+    return math.hypot(float(px.max() - px.min()), float(py.max() - py.min()))
