@@ -353,8 +353,9 @@ double MarsArmNode::clampToJointRange(size_t joint, double rad) const {
 // Where a trajectory from `pose` can start: every joint inside the limits the
 // pass-through applies, each pitch joint's clamped excess carried to the next
 // one down the chain so every link keeps its pitch. A collapsed shoulder rests
-// past its limit, and clamping it alone swings the forearm, and the gripper
-// tip, into the floor; carried, the same step lifts the tip.
+// past its limit and the servo clamps any goal beyond it, so this first step
+// cannot be splined, only shared: a shoulder stepping alone swung the gripper
+// tip 3 cm into the floor, and with the elbow carrying it the tip rises.
 std::vector<double> MarsArmNode::insideLimitsKeepingPitch(std::vector<double> pose) const {
     pose[0] = clampToJointRange(0, pose[0]);
     double excess = 0.0;
