@@ -28,6 +28,7 @@ instance has no native GL either way, so the demo runs the world in-container
 | foxglove, leader receiver | on | off |
 | lifetime | until `down` | `INNATE_DEMO_LEASE_SECONDS` (600) |
 | render scale | 1 | 2 |
+| opens on | the configured environment | the first-run story (`INNATE_DEMO_INTRO=1`; set `0` for the apartment) |
 
 ## The two numbers that decide whether it works
 

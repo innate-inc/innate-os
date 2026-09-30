@@ -97,6 +97,7 @@ workspace/.training_pending/
 
 # Per-machine challenge state, written at runtime.
 workspace/challenges.json
+workspace/challenge_context.json
 
 # Per-skill persistent key-value stores (Skill.storage, skills/types.py).
 workspace/skill_storage/
@@ -142,3 +143,7 @@ sim/.sim-assets.tmp*
 # boot sounds: WAV assets fetched by post_update.sh from GCS (too heavy for git)
 config/sounds/*.wav
 config/sounds/motor_voices/*.wav
+
+# LeRobot plugin (own uv environment)
+lerobot/.venv/
+lerobot/outputs/

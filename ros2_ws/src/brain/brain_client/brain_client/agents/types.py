@@ -36,6 +36,17 @@ class Agent(ABC):
     agent is active.
     """
 
+    # Pause after each completed model turn (seconds); None uses the global default.
+    # Set these on the subclass; edits take effect when the agent reloads.
+    idle_turn_interval: float | None = None
+    supervision_turn_interval: float | None = None
+    # The model this agent thinks with, as "vendor:name"; None uses the robot's
+    # llm_model setting. Activating the agent switches the brain to it.
+    model: str | None = None
+
+    # Validated once by the loader; the brain never evaluates workspace getters.
+    _turn_intervals: tuple[float | None, float | None] = (None, None)
+
     # Stamped by the loader to "shipped" or "user" based on origin directory.
     # Subclasses must not set this themselves.
     source: Source = "user"
@@ -93,6 +104,11 @@ class Agent(ABC):
         Subclasses must implement this method.
         """
         pass
+
+    def initial_skill_ids(self) -> list[str]:
+        """The subset of skill_ids() active the moment this agent is armed; an
+        agent whose skills are granted over time returns []."""
+        return self.skill_ids()
 
     def skill_ids(self) -> list[str]:
         """get_skills() normalized to id strings — the only form the rest of
@@ -179,6 +195,12 @@ class Agent(ABC):
                     f"or device-name strings, got {ref!r}"
                 )
         return names
+
+    def listed(self) -> bool:
+        """Whether people may pick this agent themselves. A fixture the interface arms on
+        its own — the first-run story's robot, which starts with no skills — says False and
+        stays out of the roster, where it would only look broken."""
+        return True
 
     def uses_gaze(self) -> bool:
         """

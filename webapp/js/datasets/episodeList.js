@@ -17,6 +17,7 @@
 // (the dataset_encoder is converting it; a "Prepare video" button can requeue).
 // Thumbnails are lazily-loaded frames from the /episode/thumb route.
 
+import { openPublishModal } from "./publishModal.js";
 import {
   GET_TASK_METADATA_SERVICE,
   ENCODE_EPISODE_SERVICE,
@@ -86,7 +87,16 @@ export function createEpisodeList(parent, ros, opts) {
   // Eval datasets: jump to Profiling to run more evaluations instead.
   const collectLink = document.createElement("a");
   collectLink.className = "episodes-tool episodes-collect";
-  tools.append(search, sortBtn, refreshBtn, collectLink);
+  // Training datasets only: convert to a LeRobotDataset on the robot and upload it.
+  const publishBtn = document.createElement("button");
+  publishBtn.type = "button";
+  publishBtn.className = "episodes-tool";
+  publishBtn.textContent = "Publish to Hugging Face";
+  publishBtn.title = "Convert this dataset to a LeRobotDataset and upload it to the Hugging Face Hub";
+  publishBtn.addEventListener("click", () => {
+    if (current) openPublishModal(wrap, current);
+  });
+  tools.append(search, sortBtn, refreshBtn, publishBtn, collectLink);
   head.append(headText, tools);
 
   // --- eval-only per-policy filter chips ------------------------------------
@@ -193,6 +203,7 @@ export function createEpisodeList(parent, ros, opts) {
     kindBadge.hidden = !isEval();
     buildColhead();
     tools.hidden = false;
+    publishBtn.hidden = isEval();
     search.placeholder = isEval() ? "Search runs or policies" : "Search episodes";
     if (isEval()) {
       collectLink.href = "/profiling";

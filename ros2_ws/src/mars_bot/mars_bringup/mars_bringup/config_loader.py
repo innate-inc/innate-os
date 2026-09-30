@@ -34,15 +34,24 @@ def workspace_skills_dir() -> Path:
     return innate_os_root() / "workspace" / "custom_skills"
 
 
-def _load_key_value_env(path: Path) -> None:
+def keys_env_path() -> Path:
+    """The .env the Settings page writes vendor keys to: ``$INNATE_KEYS_ENV_FILE`` (the sim, whose nodes
+    boot from a generated copy) or the innate-os ``.env``."""
+    override = os.environ.get("INNATE_KEYS_ENV_FILE", "").strip()
+    return Path(override) if override else innate_os_root() / ".env"
+
+
+def parse_key_value_env(path: Path) -> dict[str, str]:
+    """``KEY=VALUE`` lines of a .env, quotes stripped; empty when the file is absent or unreadable."""
     if not path.exists():
-        return
+        return {}
     try:
         f = open(path)
     except OSError as e:
         # Transient mount errors (e.g. Docker bind EPERM) shouldn't crash launch; skip.
         print(f"[config_loader] Could not open {path}: {e}", file=sys.stderr)
-        return
+        return {}
+    values: dict[str, str] = {}
     with f:
         for line in f:
             line = line.strip()
@@ -52,7 +61,12 @@ def _load_key_value_env(path: Path) -> None:
                 value = value.strip()
                 if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
                     value = value[1:-1]
-                os.environ[key] = value
+                values[key] = value
+    return values
+
+
+def _load_key_value_env(path: Path) -> None:
+    os.environ.update(parse_key_value_env(path))
 
 
 def load_env_file(env_path: Path | None = None) -> None:
@@ -253,6 +267,15 @@ def settings_params() -> list:
     if not _load_settings_yaml():
         return []
     return [str(_settings_yaml_path())]
+
+
+def settings_node_params(node: str, *keys: str) -> dict:
+    """The listed ``ros__parameters`` of ``node`` in settings.yaml, for a second node that must
+    agree with it (the skills server reads the brain's model). Absent keys are left out, so the
+    result layers over launch defaults the same way settings.yaml layers over the node's own."""
+    section = _load_settings_yaml().get(node, {})
+    params = section.get("ros__parameters", {}) if isinstance(section, dict) else {}
+    return {key: params[key] for key in keys if isinstance(params, dict) and key in params}
 
 
 def _settings_global_params() -> dict:

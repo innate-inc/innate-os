@@ -82,6 +82,11 @@ class ProxyClient:
     # -- Token helpers --------------------------------------------------------
 
     @property
+    def auth_provider(self) -> AuthProvider | None:
+        """The JWT issuer behind this client, for callers that run their own HTTP stack."""
+        return self._auth
+
+    @property
     def token(self) -> str:
         """Current bearer token (JWT from OIDC or raw service key)."""
         if self._auth is not None:

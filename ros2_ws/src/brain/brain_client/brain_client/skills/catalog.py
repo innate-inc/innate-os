@@ -43,6 +43,7 @@ from brain_client.skills.physical import (
     validate_physical_skill,
 )
 from brain_client.skills.physical_refs import (
+    class_name_for,
     prune_dir_shims,
     render_dir_shims,
     render_refs,
@@ -786,6 +787,8 @@ class SkillRepository:
                     guidelines=entry.guidelines,
                     guidelines_when_running=entry.guidelines_when_running,
                     inputs_json=entry.inputs_json,
+                    module=entry.skill_class.__module__,
+                    class_name=entry.skill_class.__name__,
                 )
             )
 
@@ -953,6 +956,8 @@ class SkillRepository:
         episode_count: int = 0,
         directory: str = "",
         wheeled: bool = False,
+        module: str = "",
+        class_name: str = "",
         load_error: str = "",
     ) -> SkillInfo:
         msg = SkillInfo()
@@ -967,6 +972,8 @@ class SkillRepository:
         msg.episode_count = int(episode_count or 0)
         msg.directory = directory or ""
         msg.wheeled = bool(wheeled)
+        msg.module = module or ""
+        msg.class_name = class_name or ""
         msg.load_error = load_error or ""
         return msg
 
@@ -1069,6 +1076,9 @@ class SkillRepository:
             episode_count=get_episode_count(entry.directory, self._logger),
             directory=entry.directory,
             wheeled=bool(metadata.get("wheeled", False)),
+            # the recording folder's shim: `from innate_skills.wave import Wave`
+            module=f"{Path(entry.directory).parent.name}.{Path(entry.directory).name}",
+            class_name=class_name_for(skill_id),
         )
 
     # --- cache ---
@@ -1094,6 +1104,8 @@ class SkillRepository:
             "episode_count": skill.episode_count,
             "directory": skill.directory,
             "wheeled": skill.wheeled,
+            "module": skill.module,
+            "class_name": skill.class_name,
             "load_error": skill.load_error,
         }
 

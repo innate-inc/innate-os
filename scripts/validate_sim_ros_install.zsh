@@ -138,20 +138,26 @@ install_is_stale() {
 install_needs_clean_rebuild() {
     [[ ! -f install/setup.zsh ]] && return 0
     find install -xtype l -print -quit | grep -q . && return 0
+    # seeded copies are plain files; symlink-install cannot replace them
+    [[ -f install/.innate-prebuilt-source.sha256 ]] && return 0
 
     return 1
 }
 
-if [[ "${INNATE_OS_ALWAYS_BUILD:-0}" == "1" ]]; then
-    colcon_build_with_retry
-elif seed_prebuilt_install; then
-    :
-elif install_is_stale; then
+build_local_install() {
     if install_needs_clean_rebuild; then
-        echo "ROS install is unusable (missing or dangling); cleaning build/install/log before rebuild."
+        echo "ROS install cannot be built on; cleaning build/install/log before rebuild."
         clean_ros_build_artifacts
     fi
     colcon_build_with_retry
+}
+
+if [[ "${INNATE_OS_ALWAYS_BUILD:-0}" == "1" ]]; then
+    build_local_install
+elif seed_prebuilt_install; then
+    :
+elif install_is_stale; then
+    build_local_install
 else
     echo "ROS workspace install is current; skipping rebuild."
 fi

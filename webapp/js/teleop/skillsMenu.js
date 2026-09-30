@@ -1094,7 +1094,7 @@ function formatName(skill) {
 function skillTypeMeta(skill) {
   switch (skill?.type) {
     case "code":
-      return { cls: "digital", label: "Digital skill" };
+      return { cls: "code", label: "Code skill" };
     case "replay":
       return { cls: "replay", label: "Replay skill" };
     case "learned":
@@ -1111,7 +1111,7 @@ function skillTypeMeta(skill) {
 const TYPE_ICON_PATHS = {
   learned: '<path d="m7 7 3 3m4 4 3 3M7 17l3-3m4-4 3-3"/><circle cx="5" cy="5" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/>',
   replay: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/><path d="m10 8 6 4-6 4z"/>',
-  digital: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/>',
+  code: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/>',
   unknown: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6m-3-3v6"/>',
   broken: '<path d="m12 3 10 18H2L12 3zm0 6v5m0 3v.01"/>',
 };
@@ -1134,7 +1134,7 @@ function buildTypeLegend() {
   for (const { cls, label, hint } of [
     { cls: "learned", label: "Learned", hint: "Trained from demonstrations (ACT policy)" },
     { cls: "replay", label: "Replay", hint: "Recorded motion played back" },
-    { cls: "digital", label: "Digital", hint: "Python skill" },
+    { cls: "code", label: "Code", hint: "Python skill" },
   ]) {
     const item = document.createElement("span");
     item.className = "skills-pop-legend-item";

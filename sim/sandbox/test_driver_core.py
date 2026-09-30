@@ -342,18 +342,18 @@ def check_event_ordering(sim: VirtualMars) -> None:
         title="Probe",
         brief="",
         setup=[],
-        goals=[Goal("wave", SkillDone("wave")), Goal("email", SkillDone("send_email"))],
+        goals=[Goal("wave", SkillDone("wave")), Goal("emote", SkillDone("head_emotion"))],
     )
 
     engine.start("probe")
     engine.post_event({"status": "completed", "skill_id": "wave"})
-    engine.post_event({"status": "completed", "skill_id": "send_email"})  # same batch
+    engine.post_event({"status": "completed", "skill_id": "head_emotion"})  # same batch
     block = engine.tick(float(sim.data.time), sim.pose(), sim.object_centers(), engine.world_epoch)["active"]
     assert block["state"] == "passed", f"one batch did not advance both ordered goals: {block['goals']}"
 
-    # The out-of-order case stays discarded: email first, while "wave" is open.
+    # The out-of-order case stays discarded: emote first, while "wave" is open.
     engine.start("probe")
-    engine.post_event({"status": "completed", "skill_id": "send_email"})
+    engine.post_event({"status": "completed", "skill_id": "head_emotion"})
     engine.tick(float(sim.data.time), sim.pose(), sim.object_centers(), engine.world_epoch)
     engine.post_event({"status": "completed", "skill_id": "wave"})
     block = engine.tick(float(sim.data.time), sim.pose(), sim.object_centers(), engine.world_epoch)["active"]

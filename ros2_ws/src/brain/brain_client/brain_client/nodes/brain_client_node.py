@@ -12,13 +12,24 @@ service surface, and spins. The agent loop itself lives in
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
+from pathlib import Path
 
 import rclpy
-from brain_messages.srv import ForgetMemory, GetAvailableDirectives, GetChatHistory, ReloadSkillsAgents, ResetBrain
+from brain_messages.srv import (
+    DeleteAgent,
+    ForgetMemory,
+    GetAvailableDirectives,
+    GetChatHistory,
+    ReloadSkillsAgents,
+    ResetBrain,
+    SaveAgent,
+)
 from geometry_msgs.msg import Twist
+from innate_llm import configure
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -27,10 +38,17 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.agents.initializer import initialize_agents
+from brain_client.agents.studio import (
+    AgentSpec,
+    StudioError,
+    broken_agent_fields,
+    delete_agent,
+    save_agent,
+    studio_fields,
+)
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -96,7 +114,9 @@ class BrainClientNode(Node):
         self._tts_handler = self._init_tts()
 
         # --- helper node for synchronous service calls (not spun by the executor) ---
-        self._service_call_node = rclpy.create_node("brain_client_service_caller")
+        # Helper nodes never start parameter services: the launch renames every node in the
+        # process to brain_client_node, and a sibling answering /set_parameters wins the race.
+        self._service_call_node = rclpy.create_node("brain_client_service_caller", start_parameter_services=False)
         self._reload_primitives_client = self._service_call_node.create_client(Trigger, "/brain/reload_primitives")
         self._reload_skills_client = self._service_call_node.create_client(ReloadSkillsAgents, "/brain/reload_skills")
 
@@ -157,6 +177,18 @@ class BrainClientNode(Node):
                 return SetParametersResult(
                     successful=False, reason=f"unknown timezone '{param.value}' (expected an IANA name, e.g. UTC)"
                 )
+            if param.name == "llm_model":
+                ok, detail = self.brain.use_model(str(param.value).strip(), agent=False)
+                if ok:
+                    self._follow_brain_model()
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
+            if param.name in ("llm_thinking", "llm_base_url", "llm_extra_body"):
+                ok, detail = self.brain.use_llm_setting(param.name, str(param.value).strip())
+                if ok:
+                    self._follow_brain_model()
+                    continue
+                return SetParametersResult(successful=False, reason=detail)
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()
@@ -166,6 +198,14 @@ class BrainClientNode(Node):
                 return SetParametersResult(successful=False, reason="TTS is unavailable (no proxy)")
             self._tts_handler.set_voice(voice_id)
         return SetParametersResult(successful=True)
+
+    def _follow_brain_model(self) -> None:
+        """Recall rides the brain's model unless memory_llm_model names its own; without this
+        a live switch would leave searches answering from the model the robot booted on."""
+        llm = self.brain.llm
+        if self.memory_search is None or self.config.memory_llm_model or llm is None or llm.provider is None:
+            return
+        self.memory_search.use_provider(llm.provider)
 
     def _build_collaborators(self) -> None:
         cfg, state = self.config, self.state
@@ -179,11 +219,33 @@ class BrainClientNode(Node):
         # Spatial memory: the recorder builds it whenever the robot drives well-
         # localized (brain active or not); skills recall over it through the
         # /brain/search_memory action — the agent itself knows nothing of it.
-        self.memory_store = MemoryStore(get_innate_os_root() / "data")
-        rest = pick_rest(self._proxy)
+        # The authored memory packs seed only the hosted sim's maps.
+        seed_dir = get_innate_os_root() / "workspace/innate_agents/intro_memories"
+        self.memory_store = MemoryStore(
+            get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
+        )
+        llm = configure(
+            cfg.llm_model,
+            self._proxy,
+            base_url=cfg.llm_base_url,
+            extra_body=cfg.llm_extra_body,
+            logger=self.get_logger(),
+        )
+        self.get_logger().info(f"[Brain] model {llm.spec} via {llm.backend}")
+        recall = (
+            configure(
+                cfg.memory_llm_model,
+                self._proxy,
+                base_url=cfg.llm_base_url,
+                extra_body=cfg.llm_extra_body,
+                logger=self.get_logger(),
+            )
+            if cfg.memory_llm_model
+            else llm
+        )
         self.memory_search = (
-            MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
-            if rest is not None
+            MemorySearch(self.memory_store, recall.provider, logger=self.get_logger())
+            if recall.provider is not None
             else None
         )
         self.memory_recorder = MemoryRecorder(
@@ -225,6 +287,7 @@ class BrainClientNode(Node):
             roster=self.roster,
             chat=self.chat,
             gaze=self.gaze,
+            llm=llm,
             proxy=self._proxy,
             scan_health=self.scan_health,
             battery=self.battery,
@@ -288,6 +351,8 @@ class BrainClientNode(Node):
         self.create_service(ForgetMemory, "/brain/forget_memory", self._svc_forget_memory)
         self.create_service(ReloadSkillsAgents, "/brain/reload_skills_agents", self._svc_reload_skills_agents)
         self.create_service(GetAvailableDirectives, "/brain/get_available_directives", self._svc_get_directives)
+        self.create_service(SaveAgent, "/brain/save_agent", self._svc_save_agent)
+        self.create_service(DeleteAgent, "/brain/delete_agent", self._svc_delete_agent)
 
     def _startup(self) -> None:
         # Monotonic: a boot-time NTP step would truncate a wall-clock wait.
@@ -307,6 +372,13 @@ class BrainClientNode(Node):
         self.state.active_skill_ids = (
             list(self.state.current_directive.skill_ids()) if self.state.current_directive else []
         )
+        # The boot agent's own model, if it names one: the loop has not started yet, so this
+        # is the swap at its cheapest. A model it cannot reach leaves the robot's setting in
+        # place and says so, rather than booting a brain that cannot think.
+        if self.state.current_directive is not None:
+            ok, detail = self.brain.use_model(self.state.current_directive.model, agent=True)
+            if not ok:
+                self.get_logger().error(f"[Brain] {self.state.current_directive.id}: {detail}")
         self.gaze.update()
         self.reload.start_watcher()
 
@@ -655,13 +727,15 @@ class BrainClientNode(Node):
 
     def _svc_get_directives(self, request, response):
         details = []
+        unlisted = []
         # Load-time broken agents, plus any that pass loading but fail while
         # this response is built — those roster broken too instead of silently
         # dropping out of the picker (the vanishing this field exists to end).
         broken = dict(self.state.broken_agents)
         for agent_id, directive in self.state.directives.items():
             try:
-                details.append(
+                listed = directive.listed()
+                (details if listed else unlisted).append(
                     {
                         "id": directive.id,
                         "display_name": directive.display_name,
@@ -669,6 +743,8 @@ class BrainClientNode(Node):
                         "prompt": directive.get_prompt(),
                         "skills": directive.skill_ids(),
                         "source": getattr(directive, "source", "user"),
+                        "listed": listed,
+                        **studio_fields(directive),
                     }
                 )
             except Exception as e:  # noqa: BLE001 — one bad agent must not take the roster down
@@ -682,18 +758,70 @@ class BrainClientNode(Node):
                     "skills": self.state.registry.metadata,
                     "active_skills": self.roster.active_skill_ids(),
                     "brain_active": self.state.is_brain_active,
+                    # What an agent that names no model of its own thinks with, and what
+                    # the brain is on right now (they differ while an agent names one).
+                    "default_model": self.config.llm_model,
+                    "current_model": self.brain.model,
                     # Agents whose module failed to import or whose class failed
                     # to build — not selectable, shown disabled with the error.
                     # In the meta dict (not the agent list) so clients that
                     # don't know the field never offer them for selection.
                     "broken_agents": [
-                        {"id": name, "display_name": name, "load_error": error}
+                        {"id": name, "display_name": name, "load_error": error, **broken_agent_fields(name)}
                         for name, error in sorted(broken.items())
                     ],
+                    # Agents people may not pick (a story fixture the web app arms itself),
+                    # kept here for the same reason as broken_agents.
+                    "unlisted_agents": unlisted,
                 }
             ),
         ]
         response.current_directive = self.state.current_directive.id if self.state.current_directive else ""
+        return response
+
+    def _svc_save_agent(self, request, response):
+        spec = AgentSpec(
+            id=request.id,
+            display_name=request.display_name,
+            prompt=request.prompt,
+            skill_ids=tuple(request.skill_ids),
+            listen=request.listen,
+            gaze=request.gaze,
+        )
+        try:
+            path, content = save_agent(self.state, spec)
+        except (StudioError, OSError) as e:
+            response.success = False
+            response.message = str(e)
+            return response
+        response.success = True
+        response.path = str(path)
+        response.source = content
+        broken_before = set(self.state.broken_agents)
+        self.reload.reload_agents_now()
+        if spec.id not in self.state.directives:
+            response.message = self._load_error_for(spec.id, path, broken_before)
+        return response
+
+    def _load_error_for(self, agent_id: str, path: Path, broken_before: set[str]) -> str:
+        """The broken-roster error for the file just saved, whichever key the
+        initializer rostered it under: its id, its module, a class in it, or
+        simply a row that was not there before the save."""
+        module_prefix = f"custom_agents.{path.stem}"
+        for key, error in self.state.broken_agents.items():
+            if key in (agent_id, path.stem) or key.startswith(module_prefix) or key not in broken_before:
+                return error
+        return "the agent did not load"
+
+    def _svc_delete_agent(self, request, response):
+        try:
+            delete_agent(self.state, request.id)
+        except (StudioError, OSError) as e:
+            response.success = False
+            response.message = str(e)
+            return response
+        self.reload.reload_agents_now()
+        response.success = True
         return response
 
     # ================= teardown =================

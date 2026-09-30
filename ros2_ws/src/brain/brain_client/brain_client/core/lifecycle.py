@@ -108,8 +108,13 @@ class BrainLifecycle:
             self._chat.emit_system(f"Error: Unknown directive '{name}'. Available directives: {available}")
             self._logger.error(f"Unknown directive: {name}")
             return
-        self._state.current_directive = self._state.directives[name]
-        self._state.active_skill_ids = list(self._state.current_directive.skill_ids())
+        directive = self._state.directives[name]
+        self._state.current_directive = directive
+        # Before the reset below, so the fresh conversation starts on the agent's own model.
+        ok, detail = self._brain.use_model(directive.model, agent=True)
+        if not ok:
+            self._chat.emit_system(f"⚠️ {directive.display_name} asks for a model the robot cannot use — {detail}")
+        self._state.active_skill_ids = list(directive.initial_skill_ids())
         self._logger.info(f"Activated directive: {name}")
         self._chat.clear()
         self._brain.reset()

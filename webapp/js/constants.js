@@ -61,6 +61,9 @@ export const GET_CHAT_HISTORY_SERVICE = "/brain/get_chat_history";
 export const GET_AVAILABLE_DIRECTIVES_SERVICE = "/brain/get_available_directives";
 export const SET_DIRECTIVE_TOPIC = "/brain/set_directive";
 export const SET_BRAIN_ACTIVE_SERVICE = "/brain/set_brain_active";
+// Agent detail: write / remove a workspace/custom_agents file (the brain reloads before answering).
+export const SAVE_AGENT_SERVICE = "/brain/save_agent";
+export const DELETE_AGENT_SERVICE = "/brain/delete_agent";
 // Set which skills the current directive may use (std_msgs/String JSON:
 // {agent_id, skills:[id,...]} — the full active set, not a delta).
 export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
@@ -70,6 +73,8 @@ export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
 export const AGENT_STATUS_TOPIC = "/brain/agent_status";
 // Reset the agent's brain/memory (brain_messages/srv/ResetBrain → {success}).
 export const RESET_BRAIN_SERVICE = "/brain/reset_brain";
+// The brain node itself: its llm_model parameter is the robot's model, applied live.
+export const BRAIN_NODE = "/brain_client_node";
 // Cloud/local agent backend connection (std_msgs/String JSON: {state, connected,
 // message, uri, hosted, timestamp}) — distinct from the rosbridge link.
 export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";
@@ -161,6 +166,18 @@ export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 // as the agent runs primitives. Separate from chat_out — the chat surfaces it so
 // operators can see which skills the agent is executing.
 export const SKILL_STATUS_UPDATE_TOPIC = "/brain/skill_status_update";
+
+// What a running skill draws over the cameras, for the targeting overlay
+// (std_msgs/String JSON: {skill, run, ev, t, ...} from Skill.overlay in the SDK;
+// `run` is the id the server stamps on every event of one root skill's run).
+// {ev:"run", state:"start", prompt, stages:[...], frame:[w,h]} opens a run and
+// the server's {ev:"run", state:"end", ok, cancelled, text} closes it; between
+// them {ev:"stage", name}, {ev:"readout", text, busy, progress}, {ev:"mark", id,
+// kind, view, label, locked, corners|px|a,b} and {ev:"clear", ids|view} arrive,
+// every marker in image pixels of the run's frame. Every event repeats the
+// run's header (prompt, stages, frame, current stage) and unchanged markers
+// repeat once a second, so a page that missed the start still recovers them.
+export const SKILL_OVERLAY_TOPIC = "/brain/skill_overlay";
 
 // Per-step ACT inference timing breakdown (std_msgs/String carrying JSON), published
 // by the manipulation server while a learned behavior runs. Drives the Profiling page.

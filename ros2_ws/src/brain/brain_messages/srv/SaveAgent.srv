@@ -1,0 +1,17 @@
+# Write an agent file into workspace/custom_agents and reload the roster. The file is
+# rendered from these fields -- never from caller-supplied source, which would make this
+# service a way to run arbitrary code. Shipped agents and ids already on the roster under
+# another file are refused.
+# Request
+string id                 # snake_case identifier — the file is custom_agents/<id>.py
+string display_name
+string prompt
+string[] skill_ids
+bool listen               # microphone input
+bool gaze                 # person-tracking gaze
+---
+# Response
+bool success              # the file was written (the agent may still have failed to load)
+string message            # the load error when it did not load, else empty
+string path
+string source             # the file content written

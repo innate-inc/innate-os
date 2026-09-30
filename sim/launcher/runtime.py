@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 import oci
 from config import (
+    ASSETS_FALLBACK_TAG,
     ASSETS_IMAGE_LAYERS,
     BOOTSTRAP_LOG_PATH,
     CLI_SIM,
@@ -39,6 +40,8 @@ from config import (
     LEGACY_CLOUD_AGENT_CONTAINER,
     LEGACY_SHARED_CONTAINER,
     LEGACY_SHARED_PROJECT,
+    LEROBOT_ACTIONS_PORT,
+    LEROBOT_OBSERVATIONS_PORT,
     NO_BACKEND,
     OS_BUILD_LOG_PATH,
     OS_CONTAINER_NAME,
@@ -50,9 +53,10 @@ from config import (
     PUBLISHED_PORT_ENV,
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
+    SERVER_BACKEND,
     SIM_ASSET_UNITS,
-    SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
+    SIM_DIR,
     SIM_FOXGLOVE_PORT,
     SIM_HTTP_PORT,
     SIM_HTTPS_PORT,
@@ -69,13 +73,16 @@ from config import (
     WORLD_STATE_PORT,
     DockerUnresponsiveError,
     StackError,
+    available_environment_ids,
     compute_geometry_inputs_hash,
     compute_ros_install_validation_hash,
     ensure_state_dir,
     log,
+    read_environment_assets,
     resolve_assets_image,
     resolve_auto_os_image,
     resolve_deps_image,
+    resolve_fallback_assets_image,
     resolve_local_os_image,
     resolve_local_viewer_image,
     resolve_viewer_image,
@@ -764,18 +771,18 @@ def prune_superseded_pulled_images(config: dict[str, object], *, cwd: Path, env:
         prune_stale_local_images(current, cwd=cwd, env=env, label=label, tag_prefix=prefix, keep_recent=keep)
 
 
-# Directories the container's ROS nodes create lazily on the workspace
-# bind-mount. The container runs as root: on native Linux a root mkdir lands
-# on the host as root:root and locks the user out of their own skills dir
-# (macOS is immune -- Docker Desktop's file sharing rewrites ownership).
-WORKSPACE_USER_DIRS = ("custom_agents", "custom_skills")
+# Host directories the container writes into. The container runs as root: on
+# native Linux a missing bind source, or a root mkdir on a bind-mount, lands on
+# the host as root:root and locks the user out of their own checkout (macOS is
+# immune -- Docker Desktop's file sharing rewrites ownership).
+USER_OWNED_BIND_DIRS = ("data", "workspace/custom_agents", "workspace/custom_skills")
 
 
-def ensure_workspace_dirs(config: dict[str, object]) -> None:
-    """Pre-create container-written workspace dirs as the invoking user."""
+def ensure_bind_mount_dirs(config: dict[str, object]) -> None:
+    """Pre-create container-written bind-mount dirs as the invoking user."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    for name in WORKSPACE_USER_DIRS:
-        path = os_repo / "workspace" / name
+    for name in USER_OWNED_BIND_DIRS:
+        path = os_repo / name
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -825,6 +832,8 @@ _STACK_PORTS = (
     ("foxglove bridge", SIM_FOXGLOVE_PORT, "8765/tcp"),
     ("world server", WORLD_SERVER_PORT, None),
     ("world state stream", WORLD_STATE_PORT, None),
+    ("lerobot bridge actions", LEROBOT_ACTIONS_PORT, "5555/tcp"),
+    ("lerobot bridge observations", LEROBOT_OBSERVATIONS_PORT, "5556/tcp"),
 )
 
 
@@ -924,7 +933,11 @@ def _seed_nav_map(config: dict[str, object]) -> None:
         return
     state = os_repo / "data"
     state.mkdir(parents=True, exist_ok=True)
-    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    # Replaced, not rewritten: the container's mode manager recreates this file
+    # as root, and a rename needs only the (user-owned) directory to be writable.
+    staged = state / ".last_map.tmp"
+    staged.write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    os.replace(staged, state / ".last_map")
 
 
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
@@ -1243,13 +1256,14 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def _bind_refusal(port: int, *, udp: bool, reuse: bool = False) -> int | None:
+def _bind_refusal(port: int, *, udp: bool) -> int | None:
     """errno from claiming the port the way its consumer will, or None when the
-    bind succeeds. Docker publishes without SO_REUSEADDR; the host world server
-    sets it (socket.create_server), so its probe must too -- a just-stopped
-    server's TIME_WAIT remnants otherwise read as a live collision for ~30s."""
+    bind succeeds. Every TCP consumer binds with SO_REUSEADDR (Docker's Go
+    proxies and socket.create_server alike), so the probe must too: without it
+    the TIME_WAIT left by a Foxglove tab reconnecting through `down` reads as a
+    live collision for ~30s, while Docker itself would bind straight through."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
-        if reuse:
+        if not udp:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("0.0.0.0", port))
@@ -1264,17 +1278,17 @@ def _tcp_listener_answers(port: int) -> bool:
     return False
 
 
-def _host_port_free(port: int, *, udp: bool, reuse: bool = False) -> bool:
-    """Whether the port's consumer can still claim it (reuse: see
-    _bind_refusal). Only EADDRINUSE proves a collision: Linux refuses ports
-    below 1024 to a non-root binder while the daemon that publishes them runs
-    as root, so a free 443 refuses the probe."""
-    refusal = _bind_refusal(port, udp=udp, reuse=reuse)
-    if refusal is None:
-        return True
-    if refusal == errno.EACCES and not udp:
-        return not _tcp_listener_answers(port)
-    return refusal != errno.EADDRINUSE
+def _host_port_free(port: int, *, udp: bool) -> bool:
+    """Whether the port's consumer can still claim it. A TCP listener is asked
+    directly: macOS lets a SO_REUSEADDR bind on 0.0.0.0 coexist with a listener
+    on 127.0.0.1 -- every loopback publish and the world server -- so the bind
+    alone is blind to exactly the listeners that matter. The bind still counts,
+    for a listener on some other address; only EADDRINUSE proves a collision,
+    since Linux refuses ports below 1024 to a non-root binder while the daemon
+    that publishes them runs as root, so a free 443 refuses the probe."""
+    if not udp and _tcp_listener_answers(port):
+        return False
+    return _bind_refusal(port, udp=udp) != errno.EADDRINUSE
 
 
 def _container_published_ports(name: str) -> set[int]:
@@ -1305,7 +1319,7 @@ def _suggest_port_base() -> int | None:
     that just failed."""
     for base in range(8600, 9600, 10):
         if all(
-            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"), reuse=spec is None)
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
             for offset, (_, _, spec) in enumerate(_STACK_PORTS)
         ):
             return base
@@ -1330,7 +1344,7 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
     ]
     if not taken:
         return
@@ -1339,7 +1353,7 @@ def refuse_if_ports_taken() -> None:
     move = (
         f"move this checkout to a block that is free:\n  {PORT_BASE_ENV}={suggestion} {CLI_SIM} up"
         if suggestion is not None
-        else f"set {PORT_BASE_ENV} to the start of seven free ports"
+        else f"set {PORT_BASE_ENV} to the start of nine free ports"
     )
     other = _other_checkout_holding({port for _, port in taken})
     if other is None:
@@ -1797,8 +1811,80 @@ def health_score(level: str) -> float:
 # (sim/docker-compose.dev.yml).
 
 
+def missing_geometry(repo_root: Path, assets_dir: Path, environment_id: str) -> tuple[str, ...]:
+    """What one world needs under sim/assets and does not have.
+
+    The manifest IS the contract, so a store that answers it can launch
+    whatever inputs hash the image it came from was named after. A manifest
+    with no readable geometry section asks nothing, so fall back to demanding
+    every derived unit -- mars_sim_driver.environments reports a broken pack
+    against the world it was asked to load, better than a gate here can.
+    """
+    required = read_environment_assets(repo_root, environment_id)
+    wanted = required.assets if required else SIM_ASSET_UNITS_DERIVED
+    return tuple(path for path in wanted if not (assets_dir / path).exists())
+
+
+def assets_fallback_refs() -> tuple[str, ...]:
+    """The published geometry to accept when nothing built this checkout's tag.
+
+    Empty under INNATE_SIM_ASSETS_IMAGE: naming an image means that image, and
+    quietly installing a different one would hide the typo.
+    """
+    if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        return ()
+    return (resolve_fallback_assets_image(),)
+
+
+def _fallback_assets_manifest(image: str, fallbacks: tuple[str, ...]) -> tuple[str, dict] | None:
+    """(ref, manifest) for the first fallback the registry serves, or None.
+
+    LAST resort, after reusing what is installed: the fallback is older
+    geometry by construction, so reaching for it while the store can already
+    serve the world would trade a working install for a downgrade. It exists
+    because "push the branch so CI publishes it" is not advice a fork can take.
+    """
+    for fallback in fallbacks:
+        try:
+            manifest = oci.manifest_for_image(fallback)
+        except oci.OciError:
+            continue
+        warn(
+            f"No published asset image for this checkout ({shorten_docker_image_ref(image)}); "
+            f"installing the published {ASSETS_FALLBACK_TAG} geometry instead.\n"
+            f"  Your changes under {', '.join(GEOMETRY_INPUT_PATHSPECS)} are NOT in it."
+        )
+        return fallback, manifest
+    return None
+
+
+def _incomplete_store(image: str, environment_id: str, missing: tuple[str, ...]) -> StackError:
+    return StackError(
+        f"The sim geometry from {shorten_docker_image_ref(image)} has nothing for {environment_id!r}: "
+        f"{', '.join(missing)}.\n"
+        f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
+        f"INNATE_SIM_ASSETS_IMAGE at an image that carries it. If you deleted it by hand, "
+        f"delete sim/assets/.assets-tag to re-fetch."
+    )
+
+
+def warn_unloadable_environments(config: dict[str, object]) -> None:
+    """Which other worlds the store cannot serve, since the webapp can switch
+    to any of them at runtime (mars_sim_driver.world_server.switch_environment)
+    and only the launched one is gated."""
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    unloadable = [
+        environment_id
+        for environment_id in available_environment_ids(os_repo)
+        if missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    ]
+    if unloadable:
+        warn(f"No installed geometry for {', '.join(unloadable)}; switching to those in the webapp will fail.")
+
+
 def assets_image_ref(config: dict[str, object]) -> str:
-    """The asset image compose mounts the viewer subtree from.
+    """The asset image this checkout implies.
 
     COMPUTED, not looked up: the tag is content-addressed over the tracked
     inputs, so it names exactly the image this checkout implies -- the same way
@@ -1812,7 +1898,13 @@ def assets_image_ref(config: dict[str, object]) -> str:
     fails at the manifest probe.
     """
     override = os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip()
-    return override or resolve_assets_image(config["os_repo"])  # type: ignore[arg-type]
+    if override:
+        return override
+    # Whatever the geometry step actually installed from, so the viewer's layer
+    # cannot come from a different image than the geometry it describes: only
+    # that step learns which ref the registry served (assets_fallback_refs).
+    recorded = config.get("assets_image")
+    return str(recorded) if recorded else resolve_assets_image(config["os_repo"])  # type: ignore[arg-type]
 
 
 def ensure_sim_assets(config: dict[str, object]) -> None:
@@ -1830,62 +1922,70 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
     Extracted in place under sim/assets/, idempotent via the .assets-tag marker.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     marker = sim_repo / "assets" / ".assets-tag"
     image = assets_image_ref(config)
+    override = os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip()
+    fallbacks = assets_fallback_refs()
+    environment_id = str(config["environment_id"])
 
     # The marker holds "<digest> <image ref> <geometry inputs hash>". Keyed on
     # the geometry layer's
     # digest, not the tag: the tag moves whenever any tracked input changes,
     # so re-extracting 168 MB for a viewer-source edit would be waste.
     #
-    # Checked against what is on disk too, since the digest only records what
-    # this host MEANT to install: a hand-deleted subtree reinstalls instead of
-    # being asserted complete forever.
-    #
-    # DERIVED only. The authored units are the ones a pinned layer may
-    # legitimately predate (see the warn below), so demanding them here would
-    # leave `installed` false forever and re-fetch the layer on every `up`.
-    # Recovering a hand-deleted authored unit means deleting .assets-tag.
+    # The narrow hash decides nothing here; it records which inputs produced
+    # the store, for a local bake to tell stale output from its own.
     parts = marker.read_text().split() if marker.exists() else []
-    installed = all((sim_repo / "assets" / unit).is_dir() for unit in SIM_ASSET_UNITS_DERIVED)
+    installed_ref = parts[1] if len(parts) > 1 else ""
 
     # Ref match => digest match, so the warm path stays off the network: the
     # ref is content-addressed and ci/build_assets_image.sh never rebuilds an
-    # existing tag. NOT valid for an INNATE_SIM_ASSETS_IMAGE override, which
-    # may name a mutable tag -- those probe the manifest every time.
-    geometry_hash = compute_geometry_inputs_hash(config["os_repo"])  # type: ignore[arg-type]
-    if not os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip() and parts[1:2] == [image] and installed:
+    # existing tag. Only the exact tag skips the probe -- a store installed
+    # from a fallback re-probes so it upgrades itself once CI publishes -- and
+    # never for an INNATE_SIM_ASSETS_IMAGE override, which may name a mutable
+    # tag whose content moved under the same ref.
+    geometry_hash = compute_geometry_inputs_hash(os_repo)
+    missing = missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    if not override and installed_ref == image and not missing:
+        config["assets_image"] = installed_ref
         return
 
     try:
         manifest = oci.manifest_for_image(image)
     except oci.OciError as exc:
-        # Two different mistakes: the checkout implies a tag nobody built, or
-        # the override names something the registry will not serve. Saying
-        # "set INNATE_SIM_ASSETS_IMAGE" to someone who just did is no help.
-        if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        # The override names something the registry will not serve. Saying "set
+        # INNATE_SIM_ASSETS_IMAGE" to someone who just did is no help.
+        if override:
             raise StackError(
                 f"The registry did not serve INNATE_SIM_ASSETS_IMAGE ({shorten_docker_image_ref(image)}): {exc}\n"
                 f"The geometry is fetched over the registry API, so an override has to name a pushed "
                 f"image -- one that exists only in the local Docker store cannot be read here."
             ) from exc
-        # The name also moves for inputs that cannot change geometry, and
-        # "push the branch" is not advice a fork can take.
-        if parts[2:3] == [geometry_hash] and installed:
-            log("Reusing the installed geometry (geometry inputs unchanged).")
+        if not missing:
+            log(f"Reusing the installed geometry (it has everything {environment_id} needs).")
+            config["assets_image"] = installed_ref
             return
-        raise StackError(
-            f"No published sim asset image for this checkout ({shorten_docker_image_ref(image)}): {exc}\n"
-            f"The geometry inputs themselves changed ({', '.join(GEOMETRY_INPUT_PATHSPECS)}), so what is "
-            f"installed no longer describes this checkout. Push the branch so CI publishes it, or set "
-            f"INNATE_SIM_ASSETS_IMAGE to one that exists."
-        ) from exc
+        served = _fallback_assets_manifest(image, fallbacks)
+        if served is None:
+            raise StackError(
+                f"The installed sim geometry has nothing for {environment_id!r} ({', '.join(missing)}), and no "
+                f"published asset image serves this checkout: {exc}\n"
+                f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
+                f"INNATE_SIM_ASSETS_IMAGE at an image that carries it."
+            ) from exc
+        image, manifest = served
+    config["assets_image"] = image
     digest = manifest["layers"][ASSETS_IMAGE_LAYERS.index("work")]["digest"]
 
-    if parts[:1] == [digest] and installed:
+    if parts[:1] == [digest]:
         # Same geometry under a new ref (or an old digest-only marker):
-        # remember the ref so the next run skips the probe above.
+        # remember the ref so the next run skips the probe above. Never
+        # re-fetch this digest: what it carries is already here, so a world it
+        # cannot serve would download 85 MB to fail identically every `up`.
         marker.write_text(f"{digest} {image} {geometry_hash}\n")
+        if missing:
+            raise _incomplete_store(image, environment_id, missing)
         return
 
     log(f"Downloading sim assets {digest[7:19]} (~85 MB, one-time)...")
@@ -1900,20 +2000,13 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
             oci.fetch_layer(repo, digest, out, oci.anon_token(repo), label="sim assets")
         oci.safe_extract(blob, staging)
         work = staging / "work"
-        # Fatal before anything is installed, rather than writing a marker that
-        # claims success: a store without apartment_split_v2 has no collision
-        # hulls at all, and would silently short-circuit every later `up`.
-        missing = [unit for unit in SIM_ASSET_UNITS_DERIVED if not (work / unit).is_dir()]
-        if missing:
-            raise StackError(
-                f"The pinned geometry layer {digest[7:19]} is missing {missing}.\n"
-                "Refusing to install a partial store -- the world server cannot run without it."
-            )
-        # Authored props are additive: a checkout can legitimately expect ones
-        # the pinned layer predates, and a world without them still runs.
-        absent = [unit for unit in SIM_ASSET_UNITS_AUTHORED if not (work / unit).is_dir()]
+        # Every unit is additive, props and packs alike: a served layer may
+        # legitimately predate one (the published `main` geometry does), and a
+        # world that does not load it runs regardless. Whether the world being
+        # launched can load is judged against the manifest once installed.
+        absent = [unit for unit in SIM_ASSET_UNITS if not (work / unit).is_dir()]
         if absent:
-            warn(f"The pinned geometry predates {absent}; the world will load without them.")
+            warn(f"The geometry from {shorten_docker_image_ref(image)} predates {absent}.")
 
         # Stamp one install time so every file reads as arriving now (buildx
         # does not normalise layer mtimes without SOURCE_DATE_EPOCH). NOTE this
@@ -1945,24 +2038,47 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
         blob.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
 
+    still_missing = missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    if still_missing:
+        raise _incomplete_store(image, environment_id, still_missing)
 
-def ensure_viewer_public_assets(config: dict[str, object]) -> None:
+
+def ensure_viewer_public_assets(config: dict[str, object], *, offline: bool = False) -> None:
     """Install the models and physics the webapp serves at /models and /physics.
 
     The same image as the geometry, a different layer -- and on disk rather
     than mounted from the image, for the reasons in install_layer_subtree.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
-    install_layer_subtree(
-        assets_image_ref(config),
-        ASSETS_IMAGE_LAYERS.index("viewer"),
-        "viewer",
-        sim_repo / "viewer" / "public",
-        sim_repo / "viewer" / "public" / ".installed-tag",
-        label="viewer assets",
-        geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
-        preserve_subtrees=("local-environments",),
-    )
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    image = assets_image_ref(config)
+    required = read_environment_assets(os_repo, str(config["environment_id"]))
+    try:
+        install_layer_subtree(
+            image,
+            ASSETS_IMAGE_LAYERS.index("viewer"),
+            "viewer",
+            sim_repo / "viewer" / "public",
+            sim_repo / "viewer" / "public" / ".installed-tag",
+            label="viewer assets",
+            geometry_hash=compute_geometry_inputs_hash(os_repo),
+            preserve_subtrees=("local-environments",),
+            required=required.viewer if required else (),
+            fallbacks=assets_fallback_refs(),
+            offline=offline,
+        )
+    except oci.OciError as exc:
+        # This step is not inside `up`'s offline guard: a warm store needs no
+        # network, so it runs either way and only the cold path can fail here.
+        remedy = (
+            f"Re-run `{CLI_SIM} up` online once first."
+            if offline
+            else "Bake the geometry from sim/tools (see sim/sandbox/README.md), or point "
+            "INNATE_SIM_ASSETS_IMAGE at an image that carries it."
+        )
+        raise StackError(
+            f"No 3D view assets for this checkout ({shorten_docker_image_ref(image)}): {exc}\n{remedy}"
+        ) from exc
 
 
 def install_layer_subtree(
@@ -1975,6 +2091,9 @@ def install_layer_subtree(
     label: str,
     geometry_hash: str | None = None,
     preserve_subtrees: tuple[str, ...] = (),
+    required: tuple[str, ...] = (),
+    fallbacks: tuple[str, ...] = (),
+    offline: bool = False,
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -1998,19 +2117,41 @@ def install_layer_subtree(
     than the published layer. They are copied into the staged tree before the
     atomic replacement so refreshing viewer assets cannot delete licensed,
     gitignored environment packs.
+
+    `required` names the paths this destination has to hold, so "installed" can
+    mean "serves the world being launched" rather than "was built from these
+    bytes"; with none given, any non-empty directory counts. `fallbacks` are
+    refs to accept when the registry does not serve `image`.
     """
     parts = marker.read_text().split() if marker.exists() else []
-    populated = destination.is_dir() and any(destination.iterdir())
-    if parts[1:2] == [image] and populated:
+    installed_ref = parts[1] if len(parts) > 1 else ""
+    populated = destination.is_dir() and (
+        all((destination / path).exists() for path in required) if required else any(destination.iterdir())
+    )
+    if installed_ref == image and populated:
         return
 
+    # A `required` contract is the caller saying what "good enough" means, so
+    # meeting it beats any hash. Without one, only the narrow hash can tell an
+    # unpublished tag from a real change -- and the bundle, which passes
+    # neither, must fall through to its local build rather than serve a stale
+    # copy (ensure_sim_viewer_bundle catches this).
+    reusable = populated and (bool(required) or parts[2:3] == [geometry_hash])
+    # A store installed from a fallback records that ref, so the match above
+    # misses and a probe would follow -- offline, that is a connect timeout
+    # before reaching the same answer.
+    if offline and reusable:
+        return
     try:
         manifest = oci.manifest_for_image(image)
     except oci.OciError:
-        if geometry_hash is not None and parts[2:3] == [geometry_hash] and populated:
-            log(f"Reusing the installed {label} (geometry inputs unchanged).")
+        if reusable:
+            log(f"Reusing the installed {label} (nothing published serves this checkout).")
             return
-        raise
+        served = _fallback_assets_manifest(image, fallbacks)
+        if served is None:
+            raise
+        image, manifest = served
     digest = manifest["layers"][layer_index]["digest"]
     if parts[:1] == [digest] and populated:
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -2262,6 +2403,15 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
+def _arm_world_intro(config: dict[str, object]) -> None:
+    """`up --intro` against a world server that was already running: it opens the story
+    for the next browser, exactly as the flag does on a fresh one."""
+    if not config.get("intro"):
+        return
+    if _world_server_request(WORLD_SERVER_PORT, {"op": "intro"}, timeout=30.0) is None:
+        warn("The host world server did not take --intro; use Play the intro in the app instead.")
+
+
 def _ensure_world_environment(config: dict[str, object]) -> None:
     """Hot-switch a running server onto the configured environment pack."""
     wanted = str(config["environment_id"])
@@ -2443,8 +2593,8 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     mars_bot = os_repo / "ros2_ws" / "src" / "mars_bot"
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
-    candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
-    candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
+    candidates = sorted((mars_bot / "mars_description" / "urdf").glob("*"))
+    candidates += sorted((mars_bot / "mars_description" / "meshes").glob("*"))
     candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py", "traffic.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
     candidates += sorted((sim_repo / "environments").rglob("manifest.json"))
@@ -2493,6 +2643,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
+            and reply.get("mdns") == _beacon_ports_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2501,6 +2652,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
                 _ensure_world_environment(config)
+                _arm_world_intro(config)
                 log("Host world server already running.")
                 return endpoint
             log("Host world server compiled different robot/world sources -- restarting it...")
@@ -2517,12 +2669,18 @@ def ensure_world_server(config: dict[str, object]) -> str:
             )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
-        else:
+        elif set(actual_binds) != expected_binds:
             log(
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
+        else:
+            log("Host world server announces a different simulator (or none) to the app -- restarting it...")
         _stop_stale_world_server()
+    else:
+        # Silence on this block's port says nothing about the last run: a
+        # checkout moved to another block still has its server on the old one.
+        stop_world_server()
 
     ensure_state_dir()
     attempts: list[tuple[str, str, str]] = []  # (backend label, backend, that attempt's log output)
@@ -2539,7 +2697,12 @@ def ensure_world_server(config: dict[str, object]) -> str:
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
         if _start_world_server(
-            uv, sim_repo, environment_id=str(config["environment_id"]), bind=bind, mujoco_gl=backend
+            uv,
+            sim_repo,
+            environment_id=str(config["environment_id"]),
+            bind=bind,
+            mujoco_gl=backend,
+            intro=bool(config.get("intro")),
         ):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
@@ -2625,14 +2788,46 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None) -> bool:
+def _beacon_ports_wanted() -> list[int] | None:
+    """The [rosbridge, webapp] ports the world server should advertise; None
+    when advertising is switched off (INNATE_SIM_BEACON=0)."""
+    if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
+        return None
+    return [SIM_ROSBRIDGE_PORT, SIM_HTTPS_PORT]
+
+
+def _beacon_env(repo_root: Path) -> dict[str, str]:
+    """What the world server's LAN discovery beacon announces (mars_sim_driver
+    beacon.py): the ports the controller app needs, the robot's name file, and
+    the checkout's version. Empty when advertising is switched off."""
+    if _beacon_ports_wanted() is None:
+        return {}
+    described = subprocess.run(
+        ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "INNATE_SIM_BEACON_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
+        "INNATE_SIM_BEACON_WEBAPP_PORT": str(SIM_HTTPS_PORT),
+        "INNATE_SIM_BEACON_ROBOT_INFO": str(repo_root / "data" / "robot_info.json"),
+        "INNATE_SIM_BEACON_VERSION": described.stdout.strip() if described.returncode == 0 else "",
+    }
+
+
+def _start_world_server(
+    uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
+) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
         "from mars_sim_driver.world_server import main; main()"
     )
-    env = os.environ.copy()
+    # The beacon's settings come only from this launcher: one inherited from the
+    # shell would advertise after an opt-out, and every later up would restart.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("INNATE_SIM_BEACON_")}
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    env.update(_beacon_env(sim_repo.parent))
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
@@ -2656,6 +2851,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: s
                 "--rosbridge-url",
                 f"ws://127.0.0.1:{SIM_ROSBRIDGE_PORT}",
             ]
+            + (["--intro"] if intro else [])
             + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,
@@ -2794,13 +2990,75 @@ WORLD_PORTS_RECORD_GRACE_S = 5.0
 def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if all(_host_port_free(port, udp=False, reuse=True) for port in ports):
+        if all(_host_port_free(port, udp=False) for port in ports):
             return True
         time.sleep(0.2)
     return False
 
 
+def _checkout_world_server_pids() -> set[int]:
+    """Every world server spawned for this checkout, whatever block it was given:
+    the uv parent by the --project it was handed, the python child by the venv
+    it runs from. Both are anchored on this checkout's own sim path, so another
+    clone's server cannot match, and both name the bootstrap module."""
+    parent_marker = f" --project {SIM_DIR} python "
+    child_prefix = f"{SIM_DIR}/.venv/bin/python"
+    listing = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], capture_output=True, text=True, check=False)
+    pids: set[int] = set()
+    for line in listing.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if "mars_sim_driver.world_server" not in command:
+            continue
+        if parent_marker in command or command.startswith(child_prefix):
+            with contextlib.suppress(ValueError):
+                pids.add(int(pid))
+    pids.discard(os.getpid())
+    return pids
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _stop_checkout_world_servers() -> None:
+    """The ports record names one server; a checkout that changed block, or an
+    `up` killed mid-start, leaves another behind that no record points at."""
+    pids = _checkout_world_server_pids()
+    # A uv parent still exiting behind the child the recorded stop just ended
+    # is not a leftover.
+    settle = time.monotonic() + 2.0
+    while pids and time.monotonic() < settle:
+        time.sleep(0.2)
+        pids = {pid for pid in pids if _alive(pid)}
+    if not pids:
+        return
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        time.sleep(0.2)
+    for pid in pids:
+        if _alive(pid):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+    log(f"Stopped {len(pids)} leftover world server process(es) from an earlier run of this checkout.")
+
+
 def stop_world_server() -> None:
+    _stop_recorded_world_server()
+    _stop_checkout_world_servers()
+    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
+        WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
+
+
+def _stop_recorded_world_server() -> None:
     # Only the ports this checkout recorded when it started a server. The
     # configured ports are no evidence of ownership -- a checkout that never
     # started one would take them as licence to kill whoever holds the
@@ -2835,10 +3093,6 @@ def stop_world_server() -> None:
                 log("Stopped host world server (forced).")
             else:
                 warn(f"Something else holds the world ports (lsof -nP -iTCP:{ports[-1]}); `{CLI_SIM} up` may refuse.")
-    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
-        WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
-        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
-        WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:
@@ -2933,8 +3187,10 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == SERVER_BACKEND:
+        llm_level, llm_label = "healthy", "llm server"
     else:
-        llm_level, llm_label = "healthy", "gemini key"
+        llm_level, llm_label = "healthy", "vendor key"
 
     if all(level == "healthy" for level in (world_level, sim_level, transport_level, brain_level, llm_level)):
         stack_mood = ("healthy", "LIVE")

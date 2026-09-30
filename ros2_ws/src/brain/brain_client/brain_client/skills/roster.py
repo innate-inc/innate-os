@@ -44,6 +44,8 @@ def registry_from_skills_msg(msg: AvailableSkills, on_duplicate=None) -> SkillRe
             "episode_count": s.episode_count,
             "directory": s.directory,
             "wheeled": s.wheeled,
+            "module": s.module,
+            "class_name": s.class_name,
         }
         for s in msg.skills
         if not s.load_error

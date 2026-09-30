@@ -14,6 +14,7 @@ from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head
 from innate import (
     Head,
     JointStates,
+    Llm,
     MainImage,
     Manipulation,
     Mobility,
@@ -21,17 +22,15 @@ from innate import (
     Skill,
     SkillReturn,
     WristImage,
-    resource,
     vision,
 )
-from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor, pixel_to_height
+from innate.geometry import ARM_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor, pixel_to_height
 
-# Arm reach as a sphere about the shoulder (URDF: joint2 at (0.086, 0.0845),
-# 0.326 m of link past it). It predicts a 0.407 m floor-height limit — where
-# Manipulation.REACH_X's 0.40 comes from.
-SHOULDER_X, SHOULDER_Z = 0.086, 0.0845
+# Arm reach as a sphere about the shoulder (joint2, one 0.04425 link above
+# joint1, with 0.326 m of link past it). It predicts a 0.407 m floor-height
+# limit — where Manipulation.REACH_X's 0.40 comes from.
+SHOULDER_X, SHOULDER_Z = ARM_ORIGIN[0], ARM_ORIGIN[2] + 0.04425
 ARM_REACH = 0.326
 
 # j6 band that PROVES a hold on its own, valid only after a fresh close.
@@ -127,9 +126,8 @@ class DropInBox(Skill):
 
     _p = PARAMS
 
-    @resource
-    def _proxy(self):
-        return gemlib.make_client()
+    # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
+    llm: Llm = Llm("google:gemini-3.5-flash")
 
     # Two scalars, not the box tuple: a subscripted generic in a class-level
     # annotation crashes the feed-annotation machinery at import.
@@ -145,9 +143,9 @@ class DropInBox(Skill):
         """Head frame -> the container's near floor-contact pixel, or None.
         Bottom edge midpoint, NOT the centre: a point at rim height
         back-projects far past the box (a 0.15 m rim at 0.6 m reads 0.88)."""
+        self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
-            self._proxy,
             f"Find '{prompt}' in this image — an open container (box, bin, basket, crate) "
             "standing on the floor. Ignore the robot's own gripper and anything it is "
             "holding. Return ONLY a JSON list of matches, each "
@@ -162,13 +160,27 @@ class DropInBox(Skill):
         self._near_rim_v = _near_rim_v(text)
         if box is None:
             self._box_u = self._box_top_v = None
+            self.overlay.clear("target", "rim")
+            self.overlay.readout("not in view")
             return None
         x, y, w, h = box
+        self._draw_container((x, y, x + w, y + h))
         self._box_u = min(float(IMG_W - 1), x + w / 2.0)
         self._box_top_v = float(y)
         px = (self._box_u, min(float(IMG_H - 1), float(y + h)))
         self._measure_rim(px)
         return self._park_if_clipped(px, float(y + h))
+
+    def _draw_container(self, corners: tuple[float, float, float, float]) -> None:
+        """The container's box and the near rim the gripper will reach over."""
+        ui = self.overlay
+        ui.clear("track", "steer")
+        ui.bracket("target", corners, label="container")
+        if self._near_rim_v is None:
+            ui.clear("rim")
+        else:
+            ui.line("rim", (corners[0], self._near_rim_v), (corners[2], self._near_rim_v))
+        ui.readout("spotted")
 
     def _park_if_clipped(self, px: tuple[float, float], contact_v: float) -> tuple[float, float]:
         """A floor-contact row at or past the frame bottom means the container
@@ -216,8 +228,7 @@ class DropInBox(Skill):
         img = self.wrist_image
         if not img:
             return None
-        text = gemlib.ask_image(
-            self._proxy,
+        text = self.llm.ask(
             img,
             "Wrist camera mounted beside a robot gripper's fingers (the view is mirrored). "
             "Are the fingers holding an object right now? Answer only YES or NO.",
@@ -300,6 +311,8 @@ class DropInBox(Skill):
         z = rim + p["release_clear_m"]
         x, y = self.manipulation.clamp_reach(self._release_x(near_x, z), near_y)
 
+        self.overlay.stage("release")
+        self.overlay.readout(f"reaching over the rim · {round(z * 100)} cm up")
         self.manipulation.torque_on()
         self._lift_clear(y)
         try:
@@ -317,9 +330,11 @@ class DropInBox(Skill):
         self._over_rim = True
 
         self.check_cancelled()  # last exit before the object leaves the claw
+        self.overlay.readout("opening the gripper")
         self.manipulation.gripper_open(duration=1.0)
         self._released = True
         self.sleep(p["release_settle_s"])
+        self.overlay.readout("lifting out")
         # Out of the container BEFORE anything drives: the verification backs
         # the base up 0.15 m, and doing that with the claw still hooked over
         # the rim drags the container along with it.
@@ -357,6 +372,7 @@ class DropInBox(Skill):
 
     def _landed(self, prompt: str, approach: FloorApproach) -> bool:
         """Back up, then look for evidence the object did NOT go in."""
+        self.overlay.stage("verify")
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         main_img, wrist_img = self.main_image, self.wrist_image
@@ -373,8 +389,7 @@ class DropInBox(Skill):
         # Burden of proof on FAILURE: a successful drop is usually invisible
         # (below the rim, behind the near wall) — affirming "inside" produced
         # false misses on tall boxes. Only seeing the object outside counts.
-        text = gemlib.ask_image(
-            self._proxy,
+        text = self.llm.ask(
             images,
             f"The robot just dropped an object into '{prompt}'. {' '.join(labels)} "
             "Can you SEE the dropped object OUTSIDE the container — lying on the floor "
@@ -385,14 +400,15 @@ class DropInBox(Skill):
         )
         missed = _yes_no(text)
         self.logger.info(f"[DropInBox] landed: reply={text!r} -> {missed is not True}")
+        self.overlay.readout("still outside" if missed else "in the box")
         # No usable verdict is not a failure: the claw is open and the object
         # is no longer held, which is as much as this skill promised.
         return missed is not True
 
     def execute(self, prompt: str = "the box") -> SkillReturn:
         """Drop whatever the gripper holds into `prompt`."""
-        if self._proxy is None:
-            self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
+        if not self.llm.available:
+            self.fail(f"No way to reach {self.llm.model}: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
 
         self._box_u = self._box_top_v = None
         self._near_rim_v = None
@@ -415,9 +431,11 @@ class DropInBox(Skill):
 
             self._carry_pose(self._p["travel_joints"])
             approach = FloorApproach(self, self._p, self._detect_px)
+            self.overlay.begin(prompt, stages=["search", "approach", "release", "verify"], frame=(IMG_W, IMG_H))
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
+            self.overlay.readout("parked at the rim")
             self.say("Dropping it in.")
             _x, _y, released_z = self._release_at(xy[0], xy[1])
 

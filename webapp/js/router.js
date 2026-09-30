@@ -16,6 +16,7 @@
 // one shell, instant switches.
 
 import { ros } from "./rosClient.js";
+import { dismissBootSplash } from "./bootSplash.js";
 import { initShell } from "./shell.js";
 import { getConfig } from "./config.js";
 import { SIM_SECTIONS } from "./railLayout.js";
@@ -125,27 +126,10 @@ async function render(route) {
     // The first page has now built its DOM (a sim stage brings up its own
     // loading scrim here), so hand off from the boot splash. In `finally` so a
     // failed first mount still clears it rather than stranding the splash.
-    dismissBootSplash();
+    void dismissBootSplash();
   }
 }
 
-// Boot splash lives in index.html so it paints before this module's graph
-// loads; drop it once the first page mounts. Fade then remove; a fallback
-// timer covers a missed transitionend (a pre-paint start).
-function dismissBootSplash() {
-  const splash = document.getElementById("boot-splash");
-  if (!splash) return;
-  // Reduced motion turns the fade into `transition: none` (app.css), so there is
-  // no transitionend to wait for and the fallback timer would hold an opaque
-  // cover over a page that is already up. Drop it now instead.
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    splash.remove();
-    return;
-  }
-  splash.classList.add("is-leaving");
-  splash.addEventListener("transitionend", () => splash.remove(), { once: true });
-  setTimeout(() => splash.remove(), 400); // fallback ≥ the 0.2s fade in app.css
-}
 
 /**
  * Go to an in-app location, updating history. Preserves the query string so

@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 if sys.version_info < (3, 10):  # noqa: UP036
     print("Error: the Innate launcher requires Python 3.10 or newer.", file=sys.stderr)
@@ -14,6 +17,7 @@ if sys.version_info < (3, 10):  # noqa: UP036
 from config import (
     CLI_SIM,
     ENV_PATH,
+    INTRO_ENVIRONMENT_ID,
     LOG_TARGETS,
     NO_BACKEND,
     OS_SESSION_LOG_PATH,
@@ -43,6 +47,7 @@ from runtime import (
     clean_runtime,
     collect_status_snapshot,
     down_os,
+    ensure_bind_mount_dirs,
     ensure_docker_available,
     ensure_os_container,
     ensure_sim_assets,
@@ -50,7 +55,6 @@ from runtime import (
     ensure_skill_assets,
     ensure_uv_available,
     ensure_viewer_public_assets,
-    ensure_workspace_dirs,
     ensure_world_server,
     open_os_container_shell,
     prefetch_runtime,
@@ -62,6 +66,7 @@ from runtime import (
     tail_file,
     wait_for_os_runtime_ready,
     wait_for_virtual_mars,
+    warn_unloadable_environments,
     world_server_running,
 )
 from setup_wizard import (
@@ -114,16 +119,18 @@ def cmd_up(
         ensure_uv_available()  # the sim world always runs on the host via uv
         report_configured_keys(config)
         # Before anything containerized runs: claims the container-written
-        # workspace dirs for the invoking user (root-owned bind-mount dirs on
+        # bind-mount dirs for the invoking user (root-owned bind-mount dirs on
         # Linux otherwise), and warns if an earlier run already claimed them.
-        ensure_workspace_dirs(config)
+        ensure_bind_mount_dirs(config)
         # Before the fast path, not after it: the containers it removes are
         # exactly what an upgrade from a still-running older stack leaves
         # behind -- and one of them holds the ports this stack needs.
         remove_superseded_containers()
         if runtime_already_running(config):
-            # A code update can leave a stale world server running (frozen
-            # 3D view); ensure_world_server restarts it.
+            # ensure_world_server restarts a world left stale by a code update:
+            # it stops the old server and can spend minutes on the new one, so
+            # from here an `up` that does not finish must tear down, not strand it.
+            started = True
             ensure_world_server(config)
             log("Innate sim runtime is already running. Opening dashboard...")
             show_runtime_dashboard(config, watch=watch)
@@ -146,13 +153,14 @@ def cmd_up(
                     f"`{CLI_SIM} up --offline` to start with whatever is already downloaded."
                 ) from exc
         with live_step("viewer", "Downloading the 3D view assets", "3D view assets"):
-            ensure_viewer_public_assets(config)
+            ensure_viewer_public_assets(config, offline=offline)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
+        warn_unloadable_environments(config)
+        started = True
         with live_step("world", "Starting the physics world", "physics world"):
             config["world_endpoint"] = ensure_world_server(config)
 
-        started = True
         try:
             with live_step("os", "Starting the Innate OS container", "Innate OS container"):
                 ensure_os_container(config, os_env_file, offline=offline)
@@ -197,10 +205,11 @@ def cmd_up(
             )
             return
         if config["brain_backend"] == NO_BACKEND:
-            warn("No cloud LLM key configured — the sim is running WITHOUT an agent.")
+            warn("No LLM key configured — the sim is running WITHOUT an agent.")
             warn(
-                "Add GEMINI_API_KEY (your own Gemini key) or INNATE_SERVICE_KEY (Innate proxy) to "
-                f"{ENV_PATH}, or run `{CLI_SIM} setup`, then restart."
+                "Add INNATE_SERVICE_KEY (Innate proxy) or the key of the vendor LLM_MODEL names "
+                f"(GEMINI_API_KEY by default; OPENAI_API_KEY, ANTHROPIC_API_KEY) to {ENV_PATH}, "
+                f"or run `{CLI_SIM} setup`, then restart."
             )
         success("Innate sim runtime is up.")
         show_runtime_dashboard(config, watch=watch)
@@ -355,6 +364,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Environment pack to load (sim/environments/NAME); overrides [simulation].environment in sim/config.toml",
     )
+    up_parser.add_argument(
+        "--intro",
+        action="store_true",
+        help=f"Open on the first-run story: loads the {INTRO_ENVIRONMENT_ID!r} pack and starts the intro for the "
+        "first browser that connects (nothing runs before that)",
+    )
     sim_subparsers.add_parser(
         "down",
         prog=f"{CLI_SIM} down",
@@ -415,6 +430,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def filesystem_hint(exc: OSError) -> str:
+    """One actionable line for a filesystem error, instead of a traceback."""
+    if exc.errno in (errno.EACCES, errno.EPERM) and exc.filename:
+        # Seen on native Linux: a container running as root owns a path in the checkout.
+        path = Path(exc.filename)
+        owned = path if path.is_dir() else path.parent
+        return f"Your user cannot write here. Fix with: sudo chown -R $(id -un):$(id -gn) {shlex.quote(str(owned))}"
+    # e.g. a full disk that flipped the filesystem read-only (seen in a user test).
+    return (
+        "This is a filesystem problem, not an Innate one -- check free disk space "
+        "(a full disk can leave the filesystem mounted read-only until a reboot)."
+    )
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:])
@@ -432,6 +461,9 @@ def main() -> int:
         elif args.sim_command == "up":
             if args.environment:
                 config["environment_id"] = args.environment
+            elif args.intro:
+                config["environment_id"] = INTRO_ENVIRONMENT_ID
+            config["intro"] = args.intro
             cmd_up(
                 config,
                 watch=not args.once,
@@ -476,14 +508,7 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
-        # e.g. a full disk that flipped the filesystem read-only (seen in a
-        # user test): one actionable line, not a traceback.
-        print(
-            f"Error: {exc}\n"
-            "This is a filesystem problem, not an Innate one -- check free disk space "
-            "(a full disk can leave the filesystem mounted read-only until a reboot).",
-            file=sys.stderr,
-        )
+        print(f"Error: {exc}\n{filesystem_hint(exc)}", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
         print(f"Command failed: {' '.join(exc.cmd)}", file=sys.stderr)

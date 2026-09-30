@@ -49,6 +49,8 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from hub_routes import publish_start, publish_status, repo_visibility, setup_start, whoami
+from keys_routes import keys_apply, keys_get
 from media_routes import (
     episode_response,
     joints_response,
@@ -192,9 +194,9 @@ SIM_VIEWER_ROUTES = {
     # Licensed environment packs are generated locally and deliberately live
     # outside /models so they cannot be mistaken for published image assets.
     "/local-environments/": SIM_VIEWER_ROOT / "public" / "local-environments",
-    # scene.ts declares `loader.packages = { mars_sim: "/robot" }`, so
-    # `package://mars_sim/meshes/base.STL` resolves here by itself.
-    "/robot/": ROOT.parent / "ros2_ws" / "src" / "mars_bot" / "mars_sim",
+    # scene.ts declares `loader.packages = { mars_description: "/robot" }`, so
+    # `package://mars_description/meshes/base.STL` resolves here by itself.
+    "/robot/": ROOT.parent / "ros2_ws" / "src" / "mars_bot" / "mars_description",
     # Collision hulls for the SimSession's "collisions" debug overlay.
     "/physics/": SIM_VIEWER_ROOT / "public" / "physics",
 }
@@ -406,9 +408,9 @@ async def restart_handler(request: web.Request) -> web.Response:
 
 # The Arm SDK page (/armsdk) drives the arm over rosbridge like every other
 # page; the front door only serves its 3D view the same URDF + STL meshes the
-# IK node solves against (the installed mars_sim share), read-only under
+# IK node solves against (the installed mars_description share), read-only under
 # /armsdk/model/.
-MARS_MODEL_ROOT = ROOT.parent / "ros2_ws" / "install" / "mars_sim" / "share" / "mars_sim"
+MARS_MODEL_ROOT = ROOT.parent / "ros2_ws" / "install" / "mars_description" / "share" / "mars_description"
 
 
 def _model_target(tail: str) -> "Path | None":
@@ -504,6 +506,7 @@ async def _on_cleanup(app: web.Application) -> None:
 
 def build_app() -> web.Application:
     app = web.Application()
+    app["readonly"] = WEBAPP_READONLY
     app.router.add_get("/ws", ws_proxy)
     app.router.add_get("/worldstate", ws_proxy)
     app.router.add_get("/config.json", config_handler)
@@ -516,8 +519,15 @@ def build_app() -> web.Application:
     app.router.add_get("/run/info", run_info_response)
     app.router.add_get("/run/log", run_log_response)
     app.router.add_get("/settings.json", settings_get)
+    app.router.add_get("/keys.json", keys_get)
+    app.router.add_get("/hub/publish", publish_status)
+    app.router.add_get("/hub/whoami", whoami)
+    app.router.add_get("/hub/repo", repo_visibility)
     if not WEBAPP_READONLY:
+        app.router.add_post("/hub/publish", publish_start)
+        app.router.add_post("/hub/setup", setup_start)
         app.router.add_post("/settings.json", settings_apply)
+        app.router.add_post("/keys.json", keys_apply)
         app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)

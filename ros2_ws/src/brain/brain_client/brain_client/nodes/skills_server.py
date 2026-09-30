@@ -29,9 +29,11 @@ from std_srvs.srv import Trigger
 
 from brain_client.perception.camera_provider import CameraProvider
 from brain_client.robot.head import Head
+from brain_client.robot.llm import Llm, robot_default, set_robot_default
 from brain_client.robot.manipulation import Manipulation
 from brain_client.robot.mobility import Mobility
 from brain_client.robot.spatial_memory import SpatialMemory
+from brain_client.skills import overlay
 from brain_client.skills.catalog import SkillRepository
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
 from brain_client.skills.invoker import SkillInvoker
@@ -81,6 +83,23 @@ class SkillsActionServer(Node):
         self.head_position_topic = str(self.get_parameter("head_position_topic").value)
         self.declare_parameter("head_current_position_topic", "/mars/head/current_position")
         self.head_current_position_topic = str(self.get_parameter("head_current_position_topic").value)
+        self.declare_parameter("llm_model", "")
+        self.declare_parameter("llm_base_url", "")
+        self.declare_parameter("llm_extra_body", "")
+        if model := str(self.get_parameter("llm_model").value).strip():
+            set_robot_default(
+                Llm(
+                    model,
+                    base_url=str(self.get_parameter("llm_base_url").value),
+                    extra_body=str(self.get_parameter("llm_extra_body").value),
+                )
+            )
+        # Unreachable = not injected: a skill declaring `llm: Llm` then fails its run up front, like any interface.
+        self.llm: Llm | None = robot_default() if robot_default().available else None
+        if self.llm is None:
+            self.get_logger().warn(
+                f"[Skills] no way to reach {robot_default().model}: skills that declare `llm: Llm` will not run"
+            )
 
         self.manipulation = Manipulation(self, self.get_logger(), lazy=True)
         self.mobility = Mobility(self, self.get_logger(), self.cmd_vel_topic)
@@ -94,6 +113,7 @@ class SkillsActionServer(Node):
             mobility=self.mobility,
             head=self.head,
             memory=self.spatial_memory,
+            llm=self.llm,
             head_current_position_topic=self.head_current_position_topic,
         )
 
@@ -450,9 +470,19 @@ class SkillsActionServer(Node):
         and unwind on cancel without any plumbing from the skill.
         """
         previous_run_cancel = swap_run_cancel(skill._cancel_latch())
+        root = overlay.enter_run()  # a nested code skill draws into its parent's run
         try:
-            return self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+            output = self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+            if root:
+                skill.overlay.end(ok=output.ok, cancelled=output.status is SkillResult.CANCELLED, text=output.message)
+            return output
+        except Exception as e:
+            if root:
+                skill.overlay.end(ok=False, cancelled=False, text=str(e))
+            raise
         finally:
+            if root:
+                overlay.end_run()
             swap_run_cancel(previous_run_cancel)
 
     def _run_code_skill_prepared(self, skill, entry, skill_type, inputs, goal_handle) -> SkillOutput:

@@ -28,7 +28,8 @@ One rule covers interfaces, cameras and robot state: annotate what you read.
 ``arm: Arm``, ``map: Map``, ``joint_states: JointStates``,
 ``head_position: HeadState``, ``image: MainImage`` / ``WristImage`` /
 ``DepthMap``, ``mobility: Mobility``, ``head: Head``,
-``memory: SpatialMemory`` (recall over the robot's spatial memory). A plain annotation is
+``memory: SpatialMemory`` (recall over the robot's spatial memory), ``llm: Llm`` (the robot's
+model, for asking about a frame; ``llm: Llm = Llm("google:gemini-3.5-flash")`` pins one). A plain annotation is
 guaranteed inside execute() — the server waits for the first value and fails
 the run up front if none arrives — so no None guards are needed; ``| None``
 (``head: Head | None``) makes it best effort instead, injected when available
@@ -44,6 +45,14 @@ Callers of other skills get that SkillOutput back — ``out = self.turn(...)``
 then ``out.message`` / ``out.data`` / ``out.ok``, with ``out.status`` a
 SkillResult enum, never a bare string. (Legacy ``(message, SkillResult)``
 tuple returns still work but are deprecated.)
+
+``self.overlay`` draws what the skill is doing over the robot's cameras in
+the webapp: ``overlay.begin(prompt, stages=[...])`` declares the run,
+``overlay.stage(name)`` and ``overlay.readout(text)`` drive the HUD, and
+``overlay.bracket`` / ``box`` / ``point`` / ``reticle`` / ``vector`` /
+``line`` place markers by id in image pixels (``view="arm"`` for the wrist
+camera); ``overlay.clear(*ids)`` removes them. The run closes by itself with
+the skill's result.
 
 Cancellation is the framework's job, not yours. Use ``self.sleep(seconds)``
 instead of ``time.sleep`` and write loops as if cancel didn't exist: every
@@ -64,6 +73,7 @@ from typing import TYPE_CHECKING
 
 from brain_client.agents.types import Agent, InputRef, SkillRef
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
+from brain_client.skills.overlay import Overlay
 from brain_client.skills.types import (
     PhysicalSkill,
     Skill,
@@ -103,11 +113,13 @@ __all__ = [
     "InputRef",
     "JointStates",
     "Lidar",
+    "Llm",
     "MainImage",
     "Manipulation",
     "Map",
     "Mobility",
     "Odometry",
+    "Overlay",
     "Pose",
     "RecallVerdict",
     "Skill",
@@ -129,6 +141,7 @@ __all__ = [
 # Type checkers can't follow __getattr__, so they read the imports below.
 if TYPE_CHECKING:
     from brain_client.robot.head import Head
+    from brain_client.robot.llm import Llm
     from brain_client.robot.manipulation import Manipulation, Waypoint
     from brain_client.robot.mobility import Mobility
     from brain_client.robot.spatial_memory import RecallVerdict, SpatialMemory
@@ -137,6 +150,7 @@ _LAZY_INTERFACES = {
     "Mobility": ("brain_client.robot.mobility", "Mobility"),
     "Manipulation": ("brain_client.robot.manipulation", "Manipulation"),
     "Head": ("brain_client.robot.head", "Head"),
+    "Llm": ("brain_client.robot.llm", "Llm"),
     "Waypoint": ("brain_client.robot.manipulation", "Waypoint"),
     "SpatialMemory": ("brain_client.robot.spatial_memory", "SpatialMemory"),
     "RecallVerdict": ("brain_client.robot.spatial_memory", "RecallVerdict"),

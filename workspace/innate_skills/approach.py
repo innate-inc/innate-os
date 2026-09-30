@@ -11,14 +11,12 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
-from innate import gemini as gemlib
 from innate import vision
 from innate.exceptions import SkillFailed
 from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 if TYPE_CHECKING:
-    from innate import MainImage, Mobility, Odometry
-    from innate_proxy import ProxyClient
+    from innate import Llm, MainImage, Mobility, Odometry, Overlay
 
 Pixel = tuple[float, float]
 FloorXY = tuple[float, float]
@@ -35,6 +33,7 @@ class ApproachHost(Protocol):
     """What a skill offers to host a FloorApproach: the feeds it declares and
     the cancel-aware waits only a Skill can provide."""
 
+    llm: "Llm"
     mobility: "Mobility"
     main_image: "MainImage | None"
     odom: "Odometry | None"
@@ -45,6 +44,8 @@ class ApproachHost(Protocol):
     def name(self) -> str: ...
     def sleep(self, seconds: float) -> None: ...
     def say(self, text: str, wait: bool = False) -> None: ...
+    @property
+    def overlay(self) -> "Overlay": ...
 
 
 APPROACH_PARAMS = {
@@ -101,15 +102,33 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, proxy: "ProxyClient | None", question: str, settle_s: float):
-    """Settle the base, then put the current head frame to Gemini.
+def ask_head(host: ApproachHost, question: str, settle_s: float):
+    """Settle the base, then put a head frame taken after it to the host's model.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()
-    host.sleep(settle_s)
-    img = host.main_image
+    img = settled_frame(host, settle_s)
     if not img:
         return None, None
-    return gemlib.ask_image(proxy, img, question, logger=host.logger), img
+    return host.llm.ask(img, question, logger=host.logger), img
+
+
+def settled_frame(
+    host: ApproachHost, settle_s: float, timeout: float = 0.6, read: "Callable[[], str | None] | None" = None
+):
+    """The first frame published after the settle sleep — one captured with
+    the robot at rest, never one the pipeline still held from mid-motion.
+    ``read`` is the feed (the head camera by default). Identity, not
+    content: consecutive sim frames of a still scene are byte-identical."""
+    read = read or (lambda: host.main_image)
+    stale = read()
+    host.sleep(settle_s)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        img = read()
+        if img and img is not stale:
+            return img
+        host.sleep(0.03)
+    return read()
 
 
 def base_to_odom(o: "OdomXYT | None", xy: FloorXY) -> "FloorXY | None":
@@ -133,6 +152,10 @@ def odom_to_base(o: "OdomXYT | None", wxy: FloorXY) -> "FloorXY | None":
 
 def inside_box(px, cu, cv, half_u, half_v=None):
     return abs(px[0] - cu) <= half_u and abs(px[1] - cv) <= (half_u if half_v is None else half_v)
+
+
+def metres(m: float) -> str:
+    return f"{m:.2f} m" if m >= 1 else f"{round(m * 100)} cm"
 
 
 class FloorApproach:
@@ -166,6 +189,7 @@ class FloorApproach:
 
     def search(self, prompt):
         """Scan: straight, right 30°, left 60°. First hit wins. (+yaw=left)"""
+        self.host.overlay.stage("search")
         for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
             if turn:
                 if i == 1:
@@ -184,7 +208,13 @@ class FloorApproach:
     def odom_xyt(self):
         return self.host.mobility.odom_xyt(self.host.odom)
 
+    def _moving(self, what):
+        """The picture is about to change under every head-camera marker."""
+        self.host.overlay.clear(view="main")
+        self.host.overlay.readout(what)
+
     def rotate_by(self, angle):
+        self._moving(f"turning {round(abs(math.degrees(angle)))}° {'left' if angle >= 0 else 'right'}")
         return self.host.mobility.rotate_by(
             self.odom_xyt,
             angle,
@@ -195,13 +225,16 @@ class FloorApproach:
             logger=self.host.logger,
         )
 
-    def drive(self, dist):
+    def drive(self, dist, *, brisk=False):
+        """``brisk`` holds top speed to the stop, for a move that only has to
+        be roughly there; the default creeps in for a park."""
+        self._moving(f"{'driving' if dist >= 0 else 'backing up'} {metres(abs(dist))}")
         return self.host.mobility.drive(
             self.odom_xyt,
             dist,
             kp=self.p["drive_kp"],
             v_max=self.p["drive_v_max"],
-            v_min=self.p["drive_v_min"],
+            v_min=self.p["drive_v_max" if brisk else "drive_v_min"],
             tolerance=self.p["drive_tol_m"],
             logger=self.host.logger,
         )
@@ -223,6 +256,24 @@ class FloorApproach:
         hold, accept = self.p["hold_frac"], self.p["accept_frac"]
         return (c[0], c[1]), (hu * hold, hv * hold), (hu * accept, hv * accept)
 
+    def _draw_track(self, px, cu, cv, inside):
+        ui = self.host.overlay
+        hu, hv = self.p["box_half_px"], self.p["box_half_v_px"]
+        ui.box(
+            "pick-box",
+            (cu - hu, cv - hv, cu + hu, cv + hv),
+            inner=self.p["accept_frac"],
+            label="pick box",
+            locked=inside,
+        )
+        ui.point("track", px, label="tracking", locked=inside)
+        if inside:
+            ui.clear("steer")
+            ui.readout("in the pick box")
+        else:
+            ui.vector("steer", px, (cu, cv))
+            ui.readout("steering onto it")
+
     def _follow_into_box(self, seed_px, max_forward=None):
         """Optical-flow base servo into the sweet box. No Gemini.
         Returns ('in_box'|'lost'|'timeout'|'noframe'|'budget', px|None);
@@ -235,6 +286,7 @@ class FloorApproach:
         grid = vision.grid_pts(u, v)
         in_box = 0
         (cu, cv), _half, accept = self._sweet_box()
+        self.host.overlay.clear("target")
         t0 = time.monotonic()
         anchor, anchor_odo = (u, v), self.odom_xyt()
         seg_start = anchor_odo
@@ -264,7 +316,9 @@ class FloorApproach:
                 self.host.mobility.stop()
                 return "lost", None
 
-            if inside_box((u, v), cu, cv, accept[0], accept[1]):
+            inside = inside_box((u, v), cu, cv, accept[0], accept[1])
+            self._draw_track((u, v), cu, cv, inside)
+            if inside:
                 in_box += 1
                 self.host.mobility.stop()
                 anchor, anchor_odo = (u, v), self.odom_xyt()
@@ -313,6 +367,7 @@ class FloorApproach:
     def position_above(self, prompt, xy):
         """Flow-follow into the sweet box; Gemini reseed/confirm. Stepwise if
         no cam. Raises SkillFailed if the target cannot be centred."""
+        self.host.overlay.stage("approach")
         if not self.host.main_image:
             return self._position_stepwise(prompt, xy)
 

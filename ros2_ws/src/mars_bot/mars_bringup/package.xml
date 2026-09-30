@@ -31,7 +31,7 @@
 
   <!-- Internal package dependencies -->
   <exec_depend>mars_msgs</exec_depend>
-  <exec_depend>mars_sim</exec_depend>
+  <exec_depend>mars_description</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>rplidar_ros</exec_depend>
   <exec_depend>topic_tools</exec_depend>

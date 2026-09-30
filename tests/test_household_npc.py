@@ -41,7 +41,8 @@ class FakeSim:
         self.data = SimpleNamespace(time=0.0)
         self.dropped = {}
 
-    def reset(self) -> None:
+    def reset(self, *, spawn: tuple[float, float, float] | None = None) -> None:
+        self.spawn = spawn
         self.data.time = 0.0
         self.dropped.clear()
 

@@ -1,5 +1,10 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Innate Inc
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2008, Willow Garage, Inc.
+# Authors: Jonathan Bohren, Jackie Kay
+#
+# Vendored from kdl_parser_py (https://github.com/ros/kdl_parser), which was
+# never released for ROS 2 -- Humble ships only the C++ kdl_parser -- so there
+# is no package to depend on. Keep this in sync with upstream by hand.
 import PyKDL as kdl
 import urdf_parser_py.urdf as urdf
 

@@ -127,7 +127,7 @@ COPY --from=raw /raw/appartement.glb ./viewer/public/models/appartement.glb
 COPY sim/sandbox/_driver_pkg.py ./sandbox/_driver_pkg.py
 COPY sim/environments ./environments
 COPY ros2_ws/src/mars_bot/mars_sim_driver ../ros2_ws/src/mars_bot/mars_sim_driver
-COPY ros2_ws/src/mars_bot/mars_sim ../ros2_ws/src/mars_bot/mars_sim
+COPY ros2_ws/src/mars_bot/mars_description ../ros2_ws/src/mars_bot/mars_description
 # Sampled here too: the nav-map export compiles the ~168 MB world model.
 RUN set -eux; \
     if [ "$SIM_RESOURCE_LOG" = "1" ]; then ./tools/log_resources.sh 10 & fi; \
@@ -141,6 +141,7 @@ RUN uv run tools/build_viewer_physics.py /out/physics /out/models
 RUN uv run tools/build_environment_pack.py backrooms viewer/assets/backrooms/backrooms_vr.glb /out
 # Original procedural scenery: no downloaded source or local licensed pack.
 RUN uv run tools/build_intersection.py --viewer-out /out
+RUN uv run tools/build_void.py --viewer-out /out
 # The compiled ~168 MB MJB and downscaled texture caches are host-local
 # derivations; shipping them would nearly double the image.
 COPY sim/ATTRIBUTION.md ./assets/ATTRIBUTION.md

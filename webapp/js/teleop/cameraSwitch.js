@@ -86,7 +86,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   (opts.stripParent ?? parent).append(camsToggle, strip);
 
   // Collapsible only where the room is tight; wide stages keep the tiles up.
-  const tightStage = window.matchMedia("(max-width: 780px)");
+  const tightStage = window.matchMedia(opts.stripParent ? "(max-width: 820px)" : "(max-width: 780px)");
   let camsOpen = false;
   function renderCamsToggle() {
     const collapsible = tightStage.matches;
@@ -100,6 +100,12 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     camsOpen = !camsOpen;
     renderCamsToggle();
   });
+  /** Show the tiles where they collapse behind the toggle: pointing at one is pointless while it is hidden. */
+  function revealCams() {
+    if (camsOpen) return;
+    camsOpen = true;
+    renderCamsToggle();
+  }
   tightStage.addEventListener("change", renderCamsToggle);
 
   /** @type {string[]} */ let roster = []; // camera names in m-line order
@@ -434,6 +440,8 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    promote,
+    revealCams,
     destroy() {
       unsub?.();
       unsubSession();

@@ -9,6 +9,7 @@ import math
 
 HEAD_ORIGIN = (-0.040751, -0.0002, 0.25882)  # base_link -> head joint (URDF)
 CAM_IN_HEAD = (0.04327, 0.0297, -0.000275)  # head -> left camera optical
+ARM_ORIGIN = (0.086, -0.05285, 0.04025)  # base_link -> joint1 axis (URDF)
 IMG_W, IMG_H = 640, 480
 
 # Left-eye factory intrinsics (1280x720, fx~=fy~=400.8) through the driver's
@@ -16,6 +17,14 @@ IMG_W, IMG_H = 640, 480
 # 70 deg model read 0.156 m as 0.33. Tune FY first — it dominates range.
 FX, FY = 200.3, 267.3
 CX, CY = 319.1, 248.7
+
+
+def arm_bearing(x, y):
+    """Heading from the arm's own base to a base_link point. The whole arm
+    lies in the vertical plane through joint1's axis, so this IS the yaw a
+    grasp there must use; from the base_link origin it is ~18 deg off at
+    grasp range, which a vertical tool can only absorb in the wrist roll."""
+    return math.atan2(y - ARM_ORIGIN[1], x - ARM_ORIGIN[0])
 
 
 def _head_rot(tilt_rad):

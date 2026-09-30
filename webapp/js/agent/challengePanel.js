@@ -127,14 +127,15 @@ export function createChallengePanel(root, session) {
     timerEl = null;
     const wrap = document.createElement("div");
     wrap.className = "challenge-list";
-    if (!list.length) {
+    const listed = list.filter((c) => c.listed !== false);
+    if (!listed.length) {
       const empty = document.createElement("div");
       empty.className = "challenge-empty";
       empty.textContent = "No challenges installed (sim/challenges/).";
       wrap.append(empty);
       return wrap;
     }
-    for (const c of list) {
+    for (const c of listed) {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "challenge-item";

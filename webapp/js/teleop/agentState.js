@@ -10,20 +10,32 @@
 import { ros } from "../rosClient.js";
 import {
   AGENT_STATUS_TOPIC,
+  BRAIN_NODE,
   GET_AVAILABLE_DIRECTIVES_SERVICE,
   SET_DIRECTIVE_TOPIC,
   SET_BRAIN_ACTIVE_SERVICE,
   SET_ACTIVE_SKILLS_TOPIC,
   RESET_BRAIN_SERVICE,
+  SAVE_AGENT_SERVICE,
+  DELETE_AGENT_SERVICE,
 } from "../constants.js";
 
 /**
  * @typedef {{
- *   agents: Array<{ id: string, name: string, skills: string[] }>,
- *   broken: Array<{ id: string, name: string, error: string }>,
+ *   id: string, name: string, prompt: string, skills: string[],
+ *   source: "shipped" | "user", listen: boolean, gaze: boolean, listed: boolean,
+ *   path: string, editable: boolean, model: string,
+ * }} AgentEntry
+ * @typedef {{ id: string, name: string, error: string, path: string }} BrokenEntry
+ * @typedef {{ id: string, display_name: string, prompt: string, skill_ids: string[], listen: boolean, gaze: boolean }} AgentSpec
+ * @typedef {{
+ *   agents: AgentEntry[],
+ *   broken: BrokenEntry[],
  *   currentDirective: string,
  *   activeSkills: Set<string>,
  *   brainActive: boolean,
+ *   defaultModel: string,
+ *   currentModel: string,
  * }} AgentSnapshot
  */
 
@@ -44,7 +56,15 @@ export function sharedAgentState() {
 
 function createAgentState() {
   /** @type {AgentSnapshot} */
-  let state = { agents: [], broken: [], currentDirective: "", activeSkills: new Set(), brainActive: false };
+  let state = {
+    agents: [],
+    broken: [],
+    currentDirective: "",
+    activeSkills: new Set(),
+    brainActive: false,
+    defaultModel: "",
+    currentModel: "",
+  };
   /** @type {Set<(s: AgentSnapshot) => void>} */
   const listeners = new Set();
 
@@ -110,22 +130,37 @@ function createAgentState() {
         meta = {};
       }
       /** @type {any[]} */
-      const list = Array.isArray(agentsRaw) ? agentsRaw : (agentsRaw && agentsRaw.agents) || [];
+      const listed = Array.isArray(agentsRaw) ? agentsRaw : (agentsRaw && agentsRaw.agents) || [];
+      const unlisted = Array.isArray(meta?.unlisted_agents) ? meta.unlisted_agents : [];
+      const list = [...listed, ...unlisted];
       const agents = list
         .filter((a) => a && a.id)
         .map((a) => ({
           id: String(a.id),
           name: String(a.display_name || a.id),
+          prompt: String(a.prompt ?? ""),
           skills: Array.isArray(a.skills) ? a.skills.map(String) : [],
+          // Agent detail fields: innate agents and files edited in code are read-only.
+          source: a.source === "shipped" ? /** @type {const} */ ("shipped") : /** @type {const} */ ("user"),
+          listed: a.listed !== false,
+          listen: a.listen === true,
+          gaze: a.gaze === true,
+          path: typeof a.path === "string" ? a.path : "",
+          editable: a.editable === true,
+          // "" = this agent thinks with whatever the robot's llm_model setting names.
+          model: typeof a.model === "string" ? a.model : "",
         }));
       // Agents that failed to load (broken module/class). Shown disabled with
       // their error — same treatment as broken skills in the skills menu.
-      const broken = (Array.isArray(meta?.broken_agents) ? meta.broken_agents : [])
+      /** @type {any[]} */
+      const brokenRaw = Array.isArray(meta?.broken_agents) ? meta.broken_agents : [];
+      const broken = brokenRaw
         .filter((a) => a && a.id)
         .map((a) => ({
           id: String(a.id),
           name: String(a.display_name || a.id),
           error: String(a.load_error || "failed to load"),
+          path: typeof a.path === "string" ? a.path : "",
         }));
       const activeSkills = new Set((Array.isArray(meta?.active_skills) ? meta.active_skills : []).map(String));
       const brainActive =
@@ -148,6 +183,8 @@ function createAgentState() {
         currentDirective: brainActive ? String(v?.current_directive ?? "") : "",
         activeSkills,
         brainActive,
+        defaultModel: String(meta?.default_model ?? ""),
+        currentModel: String(meta?.current_model ?? ""),
       };
       emit();
     } catch {
@@ -177,18 +214,88 @@ function createAgentState() {
     await refresh();
   }
 
-  /** @param {string} skillId */
-  function toggleSkill(skillId) {
-    if (!state.currentDirective) return; // the brain ignores this without a directive
-    const next = new Set(state.activeSkills);
-    if (next.has(skillId)) next.delete(skillId);
-    else next.add(skillId);
-    ros.publish(SET_ACTIVE_SKILLS_TOPIC, {
-      data: JSON.stringify({ agent_id: state.currentDirective, skills: [...next] }),
-    });
-    // Don't flip the toggle locally — re-pull so the UI shows what the brain
-    // actually registered (set_active_skills drops unavailable skills).
+  /** Replace one agent's active subset outright (the story's grants). The brain
+   * drops the update unless that agent is the running directive, so a grant
+   * can never trim whichever agent happens to be selected.
+   * @param {string[]} skills @param {string} agentId */
+  function setActiveSkills(skills, agentId) {
+    if (!agentId) return;
+    ros.publish(SET_ACTIVE_SKILLS_TOPIC, { data: JSON.stringify({ agent_id: agentId, skills }) });
+    // Re-pull so the UI shows what the brain actually registered (it drops unavailable skills).
     setTimeout(() => void refresh(), 400);
+  }
+
+  /** Write an agent file from the detail form; the brain reloads the roster before
+   * answering, and the refresh here shows it. @param {AgentSpec} spec
+   * @returns {Promise<{ success: boolean, message: string, path: string }>} */
+  async function saveAgent(spec) {
+    const res = await ros.callService(SAVE_AGENT_SERVICE, spec);
+    if (res?.success) await refresh();
+    return { success: !!res?.success, message: String(res?.message ?? ""), path: String(res?.path ?? "") };
+  }
+
+  /**
+   * Point the robot at `spec` — the llm_model parameter, which the brain applies without a
+   * restart and refuses when it has no way in (no key), so the reason comes back here.
+   * @param {string} spec @returns {Promise<{ success: boolean, message: string }>}
+   */
+  async function setModel(spec) {
+    const value = { type: 4, bool_value: false, integer_value: 0, double_value: 0, string_value: spec };
+    try {
+      const res = await ros.callService(`${BRAIN_NODE}/set_parameters`, {
+        parameters: [{ name: "llm_model", value }],
+      });
+      // The service resolves even when the node rejects the value: the result carries why.
+      const result = res?.results?.[0];
+      if (result?.successful) {
+        // The live switch is the running brain only: settings.yaml is what it boots from,
+        // so a pick that is not written there would come back as the old model on restart.
+        const saved = await saveModelSetting(spec);
+        await refresh();
+        return { success: true, message: saved };
+      }
+      const reason = String(result?.reason || "the robot refused that model");
+      // rclpy's wording for a parameter the running node never declared: the brain is a copy
+      // install, so a build older than this page has no llm_model to set.
+      return {
+        success: false,
+        message: reason.includes("undeclared parameter")
+          ? "This robot's brain is older than this page — rebuild it (innate build) and try again."
+          : reason,
+      };
+    } catch (err) {
+      return { success: false, message: `Could not reach the robot: ${err}` };
+    }
+  }
+
+  /** Write llm_model to config/settings.yaml; returns "" or why it did not persist. */
+  async function saveModelSetting(/** @type {string} */ spec) {
+    try {
+      const res = await fetch("/settings.json", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          sets: [{ path: ["brain_client_node", "ros__parameters", "llm_model"], value: spec, type: "string" }],
+          clears: [],
+        }),
+      });
+      // A read-only deployment (the public demo) registers no POST route at all — a 405 in plain
+      // text. Its visitors switched a model and got one; that it lasts a session is not their concern.
+      if (res.status === 405 || res.status === 403) return "";
+      if (!res.ok) return `Switched, but not saved for the next restart: the robot answered ${res.status}`;
+      const body = await res.json();
+      return body?.ok ? "" : `Switched, but not saved for the next restart: ${body?.message || "the robot refused it"}`;
+    } catch (err) {
+      return `Switched, but not saved for the next restart: ${err}`;
+    }
+  }
+
+  /** @param {string} id @returns {Promise<{ success: boolean, message: string }>} */
+  async function deleteAgent(id) {
+    const res = await ros.callService(DELETE_AGENT_SERVICE, { id });
+    if (res?.success) await refresh();
+    return { success: !!res?.success, message: String(res?.message ?? "") };
   }
 
   /** @param {string} [memoryState] @returns {Promise<any>} */
@@ -249,7 +356,10 @@ function createAgentState() {
     },
     refresh,
     setDirective,
-    toggleSkill,
+    setActiveSkills,
+    saveAgent,
+    setModel,
+    deleteAgent,
     resetBrain,
   };
 }

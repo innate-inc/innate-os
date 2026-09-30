@@ -32,6 +32,8 @@
 !sim/assets/backrooms_visual/**
 !sim/assets/intersection_split_v2/**
 !sim/assets/intersection_visual/**
+!sim/assets/void_split_v2/**
+!sim/assets/void_visual/**
 !sim/assets/map/**
 !sim/assets/humans/**
 !sim/assets/objects/**
@@ -51,7 +53,7 @@
 !sim/sandbox/_driver_pkg.py
 !sim/environments/**
 !ros2_ws/src/mars_bot/mars_sim_driver/**
-!ros2_ws/src/mars_bot/mars_sim/**
+!ros2_ws/src/mars_bot/mars_description/**
 
 !sim/ATTRIBUTION.md
 

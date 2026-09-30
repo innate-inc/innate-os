@@ -23,6 +23,7 @@ from typing_extensions import Self
 from brain_client.common.dynamic_loader import class_name_to_snake_case
 from brain_client.common.logging import UniversalLogger
 from brain_client.common.script_paths import Source
+from brain_client.skills.overlay import OVERLAY_TOPIC, Overlay
 
 if TYPE_CHECKING:
     from brain_client.skills.invoker import SkillInvoker
@@ -187,6 +188,7 @@ class InterfaceType(Enum):
     MOBILITY = "mobility"
     HEAD = "head"
     MEMORY = "memory"
+    LLM = "llm"
 
 
 class SkillStorage:
@@ -506,6 +508,7 @@ class _FeedSpec:
 def _feed_specs() -> "tuple[_FeedSpec, ...]":
     # imported lazily: the interface classes pull ROS/Nav2 modules
     from brain_client.robot.head import Head
+    from brain_client.robot.llm import Llm
     from brain_client.robot.manipulation import Manipulation
     from brain_client.robot.mobility import Mobility
     from brain_client.robot.spatial_memory import SpatialMemory
@@ -526,6 +529,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
         _FeedSpec(Mobility, Interface, InterfaceType.MOBILITY, "Mobility", ("mobility",)),
         _FeedSpec(Head, Interface, InterfaceType.HEAD, "Head", ("head",)),
         _FeedSpec(SpatialMemory, Interface, InterfaceType.MEMORY, "SpatialMemory", ("memory",)),
+        _FeedSpec(Llm, Interface, InterfaceType.LLM, "Llm", ("llm", "model", "vlm")),
         # cameras start per run (and sim renders on demand) — longer grace
         _FeedSpec(MainImage, Camera, main, "MainImage", ("image", "main_image"), "main camera", grace_s=3.0),
         _FeedSpec(WristImage, Camera, wrist, "WristImage", ("wrist_image",), "wrist camera", grace_s=3.0),
@@ -751,6 +755,8 @@ class Skill(ABC):
         # injected by the server before each run (see invoker.py)
         self.skills: SkillInvoker | None = None
         self._say_publisher = None
+        self._overlay: Overlay | None = None
+        self._overlay_publisher = None
         self._tts_status_sub = None
         self._tts_playing = None  # last /tts/is_playing value
         self._storage = None
@@ -1001,6 +1007,22 @@ class Skill(ABC):
         self._say_publisher.publish(String(data=text))
         if wait:
             self._wait_for_speech_end(text)
+
+    @property
+    def overlay(self) -> Overlay:
+        """What this skill draws over the cameras (see skills/overlay.py):
+        ``self.overlay.stage("approach")``, ``self.overlay.point("track", px)``,
+        ``self.overlay.readout("steering onto it")``."""
+        if self._overlay is None:
+            self._overlay = Overlay(self.name, self._publish_overlay, self.logger)
+        return self._overlay
+
+    def _publish_overlay(self, payload: str) -> None:
+        if self.node is None:
+            return
+        if self._overlay_publisher is None:
+            self._overlay_publisher = self.node.create_publisher(String, OVERLAY_TOPIC, 10)
+        self._overlay_publisher.publish(String(data=payload))
 
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data

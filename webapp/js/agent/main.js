@@ -19,15 +19,19 @@
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
+import { holdBootSplash } from "../bootSplash.js";
 import { getConfig } from "../config.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { createVideoStage } from "../teleop/videoStage.js";
 import { createTrajectoryOverlay } from "../teleop/trajectoryOverlay.js";
+import { createTargetingOverlay } from "../teleop/targetingOverlay.js";
 import { createTelemetry } from "../teleop/telemetry.js";
 import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
+import { createAgentStudio } from "./agentStudio.js";
+import { AVAILABLE_SKILLS_TOPIC, CANCEL_SKILL_SERVICE, SKILL_OVERLAY_TOPIC } from "../constants.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
@@ -158,6 +162,14 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
+  // What the story reads off the chat: the robot's latest line, and when the skills
+  // it choreographs around last ran.
+  let lastRobotLine = "";
+  let robotLineCount = 0;
+  let motionAt = 0;
+  let navigating = false;
+  let recalledAt = 0;
+  let turnedAt = 0;
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -167,10 +179,67 @@ function buildAgentView(root) {
         waveform: state.waveform,
       });
     },
+    onRobotMessage: (text) => {
+      lastRobotLine = text;
+      robotLineCount += 1;
+    },
+    onSkillStatus: ({ skill, status }) => {
+      if (/(^|\/)navigate_to_position$/.test(skill)) {
+        navigating = status === "running";
+        if (navigating) motionAt = Date.now();
+      }
+      if (status === "running" && /(^|\/)turn_in_place$/.test(skill)) turnedAt = Date.now();
+      if (status === "completed" && /(^|\/)search_memory$/.test(skill)) recalledAt = Date.now();
+    },
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
     typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
+  const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
+    showView: (/** @type {string} */ id) => cameraSwitch.promote(id),
+    revealCameras: () => cameraSwitch.revealCams(),
+    armedAgent: () => panel.armedAgentId(),
+    armAgent: panel.armAgent,
+    onCreateAgent: panel.setCreateAgentHandler,
+    directivesEl: panel.directivesEl,
+    dockDirectives: panel.dockDirectives,
+    dockStartStop: panel.dockStartStop,
+    // Every skill the brain can run, for the detail's "Add skill" chooser.
+    skillRoster: (/** @type {(rows: any[]) => void} */ cb) =>
+      ros.subscribe(
+        AVAILABLE_SKILLS_TOPIC,
+        (msg) => cb(Array.isArray(msg?.skills) ? msg.skills : []),
+        undefined,
+        "brain_messages/msg/AvailableSkills",
+      ),
+    lastLine: () => lastRobotLine,
+    spokenCount: () => robotLineCount,
+    cancelSkill: () => ros.callService(CANCEL_SKILL_SERVICE, {}),
+    motionAt: () => motionAt,
+    resetMotion: () => { motionAt = 0; },
+    navigating: () => navigating,
+    recalledAt: () => recalledAt,
+    turnedAt: () => turnedAt,
+    overlay: (/** @type {(event: any) => void} */ cb) =>
+      ros.subscribe(SKILL_OVERLAY_TOPIC, (m) => {
+        if (typeof m?.data !== "string") return;
+        let event;
+        try {
+          event = JSON.parse(m.data);
+        } catch {
+          return;
+        }
+        cb(event);
+      }, undefined, "std_msgs/msg/String"),
+  });
+  const cornerControls = document.createElement("div");
+  cornerControls.className = "agent-corner-controls";
+  const cameraToggle = cornerStack.querySelector(".cam-strip-toggle");
+  cornerStack.prepend(cornerControls);
+  if (cameraToggle) cornerControls.append(cameraToggle);
+  cornerControls.append(studio.mobileToggle);
+  holdBootSplash(studio.settled);
+
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
     (target.matches(".video-stage > canvas, .video-stage > video") || target.classList.contains("video-stage"));
@@ -187,13 +256,15 @@ function buildAgentView(root) {
     });
   }
 
+  const viewportMeta = document.querySelector('meta[name="viewport"]');
+  const originalViewport = viewportMeta?.getAttribute("content") ?? "";
   const compactLayout = window.matchMedia(COMPACT_LAYOUT_QUERY);
   const monitorTooNarrow = window.matchMedia(BRAIN_MONITOR_QUERY);
 
   // The dock floats over the feed, so the canvas's centre is behind it. Video
   // stages ignore this: a real camera's framing is the robot's to decide.
   const dockPanel = /** @type {HTMLElement | null} */ (root.querySelector(".agent-panel"));
-  const setSafeInsets = /** @type {{ setSafeInsets?: (i: { right?: number }) => void }} */ (
+  const setSafeInsets = /** @type {{ setSafeInsets?: (i: { right?: number; bottom?: number; top?: number; left?: number }) => void }} */ (
     videoStage
   ).setSafeInsets;
   const reportSafeArea = () => {
@@ -203,16 +274,31 @@ function buildAgentView(root) {
     // the dock rather than under it, so nothing is covered.
     const canvas = feed.getBoundingClientRect();
     const dock = dockPanel.getBoundingClientRect();
-    const covered = compactLayout.matches ? 0 : Math.max(0, canvas.right - dock.left);
-    setSafeInsets({ right: Math.min(covered, canvas.width) });
+    const controls = root.getBoundingClientRect();
+    const covered = compactLayout.matches
+      ? Math.max(0, canvas.right - controls.right)
+      : Math.max(0, canvas.right - dock.left);
+    const bottom = compactLayout.matches ? Math.max(0, canvas.bottom - dock.top) : 0;
+    setSafeInsets({
+      right: Math.min(covered, canvas.width),
+      bottom: Math.min(bottom, canvas.height),
+      top: compactLayout.matches ? Math.max(0, controls.top - canvas.top) : 0,
+      left: compactLayout.matches ? Math.max(0, controls.left - canvas.left) : 0,
+    });
   };
 
   const applyLayout = () => {
     root.classList.toggle("agent-compact", compactLayout.matches);
+    const edgeToEdge = Boolean(config.simControls) && compactLayout.matches;
+    document.body.classList.toggle("sim-edge-to-edge", edgeToEdge);
+    viewportMeta?.setAttribute("content", edgeToEdge
+      ? `${originalViewport.replace(/,?\s*viewport-fit=[^,]+/g, "")}, viewport-fit=cover`
+      : originalViewport);
     // Its toggle is hidden at this width, so an open monitor would strand the
     // page on a stage it cannot leave.
     if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
+    studio.setCompact(compactLayout.matches);
     reportSafeArea();
   };
   compactLayout.addEventListener("change", applyLayout);
@@ -220,6 +306,7 @@ function buildAgentView(root) {
   const safeAreaObserver = new ResizeObserver(reportSafeArea);
   safeAreaObserver.observe(root);
   safeAreaObserver.observe(feedFrame);
+  if (dockPanel) safeAreaObserver.observe(dockPanel);
   applyLayout();
 
   const parts = [
@@ -229,6 +316,8 @@ function buildAgentView(root) {
         compactLayout.removeEventListener("change", applyLayout);
         monitorTooNarrow.removeEventListener("change", applyLayout);
         safeAreaObserver.disconnect();
+        document.body.classList.remove("sim-edge-to-edge");
+        viewportMeta?.setAttribute("content", originalViewport);
       },
     },
     ...(challengePanel ? [challengePanel] : []),
@@ -236,6 +325,7 @@ function buildAgentView(root) {
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
     cameraSwitch,
     ...(micControl ? [micControl] : []),
+    studio,
     panel,
     {
       destroy: () => {
@@ -250,12 +340,13 @@ function buildAgentView(root) {
       },
     },
   ];
-  // Watching the agent drive is where the projected route earns its keep. The
-  // agent panel owns the right edge here, so the toggle joins the top-left
-  // stack instead of a rail.
+  // Project the planned route onto the main camera while the agent drives.
   const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
-    parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session));
+    parts.push(
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session),
+      createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
+    );
   }
 
   session.start();
@@ -274,4 +365,3 @@ function buildAgentView(root) {
     },
   };
 }
-

@@ -24,6 +24,7 @@ export interface ChallengeProgress {
 /** The currently running (or just finished) challenge. */
 export interface ChallengeActive {
   id: string;
+  attempt_id?: string;
   state: "running" | "passed" | "failed";
   reason: string;
   elapsed_s: number;
@@ -36,6 +37,8 @@ export interface ChallengeActive {
  * for the ones that were attempted. */
 export interface ChallengeBlock {
   progress: Record<string, ChallengeProgress>;
+  /** What the story established about the robot (persona, name); outlives the challenge that set it. */
+  profile?: Record<string, string>;
   active: ChallengeActive | null;
 }
 
