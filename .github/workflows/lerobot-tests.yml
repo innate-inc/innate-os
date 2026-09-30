@@ -1,0 +1,35 @@
+name: LeRobot Plugin Tests
+
+# The plugin (Python 3.12) and the on-robot bridge (the ROS image's 3.10) share a wire protocol and
+# no code. lerobot/tests runs the real bridge module against the client, which the ROS test image
+# cannot do: it has no lerobot. Without this job a renamed constant on either side stays green.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "lerobot/**"
+      - "ros2_ws/src/brain/manipulation/manipulation/lerobot_bridge.py"
+      - ".github/workflows/lerobot-tests.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "lerobot/**"
+      - "ros2_ws/src/brain/manipulation/manipulation/lerobot_bridge.py"
+      - ".github/workflows/lerobot-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: lerobot/uv.lock
+
+      - name: Run the plugin tests
+        working-directory: lerobot
+        # The lean set the robot installs plus pytest: no training or viewer packages.
+        run: uv run --frozen --no-default-groups --group dev pytest -q

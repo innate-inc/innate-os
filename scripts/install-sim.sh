@@ -585,7 +585,7 @@ build_plan() {
     if [ "$PLATFORM" != "macos" ] && have apt-get; then
         plan_add "Install the rendering libraries: $GL_PACKAGES (needs sudo)" "$DISK_GB_RENDER"
     fi
-    plan_add "Download the simulator, so the first start is a start" "$DISK_GB_RUNTIME"
+    plan_add "Download the robot Docker image, world assets and physics environment" "$DISK_GB_RUNTIME"
 }
 
 # Stated where the decision is made, not warned about above it: running out of
@@ -941,7 +941,13 @@ ask_llm_backend() {
 }
 
 # Masked, with a length counter: a paste that silently doubled is the failure
-# worth showing, and the key itself never belongs on screen.
+# worth showing, and the key itself never belongs on screen. The mask is fixed
+# width because a line that wraps defeats the \r redraw and stacks a row per key.
+draw_llm_key() {
+    printf '\r\033[K  %s%s: %s' "$YELLOW" "$llm_prompt" "$NC"
+    [ -z "$LLM_KEY" ] || printf '******** %s(%s chars)%s' "$DIM" "${#LLM_KEY}" "$NC"
+}
+
 read_llm_key() {
     [ "$LLM_BACKEND" = "gemini" ] && llm_prompt="Paste your Gemini API key" || llm_prompt="Paste your Innate service key"
     stty_saved=$(stty -g <&3)
@@ -949,8 +955,7 @@ read_llm_key() {
     hide_cursor
     LLM_KEY=""
     while :; do
-        printf '\r\033[K  %s%s: %s%s' "$YELLOW" "$llm_prompt" "$NC" "$(printf '%*s' "${#LLM_KEY}" '' | tr ' ' '*')"
-        [ -n "$LLM_KEY" ] && printf ' %s(%s)%s' "$DIM" "${#LLM_KEY}" "$NC"
+        draw_llm_key
         read_key
         case "$key" in
             enter) [ -n "$LLM_KEY" ] && break ;;
@@ -967,8 +972,8 @@ read_llm_key() {
     done
     stty "$stty_saved" <&3
     show_cursor
-    printf '\r\033[K  %s%s: %s%s %s(%s)%s\n' "$YELLOW" "$llm_prompt" "$NC" \
-        "$(printf '%*s' "${#LLM_KEY}" '' | tr ' ' '*')" "$DIM" "${#LLM_KEY}" "$NC"
+    draw_llm_key
+    printf '\n'
 }
 
 ask_setup_questions() {

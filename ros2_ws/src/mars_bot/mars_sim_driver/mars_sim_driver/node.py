@@ -67,6 +67,11 @@ except ImportError:  # ros2_ws not sourced/built -- topic interface still works
 MAIN_CAMERA_FPS = 10.0  # main_camera_driver: compressed_frame_interval=3
 WRIST_CAMERA_FPS = 6.0  # arm_camera_driver: compressed_frame_interval=5
 DEPTH_FPS = 8.0  # stereo_depth_estimator max_fps
+# The real drivers' RAW capture rates. Rendered only under INNATE_SIM_HARDWARE_CAMERA_RATES=1 and
+# only while a raw topic has a subscriber (a recorder, a LeRobot client); the compressed streams
+# keep the rates above either way. Opt-in: ~3x the renders, affordable on native GL only.
+RAW_CAMERA_FPS = {"main": 15.0, "wrist": 30.0}
+HARDWARE_CAMERA_RATES = os.environ.get("INNATE_SIM_HARDWARE_CAMERA_RATES", "") == "1"
 ODOM_HZ = 30.0  # bringup.py odom_frequency
 SCAN_HZ = 6.0  # lidar.launch.py throttle
 JOINT_STATE_HZ = 30.0
@@ -454,7 +459,9 @@ class VirtualMarsNode(Node):
         demand oversubscribes the thread, camera periods stretch while depth
         keeps its rate -- nav stays healthy, cameras degrade gracefully."""
         last = {"main": 0.0, "wrist": 0.0, "depth": 0.0}
-        period = {"main": 1.0 / MAIN_CAMERA_FPS, "wrist": 1.0 / WRIST_CAMERA_FPS, "depth": 1.0 / DEPTH_FPS}
+        next_jpeg = {"main": 0.0, "wrist": 0.0}
+        jpeg_period = {"main": 1.0 / MAIN_CAMERA_FPS, "wrist": 1.0 / WRIST_CAMERA_FPS}
+        period = {**jpeg_period, "depth": 1.0 / DEPTH_FPS}
         cost = {"main": 0.0, "wrist": 0.0, "depth": 0.0}  # EMA seconds per render
         target_util = 0.85  # leave headroom for physics/publishing on the other threads
         stretch = 1.0
@@ -467,6 +474,9 @@ class VirtualMarsNode(Node):
                 or self._wrist_raw_pub.get_subscription_count() > 0,
                 "depth": self._depth_pub.get_subscription_count() > 0 or self._points_pub.get_subscription_count() > 0,
             }
+            for camera, raw_pub in (("main", self._main_raw_pub), ("wrist", self._wrist_raw_pub)):
+                at_raw_rate = HARDWARE_CAMERA_RATES and raw_pub.get_subscription_count() > 0
+                period[camera] = 1.0 / RAW_CAMERA_FPS[camera] if at_raw_rate else jpeg_period[camera]
             demand = sum(cost[s] / period[s] for s in wanted if wanted[s])
             stretch = max(1.0, demand / target_util)
             if (stretch > 1.5) != saturated:
@@ -506,16 +516,24 @@ class VirtualMarsNode(Node):
                     self.get_logger().warning(f"{camera} render unavailable ({exc}); skipping frame")
                     continue
                 cost[camera] = 0.8 * cost[camera] + 0.2 * (time.perf_counter() - t0)
-                self._publish_camera_frames(pub, raw_pub, camera, jpeg)
+                # Compressed frames keep their own schedule, so their rate is the same whether or
+                # not the raw rate is in force (10 of the head's 15 fps is 2 frames in 3).
+                jpeg_due = now >= next_jpeg[camera] - 0.005
+                if jpeg_due:
+                    step = jpeg_period[camera] * stretch
+                    next_jpeg[camera] = max(next_jpeg[camera], now - step) + step
+                self._publish_camera_frames(pub if jpeg_due else None, raw_pub, camera, jpeg)
             if not rendered:
-                time.sleep(0.02)
+                # A 20 ms nap would eat most of the flag's 30 fps period; the default rates never need less.
+                time.sleep(0.002 if HARDWARE_CAMERA_RATES and any(wanted.values()) else 0.02)
 
     def _publish_camera_frames(self, pub, raw_pub, camera: str, jpeg: bytes) -> None:
-        """Publish one camera frame; the server hands us a wire-res JPEG."""
+        """Publish one camera frame; the server hands us a wire-res JPEG. `pub` is None on a
+        render that only the raw stream is due for."""
         stamp = self._stamp()
         frame_id = "camera_optical_frame" if camera == "main" else "arm_camera_link"
 
-        if pub.get_subscription_count() > 0:
+        if pub is not None and pub.get_subscription_count() > 0:
             msg = CompressedImage()
             msg.header.stamp = stamp
             msg.header.frame_id = frame_id

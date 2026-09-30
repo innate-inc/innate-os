@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 class MemorySearchServer:
     def __init__(self, search: MemorySearch):
         self._search = search
-        self._node = rclpy.create_node("memory_search_server")
+        self._node = rclpy.create_node("memory_search_server", start_parameter_services=False)
         # Reentrant + multithreaded (the arm_sdk_server pattern): an execute
         # callback blocks its thread for the whole search, and goal/result
         # requests from other callers must still be serviced meanwhile.

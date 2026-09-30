@@ -46,9 +46,9 @@ function quatToRpy(q) {
 // -GRIPPER_MAX_STRENGTH for grip preload.
 const JOINTS = [
   { name: "j1 · base yaw", lo: -1.57, hi: 1.57 },
-  { name: "j2 · shoulder", lo: -1.57, hi: 1.22 },
-  { name: "j3 · elbow", lo: -1.57, hi: 1.75 },
-  { name: "j4 · wrist pitch", lo: -1.92, hi: 1.75 },
+  { name: "j2 · shoulder", lo: -1.22, hi: 1.57 },
+  { name: "j3 · elbow", lo: -1.75, hi: 1.57 },
+  { name: "j4 · wrist pitch", lo: -1.75, hi: 1.92 },
   { name: "j5 · wrist roll", lo: -1.57, hi: 1.57 },
   { name: "j6 · gripper", lo: -0.6, hi: 0.87 },
 ];

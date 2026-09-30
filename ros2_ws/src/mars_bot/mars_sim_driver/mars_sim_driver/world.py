@@ -149,13 +149,13 @@ def default_urdf_path() -> Path:
     shapes no longer match tune_contacts. Installed-only deployments still
     resolve the model through the ROS package share.
     """
-    source = repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_sim" / "urdf" / "mars.urdf"
+    source = repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_description" / "urdf" / "mars.urdf"
     if source.is_file():
         return source
 
     from ament_index_python.packages import get_package_share_directory
 
-    return Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
+    return Path(get_package_share_directory("mars_description")) / "urdf" / "mars.urdf"
 
 
 def find_decomposed_rooms(split_dir: Path) -> dict[str, list[Path]]:
@@ -347,7 +347,7 @@ def load_robot_spec(urdf_path: Path) -> mujoco.MjSpec:
     can't resolve package:// URIs, so both are rewritten here."""
     pkg_dir = urdf_path.parent if (urdf_path.parent / "meshes").is_dir() else urdf_path.parent.parent
     robot_dir = str(pkg_dir.resolve()) + "/"
-    urdf_text = urdf_path.read_text().replace("package://mars_sim/", robot_dir)
+    urdf_text = urdf_path.read_text().replace("package://mars_description/", robot_dir)
     urdf_text = urdf_text.replace(
         '<robot name="mars_bot">',
         '<robot name="mars_bot"><mujoco><compiler discardvisual="false"/></mujoco>',

@@ -36,6 +36,17 @@ class Agent(ABC):
     agent is active.
     """
 
+    # Pause after each completed model turn (seconds); None uses the global default.
+    # Set these on the subclass; edits take effect when the agent reloads.
+    idle_turn_interval: float | None = None
+    supervision_turn_interval: float | None = None
+    # The model this agent thinks with, as "vendor:name"; None uses the robot's
+    # llm_model setting. Activating the agent switches the brain to it.
+    model: str | None = None
+
+    # Validated once by the loader; the brain never evaluates workspace getters.
+    _turn_intervals: tuple[float | None, float | None] = (None, None)
+
     # Stamped by the loader to "shipped" or "user" based on origin directory.
     # Subclasses must not set this themselves.
     source: Source = "user"

@@ -173,6 +173,14 @@ export const SETTINGS_STYLE = `
   font: inherit; font-size: 13px; }
 .set-ctl :is(input, select).set-text:focus { outline: none; border-color: rgba(117,105,253,.55); background-color: rgba(0,0,0,.2); }
 .set-ctl select.set-text { padding: 6px 30px 6px 10px; cursor: pointer; }
+.set-status.warn { color: #f0b35a; }
+.set-model-status { display: block; margin-top: 6px; }
+.set-key-ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.set-key-ctl input.set-text { flex: 1 1 200px; width: auto; }
+.set-key-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06); color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.set-key-btn:hover:not(:disabled) { border-color: rgba(117,105,253,.55); }
+.set-key-btn:disabled { opacity: .45; cursor: default; }
 /* Custom range; content-box keeps the 10px center inside the 4px thumb border. */
 .set-slider { -webkit-appearance: none; appearance: none;
   width: 100%; height: 20px; margin: 0;

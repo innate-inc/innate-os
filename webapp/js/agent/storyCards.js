@@ -55,6 +55,7 @@ export const personaCard = (name) => PERSONA_CARDS[name] ?? { label: name, icon:
 /** @typedef {{ icon: string, detail: string }} SkillCard */
 /** What the skill lets the robot do, in the person's words. @type {Record<string, SkillCard>} */
 const SKILL_CARDS = {
+  "innate-os/arm_move": { icon: ICONS.hand, detail: "Move its arm to a point or joint angles" },
   "innate-os/head_emotion": { icon: ICONS.smile, detail: "Make a face for what it feels" },
   "innate-os/turn_in_place": { icon: ICONS.rotate, detail: "Spin around and look at the room" },
   "innate-os/pick_any_object": { icon: ICONS.hand, detail: "Reach down and grab things" },

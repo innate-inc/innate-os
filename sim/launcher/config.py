@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import functools
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -80,6 +82,9 @@ SIM_UDP_PORT = _resolve_port("SIM_UDP_PORT", 3, 9999)
 SIM_FOXGLOVE_PORT = _resolve_port("SIM_FOXGLOVE_PORT", 4, 8765)
 WORLD_SERVER_PORT = _resolve_port("SIM_WORLD_PORT", 5, 8799)
 WORLD_STATE_PORT = _resolve_port("SIM_WORLD_STATE_PORT", 6, 8800)
+# LeRobot bridge inside manipulation_server (lerobot/README.md): actions in, observations out.
+LEROBOT_ACTIONS_PORT = _resolve_port("SIM_LEROBOT_ACTIONS_PORT", 7, 5555)
+LEROBOT_OBSERVATIONS_PORT = _resolve_port("SIM_LEROBOT_OBSERVATIONS_PORT", 8, 5556)
 # Injected into compose's environment, so a base-only override reaches the
 # compose file without it knowing the base exists.
 PUBLISHED_PORT_ENV = {
@@ -88,14 +93,25 @@ PUBLISHED_PORT_ENV = {
     "SIM_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
+    "SIM_LEROBOT_ACTIONS_PORT": str(LEROBOT_ACTIONS_PORT),
+    "SIM_LEROBOT_OBSERVATIONS_PORT": str(LEROBOT_OBSERVATIONS_PORT),
 }
-# How brain_client reaches Gemini: through the Innate proxy with a service key,
-# straight at Google with a Gemini key, or not at all.
+# How brain_client reaches its model: through the Innate proxy with a service key,
+# straight at the vendor with its key, an LLM_BASE_URL server, or not at all.
 INNATE_BACKEND = "innate"
-GEMINI_BACKEND = "gemini"
+VENDOR_BACKEND = "vendor"
+SERVER_BACKEND = "server"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
+DEFAULT_LLM_MODEL = "google:gemini-3.6-flash"
+# The vendor prefixes innate_llm/configure.py knows, and the key each one reads.
+VENDOR_API_KEYS = {
+    "google": GEMINI_API_KEY,
+    "openai": "OPENAI_API_KEY",
+    "openai-chat": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
 DEFAULT_SIM_OS_IMAGE = "ghcr.io/innate-inc/innate-os-sim-ros"
@@ -158,7 +174,7 @@ ASSETS_IMAGE_PATHSPECS = (
     "sim/environments",
     "sim/tools",
     "sim/viewer/tools",
-    "ros2_ws/src/mars_bot/mars_sim",
+    "ros2_ws/src/mars_bot/mars_description",
 )
 # The driver modules the build imports to compile a world for the nav map --
 # exactly those, not the package: world_server.py, node.py and the bridges
@@ -185,7 +201,7 @@ ASSETS_IMAGE_DRIVER_FILES = tuple(
 # hard-stop `up` (compute_geometry_inputs_hash), except the authored Crossroads
 # scene spec. Traffic-control logic changes do not alter its generated GLB.
 GEOMETRY_DRIVER_FILES = (f"{_DRIVER}/crossroads.py",)
-NON_GEOMETRY_PATHSPECS = ("ros2_ws/src/mars_bot/mars_sim",)
+NON_GEOMETRY_PATHSPECS = ("ros2_ws/src/mars_bot/mars_description",)
 GEOMETRY_INPUT_PATHSPECS = tuple(p for p in ASSETS_IMAGE_PATHSPECS if p not in NON_GEOMETRY_PATHSPECS)
 # The SimSession bundle the webapp loads, as its own image
 # (sim/viewer/Dockerfile), addressed by inputs-<compute_viewer_inputs_hash over
@@ -226,6 +242,14 @@ SIM_ASSET_UNITS_AUTHORED = (
     "objects",
 )
 SIM_ASSET_UNITS = SIM_ASSET_UNITS_DERIVED + SIM_ASSET_UNITS_AUTHORED
+# The published geometry to install when nothing built this checkout's tag. A
+# fork cannot push a branch for our CI to build, so the alternative is refusing
+# to start over inputs that may not touch geometry at all.
+ASSETS_FALLBACK_TAG = "main"
+# The two roots mars_sim_driver.environments reads, `environments.local`
+# gitignored for licensed packs. Manifests are loaded LIVE from the checkout,
+# so a spawn pose or a display name is not something `up` can be missing.
+ENVIRONMENT_MANIFEST_ROOTS = ("environments", "environments.local")
 # This file is deliberately NOT in ASSETS_IMAGE_INPUT_FILES -- that would retag
 # the asset image on every unrelated launcher edit. Safe only because
 # tests/test_assets_image_inputs.py holds the dockerignore (which IS hashed)
@@ -244,6 +268,8 @@ LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
 SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+# Also forwarded from the shell into the container env, beside the keys setup manages.
+VENDOR_ENV_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY")
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -465,19 +491,47 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
     return None
 
 
-def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+def llm_vendor(spec: str, base_url: str = "") -> str:
+    """The vendor prefix of an LLM_MODEL setting, inferred for a bare name the way
+    innate_llm/models.py:split_spec does; "" for a vendor prefix it rejects."""
+    spec = spec.strip()
+    prefix, colon, _ = spec.partition(":")
+    if colon and prefix in VENDOR_API_KEYS:
+        return prefix
+    if base_url:
+        return "openai-chat"
+    if colon:
+        return ""  # split_spec raises here: an unknown vendor, not a bare name
+    if spec.startswith("claude"):
+        return "anthropic"
+    if spec.startswith(("gpt", "o1", "o3", "o4")):
+        return "openai"
+    return "google"
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
-    restates the rule. Change one and change the other.
+
+def resolve_brain_backend(env: dict[str, str]) -> str:
+    """How the in-process brain (brain_client) will reach the model LLM_MODEL names.
+
+    A server (LLM_BASE_URL) needs no key; Claude uses its key before the proxy;
+    otherwise the service key wins (it also buys voice, which a vendor key does
+    not), then the vendor's own key. brain_client's `configure()`
+    (llm/configure.py) makes the real choice and owns this precedence; the
+    launcher runs on the host and cannot import it, so this restates the rule.
+    Change one and change the other.
     """
+    base_url = env.get("LLM_BASE_URL", "").strip()
+    vendor = llm_vendor(env.get("LLM_MODEL") or env.get("GEMINI_MODEL") or DEFAULT_LLM_MODEL, base_url)
+    if vendor == "openai-chat" and base_url:
+        return SERVER_BACKEND
+    if not vendor:
+        return NO_BACKEND
+    key_env = VENDOR_API_KEYS[vendor]
+    has_key = is_configured_secret_value(key_env, env.get(key_env, ""))
+    if vendor == "anthropic":
+        return VENDOR_BACKEND if has_key else NO_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
-    if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):
-        return GEMINI_BACKEND
-    return NO_BACKEND
+    return VENDOR_BACKEND if has_key else NO_BACKEND
 
 
 def require_path(path: Path, label: str) -> Path:
@@ -588,6 +642,72 @@ def compute_assets_image_inputs_hash(repo_root: Path) -> str:
 
 def resolve_assets_image(repo_root: Path) -> str:
     return f"{DEFAULT_SIM_ASSETS_IMAGE}:inputs-{compute_assets_image_inputs_hash(repo_root)}"
+
+
+def resolve_fallback_assets_image() -> str:
+    return f"{DEFAULT_SIM_ASSETS_IMAGE}:{ASSETS_FALLBACK_TAG}"
+
+
+@dataclasses.dataclass(frozen=True)
+class EnvironmentAssets:
+    """What one environment needs on disk, per install root.
+
+    The contract `up` gates on. A content hash over sim/environments and
+    sim/tools answers a different question -- was this store built from these
+    bytes -- and answers it wrongly for the common cases: a manifest the driver
+    reads live, or an edit to a pipeline whose output the launched world never
+    loads.
+    """
+
+    assets: tuple[str, ...]  # under sim/assets
+    viewer: tuple[str, ...]  # under sim/viewer/public
+
+
+def environment_manifest_path(repo_root: Path, environment_id: str) -> Path:
+    candidates = [repo_root / "sim" / root / environment_id / "manifest.json" for root in ENVIRONMENT_MANIFEST_ROOTS]
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def available_environment_ids(repo_root: Path) -> list[str]:
+    sim = repo_root / "sim"
+    return sorted(
+        {path.parent.name for root in ENVIRONMENT_MANIFEST_ROOTS for path in (sim / root).glob("*/manifest.json")}
+    )
+
+
+def _viewer_paths(viewer: dict[str, str]) -> tuple[str, ...]:
+    """The browser assets whose absence means this pack is not installed.
+
+    Every path the manifest names except the one the image does not ship: the
+    apartment's monolith glb is scene.ts's fallback for a missing room
+    manifest, and sim/Dockerfile.assets deliberately leaves it out, so
+    requiring it would refuse a healthy install. Where the rooms are streamed,
+    the manifest and the directory it streams from are what must be there.
+    """
+    keys = ("manifest", "base_dir", "collision_dir") if "manifest" in viewer else ("model", "collision_dir")
+    return tuple(str(viewer[key]) for key in keys if key in viewer)
+
+
+def read_environment_assets(repo_root: Path, environment_id: str) -> EnvironmentAssets | None:
+    """None when no manifest describes `environment_id`, or it does not parse.
+
+    Not an error here: the driver reports a broken pack against the world it
+    was asked to load, with the available ids -- far better than a launcher
+    gate can, and refusing to start is the behaviour being removed.
+    """
+    try:
+        manifest = json.loads(environment_manifest_path(repo_root, environment_id).read_text(encoding="utf-8"))
+        physics, viewer = manifest["physics"], manifest["viewer"]
+        return EnvironmentAssets(
+            assets=(
+                str(physics["collision_dir"]),
+                str(physics["visual_dir"]),
+                str(manifest["navigation"]["map_yaml"]),
+            ),
+            viewer=_viewer_paths(viewer),
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 @functools.lru_cache
@@ -705,7 +825,7 @@ def get_config() -> dict[str, object]:
 
     user_env = parse_env_file(ENV_PATH)
     raw_env = dict(user_env)
-    for key in SECRET_ENV_KEYS:
+    for key in (*SECRET_ENV_KEYS, *VENDOR_ENV_KEYS):
         value = os.environ.get(key, "").strip()
         if is_configured_secret_value(key, value):
             raw_env[key] = value

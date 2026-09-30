@@ -28,7 +28,8 @@ One rule covers interfaces, cameras and robot state: annotate what you read.
 ``arm: Arm``, ``map: Map``, ``joint_states: JointStates``,
 ``head_position: HeadState``, ``image: MainImage`` / ``WristImage`` /
 ``DepthMap``, ``mobility: Mobility``, ``head: Head``,
-``memory: SpatialMemory`` (recall over the robot's spatial memory). A plain annotation is
+``memory: SpatialMemory`` (recall over the robot's spatial memory), ``llm: Llm`` (the robot's
+model, for asking about a frame; ``llm: Llm = Llm("google:gemini-3.5-flash")`` pins one). A plain annotation is
 guaranteed inside execute() — the server waits for the first value and fails
 the run up front if none arrives — so no None guards are needed; ``| None``
 (``head: Head | None``) makes it best effort instead, injected when available
@@ -112,6 +113,7 @@ __all__ = [
     "InputRef",
     "JointStates",
     "Lidar",
+    "Llm",
     "MainImage",
     "Manipulation",
     "Map",
@@ -139,6 +141,7 @@ __all__ = [
 # Type checkers can't follow __getattr__, so they read the imports below.
 if TYPE_CHECKING:
     from brain_client.robot.head import Head
+    from brain_client.robot.llm import Llm
     from brain_client.robot.manipulation import Manipulation, Waypoint
     from brain_client.robot.mobility import Mobility
     from brain_client.robot.spatial_memory import RecallVerdict, SpatialMemory
@@ -147,6 +150,7 @@ _LAZY_INTERFACES = {
     "Mobility": ("brain_client.robot.mobility", "Mobility"),
     "Manipulation": ("brain_client.robot.manipulation", "Manipulation"),
     "Head": ("brain_client.robot.head", "Head"),
+    "Llm": ("brain_client.robot.llm", "Llm"),
     "Waypoint": ("brain_client.robot.manipulation", "Waypoint"),
     "SpatialMemory": ("brain_client.robot.spatial_memory", "SpatialMemory"),
     "RecallVerdict": ("brain_client.robot.spatial_memory", "RecallVerdict"),

@@ -982,6 +982,8 @@ select.skill-input {
   flex-direction: column;
   gap: 7px;
   padding: 10px 14px 9px;
+  /* left: 50% alone would cap an auto width at half the stage. */
+  width: max-content;
   max-width: min(440px, calc(100% - 28px));
   background: rgb(0 0 0 / 66%);
   backdrop-filter: blur(20px);
@@ -1006,6 +1008,13 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 .agent-cockpit .tgt-hud {
   top: auto;
   bottom: 14px;
+}
+
+/* On a phone the bottom edge is the chat sheet's: sit under the camera previews instead
+   (the stack's inset plus an 80px preview). The stage spans the display, so add the notch. */
+.agent-cockpit.agent-compact .tgt-hud {
+  top: calc(var(--sim-safe-top, 0px) + var(--agent-overlay-inset) + 80px + 10px);
+  bottom: auto;
 }
 
 .tgt-hud.ok {
@@ -1175,6 +1184,27 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 
   .tgt-prompt {
     font-size: 11px;
+  }
+
+  /* Five stages at desktop spacing run past a phone-width HUD: tighten, and wrap as a last resort. */
+  .tgt-stages {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .tgt-stage {
+    gap: 4px;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+  }
+
+  .tgt-stage + .tgt-stage {
+    margin-left: 4px;
+    padding-left: 10px;
+  }
+
+  .tgt-stage + .tgt-stage::after {
+    width: 6px;
   }
 }
 
@@ -2226,6 +2256,9 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 .cam-map-host.big {
   position: absolute;
   inset: 0;
+  /* The thumbnail's 100% would outrank the insets below and run the map past the frame. */
+  width: auto;
+  height: auto;
   background: #000;
 }
 
@@ -2241,6 +2274,7 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   z-index: 1;
 }
 
+/* Only where the frame is a box rather than full bleed (see the 641-1400 override). */
 @media (min-width: 1401px) {
   /* Inset by the frame's 1px border rather than drawing a second one, so the
      map sits in the frame the same way the feed does and the hairline stays
@@ -2248,12 +2282,9 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
      border, matching the video. */
   .agent-cockpit.agent-sim .cam-map-host.big {
     top: calc(var(--agent-dock-gutter) + 1px);
-    right: auto;
-    bottom: auto;
+    right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter) + 1px);
+    bottom: calc(var(--agent-dock-gutter) + 1px);
     left: calc(var(--agent-dock-gutter) + 1px);
-    width: calc(var(--agent-frame-width) - 2px);
-    height: auto;
-    aspect-ratio: 4 / 3;
     overflow: hidden;
     border-radius: 17px;
   }
@@ -5784,6 +5815,62 @@ select.episodes-tool {
   cursor: default;
 }
 
+/* Publish-to-Hugging-Face dialog (datasets/publishModal.js): covers the page, not a pane. */
+.modal-backdrop--page {
+  position: fixed;
+  z-index: 60;
+}
+
+.hub-modal {
+  width: min(460px, 100%);
+}
+
+.hub-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hub-repo .modal-select {
+  flex: 0 1 45%;
+  min-width: 0;
+}
+
+.hub-repo .modal-input {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.hub-repo-slash {
+  color: var(--muted);
+}
+
+.hub-heading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.hub-bar {
+  height: 8px;
+}
+
+.hub-error {
+  overflow-wrap: anywhere;
+}
+
+a.hub-action {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+
+.hub-visibility a {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 /* training empty state (no local runs) */
 .training-empty {
   min-height: 100%;
@@ -7454,6 +7541,40 @@ select.skill-input {
   background: rgb(217 106 90 / 10%);
 }
 
+.agent-compact .chat-skill-head {
+  grid-template-columns: 18px minmax(0, 1fr) auto 12px;
+  min-height: 44px;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.agent-compact .chat-skill-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-compact :is(.chat-skill, .chat-skill-group):is(.completed, .failed) > .chat-skill-head .chat-skill-icon::before {
+  width: 11px;
+  height: 11px;
+}
+
+.agent-compact .chat-skill-name {
+  font-size: 12px;
+}
+
+.agent-compact .chat-skill-status {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
+.agent-compact .chat-skill-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
 .chat-skill-head:focus-visible {
   outline: 2px solid var(--ctl-accent);
   outline-offset: -3px;
@@ -7509,14 +7630,23 @@ select.skill-input {
 .agent-cockpit {
   --agent-dock-width: 360px;
   --agent-dock-gutter: 18px;
+  --agent-view-toggle-width: 136px;
   /* Inset of every floating control from the feed frame's edge. The camera
      strip set the precedent; the rest match it. */
   --agent-overlay-inset: 14px;
+  /* The agent panel's liquid glass, on desktop and on the phone alike. */
+  --agent-glass-bg:
+    linear-gradient(160deg, rgb(255 255 255 / 13%), rgb(255 255 255 / 4%) 42%, rgb(255 255 255 / 2%)),
+    rgb(14 14 18 / 72%);
+  --agent-glass-border: 1px solid rgb(255 255 255 / 16%);
+  --agent-glass-blur: blur(28px) saturate(1.6);
+  --agent-glass-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), inset 0 -1px 0 rgb(255 255 255 / 4%), 0 18px 48px rgb(0 0 0 / 32%);
   --agent-telemetry-height: 56px;
   /* The bottom sheet's closed height — its header and nothing else. agentSheet.js
      needs this as a number, so the two must agree. */
   --agent-sheet-closed: 52px;
   --agent-sheet-half-min: 320px;
+  --agent-compose-overlap: 14px;
 }
 
 .agent-cockpit .agent-feed-frame {
@@ -8581,6 +8711,7 @@ select.skill-input {
 }
 
 .agent-thoughts-panel {
+  --agent-chat-gutter: 16px;
   display: flex;
   flex: 1 1 auto;
   width: 100%;
@@ -8626,7 +8757,6 @@ select.skill-input {
     max-height: 100%;
     border: 1px solid transparent;
     border-radius: 18px;
-    object-position: left top;
   }
 
   .agent-cockpit .video-stage.video-ready video {
@@ -8636,8 +8766,8 @@ select.skill-input {
   .agent-cockpit .agent-telemetry-overlay {
     top: auto;
     right: auto;
-    bottom: var(--agent-dock-gutter);
-    left: var(--agent-dock-gutter);
+    bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
   }
 
   .agent-cockpit .agent-stage-view-toggle {
@@ -8751,6 +8881,27 @@ select.skill-input {
    covers the page — panel and rail included. */
 .agent-brain:has(.br-inspect:not([hidden])) {
   z-index: 60;
+}
+
+/* The agent's pill floats over this layer's top-left corner and stays live in both views,
+   so the monitor starts below it. The pill is 62px tall at its own inset, plus a gap. */
+.agent-cockpit .agent-brain {
+  padding-top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset) + 74px);
+}
+
+/* Where Inspect Brain can open the monitor: its content lines up with the pill on the left and
+   ends where the toggle does on the right, clear of the docked panel. The toggle keeps its
+   corner in both views, so the monitor's last row stops short of it. */
+@media (min-width: 1281px) {
+  .agent-cockpit .agent-brain {
+    padding-right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    padding-bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+    padding-left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  }
+
+  .agent-cockpit .agent-brain .br-panel-vitals {
+    margin-right: calc(var(--agent-view-toggle-width) + 12px); /* the grid's gap */
+  }
 }
 
 .agent-cockpit .agent-panel {
@@ -8925,7 +9076,7 @@ select.skill-input {
   background: rgb(255 255 255 / 7%);
 }
 
-.agent-directive-option.create { margin-top: 4px; border-top: 1px solid rgb(255 255 255 / 10%); border-radius: 0 0 7px 7px; color: var(--muted); }
+.agent-directive-option.create { margin-bottom: 4px; border-bottom: 1px solid rgb(255 255 255 / 10%); border-radius: 7px 7px 0 0; color: var(--muted); }
 .agent-directive-option.create .agent-directive-check { opacity: 1; justify-content: center; color: var(--muted); }
 .agent-directive-check {
   display: flex;
@@ -9249,7 +9400,57 @@ select.skill-input {
   margin-block: 6px;
 }
 
+.agent-compact .agent-stream > :is(.chat-msg, .chat-skill, .chat-skill-group) {
+  margin-block: 4px;
+}
+
+.agent-chat-viewport {
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.agent-thoughts-panel > .agent-chat-viewport {
+  /* Cancel the flex gap and let content pass behind the rounded input edge. */
+  margin-bottom: calc(-12px - var(--agent-compose-overlap, 14px));
+}
+.agent-thoughts-panel > .agent-chat-viewport .agent-stream-wrap.with-offers {
+  padding-bottom: var(--agent-compose-overlap, 14px);
+}
+.agent-thoughts-panel > .agent-chat-viewport .agent-chat-latest {
+  bottom: calc(12px + var(--agent-compose-overlap, 14px));
+}
+
+.agent-chat-latest {
+  position: absolute;
+  z-index: 3;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 50%;
+  background: #3e3e40;
+  color: #fff;
+  box-shadow: 0 3px 14px rgb(0 0 0 / 24%);
+  cursor: pointer;
+}
+
+.agent-chat-latest svg { width: 18px; height: 18px; }
+/* Keep a 44px touch target around the smaller visible button. */
+.agent-chat-latest::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; }
+
+.agent-chat-latest[hidden] { display: none; }
+.agent-chat-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
 .agent-stream-wrap {
+  min-width: 0;
   position: relative;
   display: flex;
   flex: 1 1 auto;
@@ -9258,6 +9459,8 @@ select.skill-input {
 }
 
 .agent-stream {
+  min-width: 0;
+  overflow-wrap: anywhere;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -9332,6 +9535,8 @@ select.skill-input {
 }
 
 .agent-compose-area {
+  position: relative;
+  z-index: 4;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -9347,6 +9552,11 @@ select.skill-input {
   color: var(--agent-purple);
   font-size: 12px;
   line-height: 16px;
+}
+
+.agent-stream-wrap > .agent-thinking {
+  flex: 0 0 16px;
+  margin-bottom: 8px;
 }
 
 .agent-thinking::before {
@@ -9378,14 +9588,14 @@ select.skill-input {
   gap: 4px;
   align-items: flex-end;
   padding: 6px 10px 6px 6px;
-  background: var(--ctl-field);
+  background: #0e0e11;
   border: 1px solid var(--hairline-strong);
   border-radius: 15px;
   transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .agent-compose:focus-within {
-  background: rgb(8 8 10 / 78%);
+  background: #131317;
   border-color: var(--agent-purple-edge);
   box-shadow: 0 0 0 2px rgb(64 31 251 / 10%);
 }
@@ -9393,7 +9603,7 @@ select.skill-input {
 .agent-cockpit.agent-sim .agent-compose:has(.agent-mic-control:is(.waiting, .listening)) {
   flex: 0 0 auto;
   overflow: hidden;
-  background: rgb(10 9 15 / 96%);
+  background: rgb(10 9 15);
   border-color: rgb(151 135 255 / 42%);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 12%),
@@ -9648,25 +9858,24 @@ select.skill-input {
 
 @media (min-width: 641px) {
   .agent-cockpit .agent-stage-view-toggle {
-    width: 136px;
+    width: var(--agent-view-toggle-width);
     justify-content: center;
   }
 }
 
 @media (min-width: 641px) {
+  /* The scene renders at whatever shape it is given, so it takes the room the chat does
+     not: deriving its height from its width instead ran it off the bottom of any display
+     wider than 4:3 plus the chat. */
   .agent-cockpit.agent-sim .agent-feed-frame {
     position: absolute;
     display: block;
     top: var(--agent-dock-gutter);
-    right: auto;
-    bottom: auto;
+    right: calc(var(--agent-dock-width) + var(--agent-dock-gutter) + var(--agent-dock-gutter));
+    bottom: var(--agent-dock-gutter);
     left: var(--agent-dock-gutter);
-    width: calc(
-      100% - var(--agent-dock-width) - var(--agent-dock-gutter) -
-        var(--agent-dock-gutter) - var(--agent-dock-gutter)
-    );
+    width: auto;
     height: auto;
-    aspect-ratio: 4 / 3;
     overflow: hidden;
     background: #000;
     border: 1px solid color-mix(in srgb, var(--text) 34%, var(--bg));
@@ -9681,7 +9890,6 @@ select.skill-input {
     left: 0;
     width: 100%;
     height: 100%;
-    aspect-ratio: 4 / 3;
     transform: none;
   }
 
@@ -9721,7 +9929,6 @@ select.skill-input {
     max-height: none;
     border: 0;
     border-radius: 0;
-    object-position: center;
     object-fit: cover;
   }
 
@@ -9742,29 +9949,6 @@ select.skill-input {
 
   .agent-cockpit.agent-sim .video-stage > :is(canvas, video) {
     border-radius: 0;
-  }
-}
-
-/* Wide-but-short screens: the 4:3 frame is derived from whatever width the dock
-   leaves over, so past a certain aspect ratio it is taller than the stage and
-   its bottom corners get cropped. Invert the dependency — size the frame from
-   the available height, then define the dock as the width left over. Every rule
-   that already anchors to --agent-dock-width (the panel, the camera strip, the
-   Inspect Brain toggle) then follows the frame's edge for free. Below this the
-   dock's own width still binds, so the two agree at the boundary. */
-@media (min-width: 1401px) {
-  .agent-cockpit.agent-sim {
-    /* Fixed dock width, kept as its own name so --agent-dock-width can be
-       derived below without a circular reference. */
-    --agent-dock-base: 388px;
-    --agent-frame-fit: calc((100dvh - 2 * var(--agent-dock-gutter)) * 4 / 3);
-    --agent-frame-max: calc(
-      100% - var(--agent-dock-base) - 3 * var(--agent-dock-gutter)
-    );
-    --agent-frame-width: min(var(--agent-frame-fit), var(--agent-frame-max));
-    --agent-dock-width: calc(
-      100% - var(--agent-frame-width) - 3 * var(--agent-dock-gutter)
-    );
   }
 }
 
@@ -9882,6 +10066,7 @@ select.skill-input {
   }
 
   .agent-compact .agent-thoughts-panel {
+    --agent-chat-gutter: 14px;
     padding: 12px 14px;
     background: transparent;
     backdrop-filter: none;
@@ -9922,6 +10107,10 @@ select.skill-input {
     min-height: 42px;
     padding-top: 10px;
     padding-bottom: 10px;
+  }
+
+  .agent-compact .agent-compose-focus-key {
+    display: none;
   }
 
   .agent-compact .agent-compose-placeholder {
@@ -10263,15 +10452,45 @@ select.skill-input {
     min-width: 0;
   }
 
-  /* Camera tiles shrink to share the width (3 tiles + gaps + insets), and
-     no page keeps a top-right toggle on phones -- use the full width. */
+  /* Leave room for the eye toggle beside three square previews. */
   .cam-strip,
   .cockpit:not(.agent-cockpit) .cam-strip {
-    --pip-w: min(92px, 21vw);
-    --pip-h: min(92px, 21vw);
+    --pip-w: min(80px, calc((100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 100px) / 3));
+    --pip-h: var(--pip-w);
     --pip-gap: 6px;
-    padding: 6px;
-    right: 14px;
+    padding: 0;
+    right: 66px;
+  }
+
+  .agent-cockpit.agent-compact .overlay-stack-top-left {
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .agent-cockpit .cam-strip-toggle {
+    flex: none;
+    align-self: flex-start;
+  }
+
+  .agent-cockpit.agent-compact .cam-strip {
+    --pip-gap: 6px;
+    right: auto;
+  }
+
+  .cam-tile.live {
+    height: var(--pip-h);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .cam-tile-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    height: 20px;
+    padding-inline: 7px;
+    border-radius: 0 7px 0 0;
   }
 
   /* The joystick sits above the stacked speak bar + Skills launcher. */
@@ -11045,6 +11264,20 @@ select.skill-input {
   box-shadow: 0 8px 30px rgb(0 0 0 / 50%), 0 0 26px rgb(180 140 255 / 14%);
 }
 
+/* On the full stage the top belongs to the camera strip and the agent's pill, and the card
+   sits inside the map's own stacking context, so it can never paint over either — it rises
+   from the bottom instead. The offset clears the corner controls that sit there: 56px tall
+   at a 14px inset, plus a gap. */
+.cam-map-host.big .mem-search-card {
+  top: auto;
+  bottom: 82px;
+  transform: translate(-50%, 10px);
+}
+
+.cam-map-host.big .mem-search-card.is-in {
+  transform: translate(-50%, 0);
+}
+
 .mem-search-head {
   display: flex;
   align-items: center;
@@ -11292,30 +11525,40 @@ select.skill-input {
   z-index: 30;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: stretch;
+  max-width: min(380px, calc(100vw - 120px));
+  color: rgb(255 255 255 / 88%);
+  /* One sheet of glass: the header with Start/Stop and the editor under it. */
+  border: var(--agent-glass-border);
+  border-radius: 22px;
+  background: var(--agent-glass-bg);
+  backdrop-filter: var(--agent-glass-blur); -webkit-backdrop-filter: var(--agent-glass-blur);
+  /* Secondary text over a bright world (the Backrooms' yellow): the page grey is too faint on glass. */
+  --muted: rgb(255 255 255 / 68%);
+  box-shadow: var(--agent-glass-shadow);
+  transition: border-color 160ms ease;
 }
-/* The dock's pill and the skip button share the stage's glass chrome. The pill is a
-   row, not a button: it carries the agent's Start/Stop, and a button cannot hold one. */
-.agent-studio-dock-head,
+.agent-studio-dock:not(.open):hover { border-color: rgb(255 255 255 / 30%); }
+/* Desktop only: the phone sheet sizes itself, and these would push it off the screen's edge. */
+.agent-cockpit:not(.agent-compact) .agent-studio-dock.open { width: min(340px, calc(100vw - 120px)); }
+.agent-cockpit:not(.agent-compact) .agent-studio-dock.open:has(.agent-studio.story) { width: min(380px, calc(100vw - 120px)); }
+/* The row is not a button: it carries the agent's Start/Stop, and a button cannot hold one. */
+.agent-studio-dock-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .agent-skip-ahead {
   color: rgb(255 255 255 / 88%); background: rgb(8 8 10 / 76%);
   backdrop-filter: blur(20px) saturate(1.1); -webkit-backdrop-filter: blur(20px) saturate(1.1);
   border: 1px solid rgb(255 255 255 / 18%); font: inherit; cursor: pointer;
 }
-.agent-studio-dock-head {
-  display: flex; align-items: center; gap: 8px;
-  max-width: min(380px, calc(100vw - 120px)); border-radius: 14px;
-}
-.agent-studio-dock-head:hover { border-color: rgb(255 255 255 / 32%); }
 .agent-studio-dock-toggle {
-  display: grid; align-items: center; gap: 0 12px; padding: 10px 4px 10px 14px;
+  display: grid; align-items: center; gap: 0 12px; padding: 12px 4px 12px 16px;
   grid-template-columns: auto minmax(0, 1fr) auto;
   flex: 1; min-width: 0; text-align: left;
-  color: inherit; background: transparent; border: 0; border-radius: 14px 0 0 14px;
+  color: inherit; background: transparent; border: 0; border-radius: 22px 0 0 22px;
   font: inherit; cursor: pointer;
 }
-.agent-studio-dock-action { display: flex; padding-right: 8px; }
+/* Clear of the pill's 14px corner: at 8px the button's own corner broke through the curve
+   and read as hanging off the edge. Matches the toggle's leading inset. */
+.agent-studio-dock-action { display: flex; padding-right: 16px; }
 .agent-studio-dock-action .agent-toggle { height: 32px; }
 .agent-studio-dock-icon { grid-row: 1 / 3; width: 22px; height: 22px; }
 .agent-studio-dock-toggle .microlabel { grid-column: 2; color: rgb(255 255 255 / 55%); }
@@ -11324,6 +11567,14 @@ select.skill-input {
 .agent-studio-dock-chevron svg { width: 18px; height: 18px; }
 .agent-studio-dock.open .agent-studio-dock-chevron { transform: rotate(180deg); }
 .agent-studio .agent-controls { margin: 0 0 10px; }
+.agent-studio :is(.agent-directive, .agent-reset) {
+  height: 38px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 12px;
+  background: rgb(255 255 255 / 8%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%);
+}
+.agent-studio .agent-reset { flex-basis: 38px; width: 38px; }
+.agent-studio :is(.agent-directive:hover:not(:disabled), .agent-directive-picker.open .agent-directive, .agent-reset:hover:not(:disabled)) {
+  background: rgb(255 255 255 / 14%); border-color: rgb(255 255 255 / 28%);
+}
 /* Bottom-left, where the scene setup sits once the story is over. */
 .agent-skip-ahead {
   position: absolute; z-index: 30;
@@ -11334,43 +11585,37 @@ select.skill-input {
 .agent-skip-ahead:hover { color: #fff; border-color: rgb(255 255 255 / 32%); }
 .agent-studio-dock:not(.open) .agent-studio { display: none; }
 .agent-studio {
-  width: min(320px, calc(100vw - 120px));
-  padding: 14px 16px 12px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 12px;
-  background: rgb(16 16 20 / 92%);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  box-sizing: border-box;
+  padding: 4px 16px 16px;
   color: var(--text);
 }
-/* Room for the story's cards beside the prompt: two characters to a row. */
-.agent-studio.story { width: min(380px, calc(100vw - 120px)); }
 .agent-studio-pane > .agent-offers { margin-top: 16px; } /* room for its badge */
 .agent-studio-pane > .agent-offers + .agent-studio-skills { margin-top: 10px; }
 .agent-studio-title { font-size: 15px; font-weight: 550; letter-spacing: -0.01em; }
 .agent-studio-note { margin: 8px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .agent-studio-note.warn { color: #e0c27a; }
 .agent-studio.story .agent-studio-note { color: #c9c3ff; }
-.agent-studio-caption { margin: 14px 0 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.agent-studio-caption { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .agent-studio-action {
   width: 100%;
   margin-bottom: 10px;
   padding: 10px 12px;
   border: 1px solid #7965e7;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #5941ca;
   color: #fff;
   font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
+.agent-studio-action:not(.quiet):hover { background: #6650d6; }
 .agent-studio-action:disabled { opacity: 0.5; cursor: wait; }
 .agent-studio-skills {
   list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px;
   max-height: 34vh; overflow: auto;
 }
 /* Identity / Skills / Advanced: one concern at a time in a 320px panel. */
-.agent-studio-tabs { display: flex; margin: 12px 0 4px; border-bottom: 1px solid var(--hairline-strong); }
+.agent-studio-tabs { display: flex; margin: 0 0 4px; border-bottom: 1px solid var(--hairline-strong); }
 .agent-studio-tab {
   flex: 1; padding: 8px 4px; border: 0; border-bottom: 2px solid transparent; background: transparent;
   color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
@@ -11401,10 +11646,12 @@ select.skill-input {
 .agent-studio-skill-remove:hover { background: rgb(255 255 255 / 10%); color: #fff; }
 /* Every text input in the panel, the form's fields, the add-skill chooser, and the save bar. */
 .agent-studio :is(input, textarea) {
-  width: 100%; box-sizing: border-box; padding: 8px 10px;
-  border: 1px solid var(--hairline-strong); border-radius: 8px;
-  background: rgb(255 255 255 / 5%); color: var(--text); font: inherit; font-size: 13px; line-height: 1.4;
+  width: 100%; box-sizing: border-box; padding: 9px 12px;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px;
+  background: rgb(255 255 255 / 6%); box-shadow: inset 0 1px 2px rgb(0 0 0 / 18%);
+  color: var(--text); font: inherit; font-size: 13px; line-height: 1.45;
 }
+.agent-studio :is(input, textarea):focus { outline: none; border-color: rgb(148 130 255 / 70%); background: rgb(255 255 255 / 9%); }
 .agent-studio :is(.agent-studio-add, .agent-studio-savebar, .agent-studio-actions) .agent-studio-action {
   width: auto; margin: 0; padding: 8px 12px; font-size: 12px;
 }
@@ -11412,11 +11659,47 @@ select.skill-input {
 .agent-studio-field .microlabel { color: var(--muted); }
 .agent-studio-field textarea { min-height: 168px; max-height: 40vh; resize: vertical; }
 .agent-studio-field textarea:read-only { resize: none; color: #c8c8d0; background: transparent; }
+/* Model: a button that opens a grouped listbox, in the flow like the skill chooser below.
+   It sits above the tabs, with the agent rather than inside the agent's own fields. */
+.agent-studio-model { position: relative; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 2px; }
+.agent-studio-model > .microlabel { color: var(--muted); }
+.agent-studio-model-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  margin: 0; padding: 9px 12px; font-size: 13px; text-align: left;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px; background: rgb(10 10 14 / 55%); color: inherit;
+}
+.agent-studio-model-btn:hover:not(:disabled) { border-color: rgb(121 101 231 / 55%); }
+.agent-studio-model-btn:disabled { opacity: .6; }
+.agent-studio-model-menu {
+  margin-top: 6px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 14px; background: rgb(10 10 14 / 92%);
+  max-height: 46vh; overflow-y: auto;
+}
+.agent-studio-model-group {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.agent-studio-model-group i { font-style: normal; letter-spacing: 0; text-transform: none; color: #e0a06a; }
+.agent-studio-model-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box;
+  margin: 0; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.agent-studio-model-row:hover, .agent-studio-model-row:focus-visible { background: rgb(255 255 255 / 7%); outline: none; }
+.agent-studio-model-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-studio-model-row-text b { font-weight: 500; }
+.agent-studio-model-row-text i { font-style: normal; font-size: 11px; color: #e0a06a; }
+.agent-studio-model-row.is-unreachable .agent-studio-model-row-text b { opacity: .55; }
+.agent-studio-model-row-tick { margin-left: auto; color: #7965e7; }
+.agent-studio-model-more { display: block; padding: 9px 10px 4px; font-size: 12px; color: #9a8cf0; text-decoration: none; }
+.agent-studio-model-more:hover { text-decoration: underline; }
+.agent-studio-model-note { margin: 6px 2px 0; font-size: 11px; color: #e0a06a; }
+.agent-studio-model-busy { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); }
 .agent-studio-add { margin-top: 8px; }
 /* In the flow rather than floating over the panel, which is only as tall as its tab. */
 .agent-studio-chooser {
   width: 100%; box-sizing: border-box; margin-top: 8px; padding: 8px;
-  border: 1px solid var(--hairline-strong); border-radius: 10px; background: #16161b;
+  border: 1px solid rgb(255 255 255 / 12%); border-radius: 14px; background: rgb(10 10 14 / 55%);
 }
 .agent-studio .agent-studio-chooser-search { margin-bottom: 6px; padding: 7px 10px; font-size: 12px; }
 .agent-studio-chooser-list { max-height: 240px; margin: 0; padding: 0; overflow: auto; list-style: none; }
@@ -11438,7 +11721,6 @@ select.skill-input {
 .agent-thoughts-panel > .agent-controls { margin-bottom: 10px; }
 
 /* Agent detail: story reveal and offers */
-.agent-studio-persona { display: block; margin-top: 2px; color: #c9c3ff; font-size: 12px; }
 .agent-studio-prompt button {
   padding: 8px 12px; border: 1px solid #55545e; border-radius: 8px;
   background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer;
@@ -11448,8 +11730,8 @@ select.skill-input {
 .agent-studio-prompt button { align-self: flex-end; }
 .agent-studio-empty { color: var(--muted); font-size: 12px; padding: 6px 8px; }
 .agent-studio-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.agent-studio-action.quiet { background: transparent; border-color: #4a4a54; color: #d8d8de; }
-.agent-studio-action.quiet:hover { border-color: #8a8a96; }
+.agent-studio-action.quiet { background: rgb(255 255 255 / 6%); border-color: rgb(255 255 255 / 14%); color: #e4e4ea; }
+.agent-studio-action.quiet:hover { background: rgb(255 255 255 / 11%); border-color: rgb(255 255 255 / 26%); }
 .agent-studio-link { display: inline-block; text-decoration: none; text-align: center; }
 
 /* The door out of Nowhere: everything goes white until the next world is in. */
@@ -11493,7 +11775,10 @@ body.story-active :is(.rail, .rail-ribbon, .rail-scrim, .sim-scene-setup, .agent
 body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg:is(.skill-output, .system):not(.narrator) { display: none; }
-.agent-cockpit.story-active .agent-stream.compact > .chat-thoughts { display: none; }
+/* A first-timer does not need the model's reasoning, and with it never shown the Compact /
+   Detailed switch has nothing to switch: both go until the story is over. */
+.agent-cockpit.story-active .agent-stream > .chat-thoughts { display: none; }
+.agent-cockpit.story-active .agent-stream-mode { display: none; }
 /* In the story a failure is a setback, not an alarm. */
 .agent-cockpit.story-active .agent-stream .chat-skill.failed { border-left-color: #d9a441; }
 .agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
@@ -11546,6 +11831,7 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 /* The scene setup's button sits at the stage's edge, with the challenge flag (z 13) beside it:
    the badge anchors to its left edge and the whole stack rises over the flag while cued. */
 .sim-scene-toggle .ui-cue-badge { --badge-x: 0; --badge-shift: 0; }
+.agent-studio-tab.ui-cue, .agent-studio-action.ui-cue, .agent-directive.ui-cue { position: relative; }
 .agent-cockpit .sim-debug-stack:has(.ui-cue) { z-index: 14; }
 /* The square that closes in on a camera tile once, when the story says to look at it. */
 .ui-cue-square {
@@ -11580,7 +11866,7 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
   100% { background: rgb(255 255 255 / 4%); box-shadow: none; }
 }
 
-/* ---- the offer deck: what the interface asks for, docked above the composer ---------- */
+/* ---- the offer deck: suggestions scroll with the transcript ---------- */
 .agent-offers {
   position: relative; /* its cue badge */
   display: flex; flex-direction: column; gap: 8px;
@@ -11594,7 +11880,30 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-offers[hidden], .agent-offers-title[hidden], .agent-offers-grid[hidden], .agent-offers-row[hidden] { display: none; }
 @keyframes agent-offers-in { from { opacity: 0; transform: translateY(6px); } }
 .agent-offers.ui-cue { border-color: var(--accent); }
-.agent-compose-area > .agent-offers { margin-top: 6px; }
+.agent-stream-wrap.with-offers {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 22%) transparent;
+  /* The card aligns with skill results; its glow uses the full panel gutter
+     and clips only at the chat border, never at the content padding. */
+  margin-inline: calc(-1 * var(--agent-chat-gutter, 16px));
+  padding: 4px var(--agent-chat-gutter, 16px) 0;
+}
+.agent-stream-wrap.with-offers > .agent-stream {
+  flex: 1 0 auto;
+  overflow: visible;
+  margin-right: 0;
+  padding-right: 0;
+}
+.agent-stream-wrap.with-offers > :is(.agent-offers, .agent-offer-stack) {
+  flex: 0 0 auto;
+  margin: 36px 0 12px 2px;
+}
+.agent-offer-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.agent-offer-stack[hidden] { display: none; }
 .agent-offers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
 .agent-offers-kicker { color: rgb(255 255 255 / 48%); }
 .agent-offers-kicker[hidden] { display: none; }
@@ -11626,7 +11935,15 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 }
 .agent-offer-icon svg { width: 20px; height: 20px; }
 .agent-offer-copy { display: grid; gap: 2px; min-width: 0; }
-.agent-offer-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.agent-offer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
 .agent-offer-detail { font-size: 11px; line-height: 1.3; color: rgb(255 255 255 / 60%); }
 .agent-offer-detail:empty { display: none; }
 /* The grant: one skill across the deck, in the purple the agent's own chrome wears. */
@@ -11664,3 +11981,187 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
   :is(.ui-cue, .ui-cue-badge, .ui-cue-glow, .ui-cue-ring, .ui-cue-sheen > i, .agent-offers, .agent-studio-skill.landed) { animation: none; }
   :is(.ui-cue-ring, .ui-cue-square) { display: none; }
 }
+
+/* Safari's canvas can fill the display while controls retain the safe viewport.
+   Enabled only by the mobile simulator route; desktop and robot views keep their layout. */
+body.sim-edge-to-edge {
+  --sim-safe-top: env(safe-area-inset-top, 0px);
+  --sim-safe-right: env(safe-area-inset-right, 0px);
+  --sim-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --sim-safe-left: env(safe-area-inset-left, 0px);
+  padding: var(--sim-safe-top) var(--sim-safe-right) var(--sim-safe-bottom) var(--sim-safe-left);
+}
+html.keyboard-up body.sim-edge-to-edge { --sim-safe-bottom: 0px; }
+body.sim-edge-to-edge .stage { overflow: visible; }
+body.sim-edge-to-edge .agent-cockpit.agent-sim .agent-feed-frame > .video-stage {
+  position: fixed !important;
+  inset: 0 0 auto;
+  width: 100%;
+  height: 100vh;
+  height: 100lvh;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+@media (max-width: 640px) {
+  body.sim-edge-to-edge .rail { top: var(--sim-safe-top); bottom: var(--sim-safe-bottom); }
+  body.sim-edge-to-edge.rail-open .rail { left: var(--sim-safe-left); }
+  body.sim-edge-to-edge .rail-mark { top: var(--sim-safe-top); left: var(--sim-safe-left); }
+  body.sim-edge-to-edge .rail-ribbon { left: var(--sim-safe-left); }
+}
+
+.agent-corner-controls { display: contents; }
+.agent-menu-toggle { display: none; }
+
+@media (max-width: 820px) {
+  body:has(.agent-cockpit.agent-compact) .rail-mark { display: none; }
+
+  .agent-compact .agent-challenge-dock,
+  .agent-compact .sim-scene-panel > :not(.sim-environment-section) {
+    display: none;
+  }
+
+  .agent-compact .sim-scene-panel {
+    padding-top: 13px;
+  }
+
+  .agent-cockpit.agent-compact .overlay-stack-top-left {
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .agent-compact .agent-corner-controls {
+    display: flex;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 22%);
+    border-radius: 13px;
+    background: rgb(8 8 10 / 62%);
+    backdrop-filter: blur(14px) saturate(1.08);
+    -webkit-backdrop-filter: blur(14px) saturate(1.08);
+    box-shadow: var(--ctl-sheen);
+  }
+
+  .agent-compact .agent-corner-controls > button:not([hidden]) {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    backdrop-filter: none;
+    box-shadow: none;
+    color: var(--ctl-text);
+    cursor: pointer;
+  }
+
+  .agent-compact .agent-corner-controls > button.agent-menu-toggle {
+    border-left: 1px solid rgb(255 255 255 / 18%);
+  }
+
+  .agent-compact .agent-corner-controls > button:is(.is-on, [aria-expanded="true"]) {
+    color: var(--ctl-accent);
+    background: rgb(255 255 255 / 7%);
+  }
+
+  .agent-corner-controls > button:focus-visible { outline: 2px solid var(--ctl-accent); outline-offset: -3px; }
+
+  .agent-cockpit.agent-compact .cam-strip {
+    --pip-w: min(80px, calc((100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 144px) / 3));
+    --pip-h: var(--pip-w);
+    --pip-gap: 6px;
+    padding: 0;
+    right: auto;
+  }
+  /* The Agent page collapses its strip up to 820px (cameraSwitch.js); its toggle must show that far too. */
+  .agent-compact .cam-strip-toggle:not([hidden]) { display: grid; }
+  .agent-compact .cam-strip.collapsed { display: none; }
+  .agent-compact .cam-tile.live { height: var(--pip-h); grid-template-rows: minmax(0, 1fr); }
+  .agent-compact .cam-tile-label { position: absolute; bottom: 0; left: 0; width: max-content; height: 20px; padding-inline: 7px; border-radius: 0 7px 0 0; }
+
+  .agent-compact .agent-studio-dock {
+    top: calc(var(--agent-overlay-inset) + 54px);
+    right: var(--agent-overlay-inset);
+    left: auto;
+    max-width: calc(100% - 2 * var(--agent-overlay-inset));
+    z-index: 40;
+  }
+  .agent-compact .agent-studio-dock-head { display: none; }
+  /* On the phone the glass is the editor card itself; the dock around it stands down. */
+  .agent-compact .agent-studio-dock { width: auto; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .agent-compact .agent-studio {
+    border: var(--agent-glass-border);
+    background: var(--agent-glass-bg);
+    backdrop-filter: var(--agent-glass-blur);
+    -webkit-backdrop-filter: var(--agent-glass-blur);
+    box-shadow: var(--agent-glass-shadow);
+    width: min(360px, calc(100vw - 28px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+    display: flex;
+    flex-direction: column;
+    max-height: min(560px, calc(100dvh - 90px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+    overflow: hidden;
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .agent-compact .agent-studio > :not(.agent-studio-pane) { flex-shrink: 0; }
+
+  .agent-compact .agent-studio .agent-studio-note {
+    margin: 0;
+    color: rgb(255 255 255 / 50%);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .agent-compact .agent-studio-tabs { margin: 8px 0 0; }
+
+  .agent-compact .agent-studio-pane {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 18%) transparent;
+  }
+
+  .agent-studio-mobile-name {
+    margin: 0 0 6px;
+    color: #fff;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .agent-studio-mobile-prompt {
+    flex: none;
+    padding-top: 12px;
+    color: rgb(255 255 255 / 82%);
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+}
+
+/* Reply suggestions occupy a single, scrollable line on the phone. */
+.agent-try-mobile { display: none; }
+.agent-compact .agent-offers.replies-only {
+  flex-direction: row; align-items: center; gap: 8px;
+  padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
+}
+.agent-compact .replies-only .agent-offers-head { flex: 0 0 auto; padding: 0; }
+.agent-compact .replies-only .agent-offers-kicker { font: inherit; font-size: 12px; letter-spacing: normal; text-transform: none; }
+.agent-compact .replies-only .agent-try-desktop { display: none; }
+.agent-compact .replies-only .agent-try-mobile { display: inline; }
+.agent-compact .replies-only .agent-offers-row {
+  flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto;
+  scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.agent-compact .replies-only .agent-offers-row::-webkit-scrollbar { display: none; }
+.agent-compact .replies-only .agent-offer-chip { flex: 0 0 auto; white-space: nowrap; }
+
+.agent-compact .agent-stream-wrap.with-offers { touch-action: pan-x pan-y; }

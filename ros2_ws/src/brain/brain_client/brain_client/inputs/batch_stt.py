@@ -7,15 +7,14 @@
 closes an utterance after enough silence. It also drives the realtime Scribe
 backend's manual commits (``workspace/inputs/micro_input.py``); here,
 :class:`BatchSttSession` ships each closed utterance whole through a vendor
-transcriber — ElevenLabs Scribe batch or Gemini ``generateContent``. Both bias
-toward the ``keyterms`` vocabulary: Scribe takes a parameter, Gemini gets the
-words in its prompt.
+transcriber — ElevenLabs Scribe batch or Gemini through the brain's provider
+library. Both bias toward the ``keyterms`` vocabulary: Scribe takes a
+parameter, Gemini gets the words in its prompt.
 """
 
 from __future__ import annotations
 
 import array
-import base64
 import io
 import json
 import math
@@ -27,12 +26,13 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
+from innate_llm import Audio, Message, Request, Role, Text, Thinking
 
-from brain_client.brain.transport import GENERATE_PATH
 from brain_client.inputs.vad import MIC_SAMPLE_RATE, pcm16_to_f32, resample_24k_to_16k
 
 if TYPE_CHECKING:
-    from brain_client.brain.transport import GeminiRest
+    from innate_llm import Provider
+
     from brain_client.common.logging import UniversalLogger
     from innate_proxy import ProxyClient
 
@@ -339,27 +339,16 @@ def _says_no_speech(text: str) -> bool:
     return text.strip("'\".,!? \t") == NO_SPEECH
 
 
-def gemini_transcriber(rest: GeminiRest, model: str, language: str, keyterms: Keyterms = ()) -> Transcriber:
+def gemini_transcriber(provider: Provider, language: str, keyterms: Keyterms = ()) -> Transcriber:
+    """One blocking model call per utterance — any provider whose wire takes audio (Gemini)."""
+
     def transcribe(wav: bytes) -> str:
         terms = _resolve_keyterms(keyterms)
         hint = f" These words are likely, so prefer them over similar-sounding ones: {', '.join(terms)}."
         prompt = _GEMINI_PROMPT.format(language=language, keyterms=hint if terms else "")
-        body: dict[str, Any] = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"inlineData": {"mimeType": "audio/wav", "data": base64.b64encode(wav).decode()}},
-                        {"text": prompt},
-                    ],
-                }
-            ],
-            "generationConfig": {"temperature": 0.0, "thinkingConfig": {"thinkingLevel": "minimal"}},
-        }
-        response = rest.post(GENERATE_PATH.format(model=model), body, timeout=TRANSCRIBE_TIMEOUT_SECS)
-        # candidates can be [] outright (blocked or empty response), not just absent.
-        parts = (response.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-        text = "".join(p.get("text", "") for p in parts).strip()
+        message = Message(Role.USER, (Audio(wav), Text(prompt)))
+        request = Request(system="", messages=(message,), thinking=Thinking.MINIMAL, temperature=0.0)
+        text = provider.run(request, timeout=TRANSCRIBE_TIMEOUT_SECS).message.text().strip()
         return "" if _says_no_speech(text) else text
 
     return transcribe

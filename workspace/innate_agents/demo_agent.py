@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+from innate_skills.arm.arm_move import ArmMove
 from innate_skills.arm.close_gripper import CloseGripper
 from innate_skills.arm.open_gripper import OpenGripper
 from innate_skills.drop_in_box import DropInBox
@@ -12,7 +13,7 @@ from innate_skills.system.change_volume import ChangeVolume
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 
 class DemoAgent(Agent):
@@ -35,6 +36,7 @@ class DemoAgent(Agent):
             NavigateToPosition,
             Wave,
             PickAnyObject,
+            ArmMove,
             OpenGripper,
             CloseGripper,
             SearchMemory,

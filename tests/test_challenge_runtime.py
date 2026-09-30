@@ -205,3 +205,30 @@ def test_kinematic_props_use_mocap_pose_without_a_freejoint():
     assert registry.drop_at(data, prop.name, 1.0, 2.0, math.pi / 2)
     assert data.mocap_pos[0] == [1.0, 2.0, 0.0]
     assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
+
+
+def test_pickup_act_waits_and_nudges_instead_of_skipping_before_any_attempt():
+    runtime = load_challenges([REPO_ROOT / "sim/challenges"])["nowhere"].runtime
+    runtime.act = next(i for i, act in enumerate(runtime.acts) if act.label == "Pick up the cube")
+    state = SimpleNamespace(t=0, robot=(0, 0, 0))
+    runtime.update(state, [])
+    state.t = 10000
+    result = runtime.update(state, [])
+    assert result.public["label"] == "Pick up the cube"
+    assert result.public["wants"] == ["innate-os/pick_any_object"]
+    assert "PickAnyObject" in result.public["nudge"]
+    assert result.public["note"] is None
+    assert not runtime.assisted
+    # An unrelated skill must not start the pickup timeout.
+    runtime.update(state, [{"skill_id": "head_emotion", "status": "running"}])
+    state.t += 10000
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Pick up the cube"
+    runtime.update(state, [{"skill_id": "pick_any_object", "status": "running"}])
+    state.t += 240
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Pick up the cube"
+    state.t += 1
+    runtime.update(state, [])
+    assert runtime.public()["label"] == "Go through the door"
+    runtime.reset()

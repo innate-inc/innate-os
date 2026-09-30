@@ -35,5 +35,5 @@ drivers, control, navigation, and simulation).
 | [`mars_control`](mars_bot/mars_control) | Control interface (joystick, keyboard, leader arm). |
 | [`mars_msgs`](mars_bot/mars_msgs) | Message definitions for the robot. |
 | [`mars_nav`](mars_bot/mars_nav) | Python-based navigation package. |
-| [`mars_sim`](mars_bot/mars_sim) | Robot model assets (URDF, SRDF, meshes) shared with the arm/IK stack. |
+| [`mars_description`](mars_bot/mars_description) | Robot model assets (URDF, SRDF, meshes) shared with the arm/IK stack. |
 | [`mars_sim_bringup`](mars_bot/mars_sim_bringup) | Starts rosbridge for simulation. |

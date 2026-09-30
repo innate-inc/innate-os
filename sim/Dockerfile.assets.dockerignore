@@ -53,7 +53,7 @@
 !sim/sandbox/_driver_pkg.py
 !sim/environments/**
 !ros2_ws/src/mars_bot/mars_sim_driver/**
-!ros2_ws/src/mars_bot/mars_sim/**
+!ros2_ws/src/mars_bot/mars_description/**
 
 !sim/ATTRIBUTION.md
 

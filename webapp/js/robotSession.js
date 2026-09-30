@@ -23,7 +23,7 @@ import { getConfig } from "./config.js";
 import { ros } from "./rosClient.js";
 import { SIM_RESPAWN_TOPIC } from "./constants.js";
 
-/** @typedef {{ audioEl: null, attach: (parent: HTMLElement) => void, detach: () => void, destroy: () => void, setSafeInsets: (insets: { right?: number }) => void }} SimStage */
+/** @typedef {{ audioEl: null, attach: (parent: HTMLElement) => void, detach: () => void, destroy: () => void, setSafeInsets: (insets: { right?: number; bottom?: number; top?: number; left?: number }) => void }} SimStage */
 
 // Long next to sharedVideoSession's 10s: a detour to Settings must not pay to
 // reparse ~80 MB of models.

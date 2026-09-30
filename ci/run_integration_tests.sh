@@ -88,8 +88,11 @@ echo "=== unit tests (fast, no ROS) ==="
 # harness (run via colcon test below), not a pytest suite — skip it here.
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
   src/brain/brain_client/test \
+  src/cloud/clients/innate-llm/tests \
+  src/mars_bot/mars_nav/test \
   --ignore=src/brain/brain_client/test/test_node_boot.launch.py \
-  src/brain/manipulation/test/test_config_validation.py
+  src/brain/manipulation/test/test_config_validation.py \
+  src/brain/manipulation/test/test_lerobot_bridge.py
 
 echo "=== unit tests: webapp front door (aiohttp, no ROS) ==="
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q ../webapp/proxy/test

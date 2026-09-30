@@ -73,6 +73,8 @@ export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
 export const AGENT_STATUS_TOPIC = "/brain/agent_status";
 // Reset the agent's brain/memory (brain_messages/srv/ResetBrain → {success}).
 export const RESET_BRAIN_SERVICE = "/brain/reset_brain";
+// The brain node itself: its llm_model parameter is the robot's model, applied live.
+export const BRAIN_NODE = "/brain_client_node";
 // Cloud/local agent backend connection (std_msgs/String JSON: {state, connected,
 // message, uri, hosted, timestamp}) — distinct from the rosbridge link.
 export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";

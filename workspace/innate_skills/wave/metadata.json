@@ -1,8 +1,8 @@
 {
     "name": "wave",
     "type": "replay",
-    "guidelines": "",
-    "guidelines_when_running": "",
+    "guidelines": "Greet someone with a friendly arm wave. Use it when a person arrives or greets the robot, or when asked to say hello or wave. The arm replays a fixed recorded motion and returns to rest, so keep the space in front of the robot clear and do not use it while the gripper is holding something.",
+    "guidelines_when_running": "The wave is a fixed replay that finishes on its own in a few seconds. Let it complete rather than starting another arm skill on top of it.",
     "inputs": {},
     "wheeled": false,
     "downloads": {

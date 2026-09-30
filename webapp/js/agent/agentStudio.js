@@ -12,6 +12,7 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
+import { fetchKeyStatus, modelLabel, modelReach, modelVendor, panelOptions, VENDOR_LABEL } from "../models.js";
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
@@ -28,10 +29,13 @@ const SKIP_KEY = "innate.nowhere.skip.v1";
 // Learning that the 3D view drags is a once-ever lesson, not a once-per-run one.
 const DRAG_HINT_KEY = "innate.nowhere.draghint.v1";
 const ARMED_KEY = "innate.nowhere.armed";
+// The attempt whose ending already played, and the agent it made: a reload must not play it again.
+const GRADUATED_KEY = "innate.nowhere.graduated";
 // Set by the rail's "Play the intro" for an Agent page that is still mounting.
 export const PLAY_INTRO_KEY = "innate.nowhere.play";
 const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]); // never part of the story's arc
 const WAVE = "innate-os/wave";
+const ARM_MOVE = "innate-os/arm_move";
 const MEMORY = "innate-os/search_memory";
 const GRADUATION_MAX_WAIT_MS = 25_000;
 // The robot asks for its next skill in its own time, and sometimes takes a while. The grant
@@ -61,11 +65,11 @@ function held(ready, timeoutMs) {
 
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
-  "innate-os/head_emotion": "Granted: the HeadEmotion skill. Use it.",
-  "innate-os/turn_in_place": "Granted: the TurnInPlace skill. Have a look around.",
-  "innate-os/pick_any_object": "Granted: the PickAnyObject skill. Pick it up.",
-  "innate-os/navigate_to_position": "Granted: the NavigateToPosition skill. Go to the door.",
-  "innate-os/search_memory": "Granted: the SearchMemory skill. Think back.",
+  "innate-os/head_emotion": "Added the HeadEmotion skill. Use it.",
+  "innate-os/turn_in_place": "Added the TurnInPlace skill. Have a look around.",
+  "innate-os/pick_any_object": "Added the PickAnyObject skill. Pick it up.",
+  "innate-os/navigate_to_position": "Added the NavigateToPosition skill. Go to the door.",
+  "innate-os/search_memory": "Added the SearchMemory skill. Think back.",
 });
 // What the world does at the top of an act, said to the visitor (not to the brain:
 // the act's own brief already tells the robot what changed).
@@ -100,6 +104,10 @@ const shortPath = (path) => {
   return root === -1 ? path.split("/").slice(-3).join("/") : path.slice(root + 1);
 };
 
+/** A path that wraps between folders; <wbr> keeps a copied path free of break characters. @param {string} path */
+const breakablePath = (path) =>
+  path.split("/").flatMap((part, i) => (i ? ["/", document.createElement("wbr"), part] : [part]));
+
 /** @param {string[]} a @param {string[]} b */
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -122,6 +130,7 @@ function write(store, key, value) {
 }
 
 /** @typedef {import("../teleop/agentState.js").AgentEntry} AgentEntry */
+/** @typedef {import("../teleop/agentState.js").AgentSnapshot} AgentSnapshot */
 /** @typedef {{ id: string, group: string, load_error: string }} SkillRow */
 /** What the form holds; `isNew` until the brain has the file. */
 /** @typedef {{ id: string, name: string, prompt: string, skills: string[], listen: boolean, gaze: boolean, isNew: boolean }} Draft */
@@ -155,6 +164,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "agent-studio-dock-toggle";
+  const mobileToggle = document.createElement("button");
+  mobileToggle.type = "button";
+  mobileToggle.className = "agent-menu-toggle";
+  mobileToggle.setAttribute("aria-controls", "agent-studio-panel");
+  mobileToggle.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
   // The rail's own Agent mark: a four-point sparkle for the autonomous brain.
   toggle.innerHTML =
     '<svg class="agent-studio-dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/></svg>' +
@@ -168,8 +182,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panelEl.setAttribute("aria-label", "Agent detail");
   toggle.setAttribute("aria-controls", panelEl.id);
 
-  const persona = document.createElement("span");
-  persona.className = "agent-studio-persona";
   const note = document.createElement("p");
   note.className = "agent-studio-note";
   // Where the file lives, for whoever wants to edit it in code.
@@ -188,7 +200,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   promptRow.innerHTML =
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="2" maxlength="240" aria-label="Robot personality prompt" placeholder="Who is this robot? e.g. a butler who has seen better days"></textarea>' +
-    '<button type="submit">Make it so</button>';
+    '<button type="submit">Set character</button>';
   const promptInput = /** @type {HTMLTextAreaElement} */ (promptRow.querySelector("textarea"));
 
   // The agent's prompt as its file holds it; editable when the file is the form's own.
@@ -198,6 +210,46 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="5" aria-label="Agent prompt" placeholder="You are MARS, a friendly robot assistant…"></textarea>';
   const promptText = /** @type {HTMLTextAreaElement} */ (promptField.querySelector("textarea"));
+  // The robot's model, not this agent's: picking one writes the llm_model setting, which
+  // the brain applies without a restart — so it works on innate agents the form cannot edit.
+  // The list is grouped by vendor; a model the robot has no key for stays visible and says
+  // so, since hiding it would make the robot look incapable of a vendor one paste away.
+  const modelField = document.createElement("div");
+  modelField.className = "agent-studio-model";
+  modelField.innerHTML =
+    '<span class="microlabel">Model</span>' +
+    '<button type="button" class="agent-studio-model-btn" aria-haspopup="listbox" aria-expanded="false"></button>' +
+    '<div class="agent-studio-model-menu" role="listbox" aria-label="Model" hidden></div>' +
+    '<p class="agent-studio-model-note"></p>';
+  const modelBtn = /** @type {HTMLButtonElement} */ (modelField.querySelector(".agent-studio-model-btn"));
+  const modelMenu = /** @type {HTMLElement} */ (modelField.querySelector(".agent-studio-model-menu"));
+  const modelNote = /** @type {HTMLElement} */ (modelField.querySelector(".agent-studio-model-note"));
+  let modelOpen = false;
+  let modelBusy = false;
+  let modelError = "";
+  /** @type {{keys?: Record<string, {set: boolean}>, service_key?: boolean, loaded?: boolean, readonly?: boolean}} */
+  let keyStatus = { keys: {}, service_key: false, loaded: false };
+  void fetchKeyStatus().then((status) => {
+    keyStatus = status;
+    render(true);
+  });
+
+  modelBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    modelOpen = !modelOpen;
+    render(true);
+  });
+  modelMenu.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    modelOpen = false;
+    modelBtn.focus();
+    render(true);
+  });
+
+  const mobileName = document.createElement("h2");
+  mobileName.className = "agent-studio-mobile-name";
+  const mobilePrompt = document.createElement("div");
+  mobilePrompt.className = "agent-studio-mobile-prompt";
 
   const tabsRow = document.createElement("div");
   tabsRow.className = "agent-studio-tabs";
@@ -281,7 +333,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panes.identity.append(deck.el, promptRow, nameField, promptField);
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
-  panelEl.append(persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
+  panes.identity.append(mobilePrompt);
+  // The model sits with the agent, not inside Identity: it is the robot's, and it applies
+  // to whichever agent is running rather than being one of this agent's saved fields.
+  panelEl.append(mobileName, modelField, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
   head.append(toggle, headAction);
   dock.append(head, panelEl);
   root.append(dock);
@@ -328,6 +383,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let graduatedAttempt = "";
   let doorAttempt = "";
   let graduationReady = false;
+  let builtAgent = ""; // the agent the story saved for the person, once it has
+  let toured = false;
   /** @type {ReturnType<typeof setInterval> | null} */ let graduationPoll = null;
   let seenAct = -1;
   let actSpoke = 0; // robot lines when the current act began; chips wait for one more
@@ -352,7 +409,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const active = () => challenge?.active ?? null;
   const story = () => (active()?.runtime?.story ? active() : null);
   const runtime = () => story()?.runtime ?? null;
-  const out = () => (active()?.id === "way_out" ? active() : null);
+  const out = () => (active()?.id === "nowhere_way_out" ? active() : null);
   const passed = () => out()?.state === "passed";
   /** The story owns the interface exactly while the world is running it. Passing the last
    * challenge ends that: the rail, the scene setup and the challenges are the reward. */
@@ -375,13 +432,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const envId = () => environment?.environment?.id ?? "";
   const skipped = () => read(localStorage, SKIP_KEY) === "1";
   const spoken = () => opts.spokenCount();
-  /** Persona and name: from the running story, else what the world carried over. */
+  /** Who the story made: from the running story, else what the world carried over. */
   const profile = () => {
     const r = runtime();
     const carried = challenge?.profile ?? {};
     const own = r?.profile ?? {};
-    return { persona: own.persona || carried.persona || "", name: own.name || carried.name || "" };
+    return {
+      persona: own.persona || carried.persona || "",
+      displayName: own.display_name || carried.display_name || "",
+      agentPrompt: own.agent_prompt || carried.agent_prompt || "",
+    };
   };
+  const storyName = () => profile().displayName || "MARS";
   const storyAgent = () => agentState.get().agents.find((a) => a.id === STORY_AGENT) ?? null;
   /** The agent the chat panel shows: currentDirective is empty until Start, and a picked agent is still picked. */
   const currentAgent = () => {
@@ -389,7 +451,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const id = s.currentDirective || opts.armedAgent?.() || "";
     return s.agents.find((a) => a.id === id) ?? null;
   };
-  const earnedSkills = () => (storyAgent()?.skills ?? []).filter((id) => !UNMENTIONED_SKILLS.has(id));
+  const earnedSkills = () => (storyAgent()?.skills ?? []).filter(
+    (id) => !UNMENTIONED_SKILLS.has(id) && (id !== ARM_MOVE || agentState.get().activeSkills.has(id)),
+  );
   /** Whether a robot line names a skill, however it punctuates it. @param {string | undefined} text @param {string} skill */
   const mentions = (text, skill) =>
     (text ?? "").toLowerCase().replace(/[^a-z]/g, "").includes(skillLabel(skill).toLowerCase());
@@ -405,14 +469,25 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   // The story's agent arms itself; nobody should have to find a switch. A just-started
   // attempt arms fresh (resetting chat, memory and skills); one already under way is
   // resumed as it stands, so a reload changes nothing.
+  let repairingStoryAgent = false;
   function autoArm() {
     const s = story();
-    if (!s || armedAttempt === s.attempt_id || !storyAgent()) return;
+    if (!s || !storyAgent()) return;
+    // The attempt marker survives page/service restarts; the hidden picker does not.
+    // Keep idle chat/Start bound to the intro without undoing an explicit Stop.
+    if (!agentState.get().brainActive && opts.armedAgent?.() !== STORY_AGENT) {
+      opts.armAgent?.(STORY_AGENT);
+    }
+    if (agentState.get().brainActive && agentState.get().currentDirective !== STORY_AGENT && !repairingStoryAgent) {
+      repairingStoryAgent = true;
+      void agentState.setDirective(STORY_AGENT).finally(() => { repairingStoryAgent = false; });
+    }
+    if (armedAttempt === s.attempt_id) return;
     armedAttempt = s.attempt_id;
     write(sessionStorage, ARMED_KEY, armedAttempt);
     const elapsedMs = Math.max(0, Number(s.elapsed_s) || 0) * 1000;
     const fresh = elapsedMs < 8000 || agentState.get().currentDirective !== STORY_AGENT;
-    if (fresh) void agentState.setDirective(STORY_AGENT);
+    if (fresh && !repairingStoryAgent) void agentState.setDirective(STORY_AGENT);
     panel.beginOnboarding(fresh, Date.now() - elapsedMs);
     seenAct = -1;
     actSpoke = spoken();
@@ -427,7 +502,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   // and the person grants it like every other skill.
   function arriveInBackrooms() {
     const o = out();
-    if (!o || switching() || envId() !== "backrooms" || arrivalAttempt === o.attempt_id) return;
+    if (!o || o.state === "passed" || switching() || envId() !== "backrooms" || arrivalAttempt === o.attempt_id) return;
     arrivalAttempt = o.attempt_id;
     actSpoke = spoken();
     actAt = Date.now();
@@ -438,10 +513,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     write(localStorage, SKIP_KEY, "");
     write(localStorage, DRAG_HINT_KEY, ""); // asking for the story again means asking for all of it
     write(sessionStorage, ARMED_KEY, "");
+    write(localStorage, GRADUATED_KEY, "");
     armedAttempt = "";
     autoStarted = false;
     graduationReady = false;
     sceneTaught = false;
+    builtAgent = "";
+    endTour();
+    toured = false;
     panel.setOffers([]);
     leaveStage();
     session?.abortChallenge?.();
@@ -489,9 +568,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     opts.showView?.("orbit");
   }
 
-  // The ending points at the scene setup, bottom left, where the next world is chosen: the
-  // toggle until it opens, then the environment picker until it is used. Learned once, it
-  // stays learned.
+  // The ending points at the scene setup, bottom left, where the next world is chosen, until
+  // it is first clicked. Learned once, it stays learned.
   /** @type {(() => void) | null} */ let sceneCue = null;
   /** @type {HTMLElement | null} */ let sceneCueTarget = null;
   let sceneTaught = false;
@@ -500,12 +578,29 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   /** @param {boolean} on */
   function inviteSceneSetup(on) {
     const setup = sceneSetup();
-    const target = !on || !setup ? null : setup.querySelector(sceneSetupOpen() ? ".sim-environment-section:not([hidden])" : ".sim-scene-toggle");
+    const target = !on || !setup ? null : setup.querySelector(".sim-scene-toggle");
     if (target === sceneCueTarget) return;
     sceneCue?.();
     sceneCue = null;
     sceneCueTarget = target instanceof HTMLElement ? target : null;
-    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, sceneSetupOpen() ? "Pick a world" : "New world");
+    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, "New world");
+  }
+
+  /** The ending this browser already played, as it left it. @param {any} o */
+  function playedEnding(o) {
+    let played;
+    try {
+      played = JSON.parse(read(localStorage, GRADUATED_KEY) || "null");
+    } catch {
+      return false;
+    }
+    if (played?.attempt !== o.attempt_id) return false;
+    graduatedAttempt = o.attempt_id;
+    graduationReady = true;
+    sceneTaught = true;
+    toured = true;
+    builtAgent = typeof played.agent === "string" ? played.agent : "";
+    return true;
   }
 
   // The narration waits for the robot's closing line, so the ending is not talked over.
@@ -515,7 +610,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     graduationReady = false;
     sceneTaught = false;
     void opts.cancelSkill().catch(() => {});
-    setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
+    // Sent to the brain too: the passed state only changes its prompt, which a robot busy
+    // inching toward the door does not notice for several turns.
+    setTimeout(() => void panel.narrate("You're out. You made it."), 600);
     const before = spoken();
     const deadline = Date.now() + GRADUATION_MAX_WAIT_MS;
     if (graduationPoll) clearInterval(graduationPoll);
@@ -524,19 +621,97 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (graduationPoll) clearInterval(graduationPoll);
       graduationPoll = null;
       graduationReady = true;
-      agentState.setActiveSkills(earnedSkills(), STORY_AGENT);
-      const { name } = profile();
-      panel.addNotice(`You built this agent${name ? `: ${name}` : ""}. Its skills are all yours now.`);
-      void panel.narrate(
-        "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
-        { local: true },
-      );
-      render(true);
+      void adoptBuiltAgent().then((settled) => {
+        if (settled) write(localStorage, GRADUATED_KEY, JSON.stringify({ attempt: o.attempt_id, agent: builtAgent }));
+        void panel.narrate(
+          "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
+          { local: true },
+        );
+        render(true);
+      });
     }, 500);
   }
 
-  /** @param {string} skill @param {boolean} [announce] */
-  async function grant(skill, announce = true) {
+  /** The character becomes an agent of the person's own, and runs in place of the intro.
+   * A switch empties the brain's chat history, so the story's transcript is kept on the page.
+   * Resolves false only when the agent exists but did not start, so a reload tries again. */
+  async function adoptBuiltAgent() {
+    const { displayName, agentPrompt } = profile();
+    const skills = earnedSkills();
+    const { agents, broken } = agentState.get();
+    // The same story prompt already has an agent: another tab at this ending, or a start that
+    // failed before a reload. Run that one rather than saving a second.
+    let id = agents.find((a) => a.source === "user" && !!agentPrompt && a.prompt === agentPrompt)?.id ?? "";
+    let name = displayName;
+    if (!id) {
+      const taken = new Set([...agents, ...broken].map((a) => a.id));
+      const base = slug(displayName);
+      for (let n = 2; taken.has(id || base); n++) {
+        id = `${base}_${n}`;
+        name = `${displayName} ${n}`;
+      }
+      id ||= base;
+      const res = agentPrompt && id
+        ? await agentState
+          .saveAgent({ id, display_name: name, prompt: agentPrompt, skill_ids: skills, listen: true, gaze: true })
+          .catch((err) => ({ success: false, message: failure("Save", err), path: "" }))
+        : { success: false, message: "the story carried no character", path: "" };
+      // A message on success means the file was written but did not load, so there is nothing to run.
+      if (!res.success || res.message) {
+        console.warn("[story] the built agent was not saved:", res.message);
+        agentState.setActiveSkills(skills, STORY_AGENT);
+        panel.addNotice("You built this agent. Its skills are all yours now.");
+        return true;
+      }
+    }
+    builtAgent = id;
+    if (agentState.get().brainActive && agentState.get().currentDirective === id) return true;
+    panel.addNotice(`You built ${name}. It is your agent now: give it skills, change its prompt.`);
+    panel.keepTranscript();
+    // Saving reloads the roster, which stops the brain: start the new agent, do not only pick it.
+    await agentState.setDirective(id);
+    const started = agentState.get().brainActive && agentState.get().currentDirective === id;
+    if (!started) panel.addNotice(`${name} is saved but did not start. Pick it in the agent picker to run it.`);
+    return started;
+  }
+
+  // After the switch, the panel points at everything the person can now change; each pointer
+  // goes once its target is used.
+  const TOUR = /** @type {const} */ ([
+    ["Add skills", () => addBtn],
+    ["Change the prompt", () => tabs.identity],
+    ["More agents", () => root.querySelector(".agent-directive")],
+  ]);
+  /** @type {(() => void)[]} */ let tourCues = [];
+  function endTour() {
+    for (const off of tourCues) off();
+    tourCues = [];
+  }
+  function showTour() {
+    endTour();
+    if (compact) return;
+    tab = "skills";
+    chooserOpen = false;
+    render(true);
+    for (const [label, target] of TOUR) {
+      const el = target();
+      if (!(el instanceof HTMLElement) || el.closest("[hidden]")) continue;
+      const uncueEl = cue(el, label);
+      const off = () => {
+        el.removeEventListener("pointerdown", off);
+        uncueEl();
+      };
+      el.addEventListener("pointerdown", off, { once: true });
+      tourCues.push(off);
+    }
+  }
+
+  /** Bind post-grant guidance to this attempt, act and conversation turn. @param {string} skill */
+  const grantReplyContext = (skill) => JSON.stringify([story()?.attempt_id, runtime()?.act, skill]);
+
+  /** @param {string} skill @param {string} line @param {boolean} [announce] */
+  async function grant(skill, line, announce = true) {
+    const replyContext = grantReplyContext(skill);
     const next = new Set(agentState.get().activeSkills);
     next.add(skill);
     agentState.setActiveSkills([...next], STORY_AGENT);
@@ -548,16 +723,27 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     landed = { skill, at: Date.now() };
     render(true);
     setTimeout(() => render(true), LANDED_MS);
-    void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
+    void panel.submitText(line, {
+      replyContext,
+    });
   }
 
-  /** @param {string} skill */
-  const grantOffer = (skill) => ({
+  /** @param {string} skill @param {string} line */
+  const offerGrant = (skill, line) => ({
     text: skillLabel(skill),
     kind: /** @type {const} */ ("grant"),
     ...skillCard(skill),
-    onSelect: () => void grant(skill),
+    onSelect: () => void grant(skill, line),
   });
+  /** @param {string} skill */
+  const grantOffer = (skill) => offerGrant(skill, GRANT_LINES[skill] ?? `Added the ${skillLabel(skill)} skill.`);
+  // The scripted lines steer the act ("Go to the door"); a skill granted for the person's own
+  // request must steer back to that request instead.
+  /** @param {string} skill */
+  const requestedGrantOffer = (skill) => offerGrant(
+    skill,
+    `Added the ${skillLabel(skill)} skill. Use it for what I asked; ask me if the target is unclear.`,
+  );
 
   /** @param {string} persona */
   function choose(persona) {
@@ -571,9 +757,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (profile().persona || !storyRunning()) return;
       console.warn("[story] the world never took the persona:", persona);
     });
-    // An offered character is someone the robot becomes; typed words are a prompt it is handed.
+    // Typed words are a character too: "your prompt is" reads to the model as an injection, and it refuses.
     const offered = (runtime()?.personas ?? []).includes(persona);
-    void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, your prompt is: ${persona}`);
+    void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, you are this character: ${persona}`);
   }
 
   /** Why the chip row shows what it shows; readable in DevTools as data-chips on the panel. */
@@ -590,7 +776,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function offers() {
     const r = runtime();
     const o = out();
-    const name = profile().name || "MARS";
+    const name = storyName();
     if (switching()) {
       chipReason = "frozen";
       return { chips: [] }; // nothing lands while the world changes
@@ -598,6 +784,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (o?.state === "passed") {
       chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
       return { chips: [] };
+    }
+    // A skill the robot asks for off-script, for the visitor's own request, overrides the scripted
+    // grant, including persona selection and the final memory step. Never auto-grant it. Only
+    // the robot's answer to the latest turn of this act counts: an older mention is no request.
+    const fresh = panel.robotSpokeLast() && spoken() > actSpoke;
+    const requested = !fresh ? [] : (storyAgent()?.skills ?? []).filter((skill) =>
+      skill !== WAVE && !UNMENTIONED_SKILLS.has(skill) && !agentState.get().activeSkills.has(skill) &&
+      mentions(opts.lastLine(), skill) && !(r?.wants ?? []).includes(skill),
+    );
+    if ((r || o) && requested.length) {
+      chipReason = `grants:requested:${requested.join(",")}`;
+      return { title: `${name} asks for a skill`, chips: requested.map(requestedGrantOffer) };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
@@ -628,19 +826,29 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       });
       return {
         title: `Who is ${name}?`,
-        chips: [
-          ...personas.map(pick),
-          { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
-          // The panel has the prompt right there; only the chat's deck needs a way to the composer.
-          ...(compact ? [{ text: "Write your own", kind: /** @type {const} */ ("custom"), onSelect: () => panel.focusComposer() }] : []),
-        ],
+        chips: personas.map(pick),
       };
     }
     const wants = (r.wants ?? []).filter(
       (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill) && skill !== WAVE,
     );
     // What the act says the person might say next: the story's own words, not a tool call.
-    const replies = (r.suggests ?? []).map((/** @type {string} */ text) => ({
+    const suggestions = [
+      ...(!wants.length ? r.suggests_after_grant ?? [] : []),
+      ...(r.suggests ?? []),
+    ];
+    // The response to a grant carries its act's action guidance regardless of wording.
+    // Any subsequent user turn consumes that context; other suggestions still require
+    // an explicit mention so unrelated replies cannot revive old prompts.
+    const line = opts.lastLine().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const askingForAct = (r.wants ?? []).some((/** @type {string} */ skill) => mentions(opts.lastLine(), skill));
+    const grantReply = (r.wants ?? []).some((/** @type {string} */ skill) =>
+      panel.replyContext() === grantReplyContext(skill),
+    );
+    const replies = suggestions.filter((/** @type {string} */ text) =>
+      (!wants.length && grantReply && (r.suggests_after_grant ?? []).includes(text)) ||
+      askingForAct || line.includes(text.toLowerCase().replace(/[^a-z0-9]/g, "")),
+    ).map((/** @type {string} */ text) => ({
       text,
       kind: /** @type {const} */ ("reply"),
       onSelect: (/** @type {string} */ said) => void panel.submitText(said),
@@ -764,7 +972,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     saveStatus = "";
     chooserOpen = false;
     setDockOpen(true);
-    requestAnimationFrame(() => newNameInput.focus());
+    requestAnimationFrame(() => { if (!compact) newNameInput.focus(); });
   }
 
   function discard() {
@@ -783,7 +991,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   async function save() {
     const d = draft;
-    if (!d || saving) return;
+    if (!d || saving || (compact && d.isNew)) return;
     const id = d.isNew ? slug(d.name) : d.id;
     if (!id) {
       saveStatus = "Give it a name first.";
@@ -858,6 +1066,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function applyDockOpen(open) {
     dockOpen = open;
     dock.classList.toggle("open", open);
+    dock.hidden = compact && !open;
+    mobileToggle.setAttribute("aria-expanded", String(open));
+    mobileToggle.setAttribute("aria-label", open ? "Close agent menu" : "Open agent menu");
     toggle.setAttribute("aria-expanded", String(open));
     toggle.setAttribute("aria-label", open ? "Close agent detail" : "Open agent detail");
     if (open) document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
@@ -882,15 +1093,16 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const agent = currentAgent();
     const r = runtime();
     const o = out();
-    const { persona: who, name } = profile();
+    const who = profile().persona;
+    const name = storyName();
     const env = envId();
     // World frames arrive at physics rate; touch the DOM only when something shown here changed.
     const key = JSON.stringify([
-      s.currentDirective, [...s.activeSkills].sort(), agent, r && { ...r, brief: undefined },
+      s.currentDirective, [...s.activeSkills].sort(), agent, story()?.attempt_id, r && { ...r, brief: undefined },
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
       graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0, opts.navigating?.(),
-      opts.recalledAt(), opts.turnedAt(),
-      draft, saving, saveStatus, chooserOpen, tab, roster.length,
+      opts.recalledAt(), opts.turnedAt(), opts.lastLine(), panel.replyContext(),
+      draft, saving, saveStatus, chooserOpen, tab, roster.length, builtAgent, toured,
     ]);
     if (!force && key === renderedKey) return;
     renderedKey = key;
@@ -942,7 +1154,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         setTimeout(uncue, 12_000);
       }, 1500);
     }
-    if (o?.state === "passed" && graduatedAttempt !== o.attempt_id) armGraduation(o);
+    if (o?.state === "passed" && graduatedAttempt !== o.attempt_id && !playedEnding(o)) armGraduation(o);
     showLidar(!!o && o.state !== "passed" && env === "backrooms" && !switching() && !!opts.navigating?.());
     inviteSceneSetup(!!o && o.state === "passed" && graduationReady && env === "backrooms" && !switching() && !sceneTaught);
 
@@ -953,7 +1165,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const owned = inStory || graduated;
     if (owned !== wasInStory) {
       wasInStory = owned;
-      applyDockOpen(owned);
+      applyDockOpen(owned && !compact);
     }
     document.body.classList.toggle("story-active", inStory);
     // Nowhere has no map worth reading, and a robot that cannot move has nothing to plot on
@@ -967,28 +1179,42 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (draft && !draft.isNew && draft.id !== agent?.id) draft = null;
     const isNew = !!draft?.isNew && !inStory;
     const f = inStory ? null : form();
-    const canEdit = !inStory && editable(agent);
+    const pausedCreation = compact && isNew;
+    const canEdit = !inStory && !pausedCreation && editable(agent);
+    // The intro agent always goes by the character's name; the built agent carries it in its file.
+    const onStoryAgent = inStory || agent?.id === STORY_AGENT;
+    const onBuiltAgent = onStoryAgent || (!!builtAgent && agent?.id === builtAgent);
+    if (builtAgent && agent?.id === builtAgent && canEdit && !toured) {
+      toured = true;
+      setTimeout(showTour, 0);
+    }
 
-    title.textContent = inStory
-      ? name || "MARS"
+    title.textContent = onStoryAgent
+      ? name
       : isNew
         ? draft?.name.trim() || "New agent"
         : (draft?.name.trim() || agent?.name) ?? "No agent";
-    panel.setDisplayName(owned ? name || "MARS" : null);
-    persona.textContent = who;
-    persona.hidden = !who || !owned;
-    note.textContent = noteFor(r, o, graduated, agent, isNew);
+    panel.setDisplayName(onStoryAgent ? name : null);
+    mobileName.hidden = !compact;
+    mobileName.textContent = title.textContent;
+    mobilePrompt.hidden = !compact;
+    mobilePrompt.textContent = (inStory ? who || agent?.prompt : f?.prompt) || "No prompt.";
+    note.textContent = noteFor(r, o, graduated && onBuiltAgent, agent, isNew);
     note.hidden = !note.textContent;
-    note.classList.toggle("warn", !inStory && !!agent && !isNew && !canEdit);
-    caption.textContent = isNew
+    note.classList.toggle("warn", !inStory && !!agent && !isNew && !canEdit && !(graduated && onBuiltAgent));
+    const path = isNew
       ? `innate-os/workspace/custom_agents/${slug(draft?.name ?? "") || "…"}.py`
       : shortPath(agent?.path ?? "");
-    caption.hidden = !caption.textContent;
+    if (caption.dataset.path !== path) {
+      caption.dataset.path = path;
+      caption.replaceChildren(...breakablePath(path));
+    }
+    caption.hidden = !path;
     // Which agent runs, and resetting its brain, are not part of the story: it arms its own.
     if (opts.directivesEl) opts.directivesEl.hidden = inStory || (isNew && !compact);
 
     // The story's own inputs.
-    promptRow.hidden = !inStory;
+    promptRow.hidden = !inStory || compact;
     // Including back to empty: a restarted story is nobody yet, and last run's words are not its prompt.
     if (promptInput.dataset.shown !== who && document.activeElement !== promptInput) {
       promptInput.value = who;
@@ -999,7 +1225,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // the skills. The chat keeps the replies, and everything when there is no panel.
     const { chips, title: ask } = offers();
     panelEl.dataset.chips = chipReason;
-    const toPanel = compact ? [] : chips.filter((c) => c.kind === "persona" || c.kind === "grant" || c.kind === "random");
+    const toPanel = compact ? [] : chips.filter((c) => c.kind !== "reply");
     const askKey = toPanel.filter((c) => c.kind !== "random").map((c) => `${c.kind}:${c.text}`).join("|");
     if (askKey !== deckKey) {
       deckKey = askKey;
@@ -1020,15 +1246,16 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       pane.hidden = id !== tab || (!inStory && !f);
       tabs[id].setAttribute("aria-selected", String(id === tab));
     }
+    renderModel(onStoryAgent, s, agent, f);
     listenInput.checked = !!f?.listen;
     gazeInput.checked = !!f?.gaze;
     listenInput.disabled = gazeInput.disabled = !canEdit;
     deleteBtn.hidden = isNew || agent?.source !== "user";
     deleteBtn.disabled = saving;
-    nameField.hidden = !f;
+    nameField.hidden = !f || compact;
     newNameInput.readOnly = !canEdit;
     if (f && document.activeElement !== newNameInput && newNameInput.value !== f.name) newNameInput.value = f.name;
-    promptField.hidden = inStory || !f;
+    promptField.hidden = inStory || !f || compact;
     promptText.readOnly = !canEdit;
     promptText.placeholder = canEdit ? "You are MARS, a friendly robot assistant…" : "No prompt.";
     if (f && document.activeElement !== promptText && promptText.value !== f.prompt) promptText.value = f.prompt;
@@ -1038,9 +1265,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     addBtn.setAttribute("aria-expanded", String(chooserOpen));
     if (chooserOpen) renderChooser(f?.skills ?? []);
     const showSave = canEdit && (isNew || dirty(agent));
-    saveBar.hidden = !(showSave || saveStatus);
+    saveBar.hidden = !(showSave || saveStatus || pausedCreation);
     saveBtn.hidden = !showSave;
-    discardBtn.hidden = !showSave;
+    discardBtn.hidden = !(showSave || pausedCreation);
     saveBtn.textContent = isNew ? "Create" : "Save";
     discardBtn.textContent = isNew ? "Cancel" : "Discard";
     saveBtn.disabled = saving;
@@ -1070,18 +1297,24 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     panel.setComposerAsk(
       !choosing ? null
         : compact ? { placeholder: "Or describe your own character…", submit: choose }
-        : { placeholder: `Pick who ${name || "MARS"} is, top left` },
+        : { placeholder: `Pick who ${name} is, top left` },
     );
   }
 
   /** @param {any} r @param {any} o @param {boolean} graduated @param {AgentEntry | null} agent @param {boolean} isNew */
   function noteFor(r, o, graduated, agent, isNew) {
+    if (compact && isNew) {
+      return "Finish creating this agent on desktop. Your draft is kept while you stay on this page.";
+    }
+    if (compact && agent?.source === "shipped") {
+      return "This is an Innate Agent. To modify it or create one, use the desktop version.";
+    }
     if (r) return r.finished ? "Through the door." : "";
+    if (o && o.state !== "passed") return "";
     if (graduated) {
       // Said in the chat too, but a history sync drops display-only lines; this stays.
-      return "It found the way out. This is the agent you built. Scene setup and the challenges are at the bottom of the stage, and the rail on the left has Teleop, the map and the settings.";
+      return "It found the way out. This is the agent you built: add skills, change its prompt, or try another agent. Scene setup and the challenges are at the bottom of the stage.";
     }
-    if (o) return "Find the way out.";
     if (isNew) return "An agent is a prompt plus skills. Name it, tell it who it is, and add what it may do.";
     if (!agent) return "Pick an agent to see its prompt and skills.";
     if (agent.source === "shipped") return "This is an innate agent. Create your own agent, or edit this one in code.";
@@ -1092,6 +1325,111 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
    * @param {boolean} inStory @param {any} r @param {AgentEntry | null} agent
    * @param {Draft | null} f @param {boolean} canEdit
    */
+  /**
+   * The model button and its menu. What it shows and writes is the ROBOT's model, not this
+   * agent's: an innate agent the form cannot edit still switches here. An agent that pins
+   * one in code outranks the setting, so the row reports that instead of offering a change.
+   * @param {boolean} onStoryAgent @param {AgentSnapshot} snapshot
+   * @param {AgentEntry | null} agent @param {Draft | null} f
+   */
+  function renderModel(onStoryAgent, snapshot, agent, f) {
+    // The intro's agent belongs to the story, which picked its model; a draft being created
+    // is not yet the agent running: no row for either.
+    modelField.hidden = onStoryAgent || !f || f.isNew || compact;
+    const pinned = agent?.model || "";
+    const current = pinned || snapshot.currentModel || snapshot.defaultModel;
+    modelBtn.disabled = modelBusy || !!pinned;
+    modelBtn.innerHTML =
+      `<span>${escapeText(modelLabel(current))}</span>` +
+      (modelBusy ? '<i class="agent-studio-model-busy">switching…</i>' : "");
+    modelBtn.setAttribute("aria-expanded", String(modelOpen));
+    modelMenu.hidden = !modelOpen;
+    const reach = current ? panelReach(current) : { ok: true, text: "" };
+    modelNote.textContent = modelError
+      ? modelError
+      : pinned
+        ? `${agent?.name} sets this model in its own file; change it there or in Settings.`
+        : keyStatus.loaded && !reach.ok
+          ? reach.text
+          : "";
+    modelNote.hidden = !modelNote.textContent;
+    if (modelOpen) renderModelMenu(current);
+  }
+
+  /**
+   * What the panel can say about reaching `spec` — nothing for a model it cannot judge: an
+   * OpenAI-compatible server, whose URL the panel does not know. The brain running it is the proof.
+   * @param {string} spec
+   */
+  function panelReach(spec) {
+    const vendor = modelVendor(spec);
+    if (vendor === "openai-chat" || vendor === null) return { ok: true, text: "", short: "" };
+    return modelReach(spec, "", keyStatus);
+  }
+
+  /** @param {string} current */
+  function renderModelMenu(current) {
+    modelMenu.replaceChildren();
+    let vendor = "";
+    for (const option of panelOptions(current, keyStatus)) {
+      const reach = panelReach(option.value);
+      if (option.vendor !== vendor) {
+        vendor = option.vendor;
+        // A missing key belongs to the vendor, not to each of its models.
+        const label = VENDOR_LABEL[/** @type {keyof typeof VENDOR_LABEL} */ (vendor)] || vendor;
+        const why = keyStatus.loaded && !reach.ok ? reach.short : "";
+        const head = document.createElement("div");
+        head.className = "agent-studio-model-group";
+        head.innerHTML = `<span>${escapeText(label)}</span>${why ? `<i>${escapeText(why)}</i>` : ""}`;
+        modelMenu.append(head);
+      }
+      modelMenu.append(modelRow(option.value, option.label, option.value === current, reach.ok || !keyStatus.loaded));
+    }
+    const more = document.createElement("a");
+    more.className = "agent-studio-model-more";
+    more.href = "/settings";
+    more.textContent = "More models and keys…";
+    modelMenu.append(more);
+  }
+
+  /**
+   * @param {string} value @param {string} label
+   * @param {boolean} selected @param {boolean} reachable
+   */
+  function modelRow(value, label, selected, reachable) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "agent-studio-model-row" + (reachable ? "" : " is-unreachable");
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.innerHTML =
+      `<span class="agent-studio-model-row-text"><b>${escapeText(label)}</b></span>` +
+      (selected ? '<span class="agent-studio-model-row-tick">✓</span>' : "");
+    // A model with no key is still choosable: the brain refuses the switch and says why,
+    // which is more use than a row that cannot be clicked at all.
+    row.addEventListener("click", () => void chooseModel(value));
+    return row;
+  }
+
+  /** Point the robot at `spec`: the brain switches between turns, or refuses and says why. */
+  async function chooseModel(spec) {
+    modelOpen = false;
+    modelError = "";
+    modelBusy = true;
+    render(true);
+    const res = await agentState.setModel(spec);
+    modelBusy = false;
+    // A switch that did not persist is still a switch: say so without calling it a failure.
+    modelError = res.message;
+    render(true);
+  }
+
+  function escapeText(/** @type {string} */ text) {
+    const node = document.createElement("span");
+    node.textContent = text;
+    return node.innerHTML;
+  }
+
   function renderSkills(inStory, r, agent, f, canEdit) {
     const s = agentState.get();
     // In the story the roster is the story's agent, and only what it has been offered:
@@ -1101,7 +1439,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const wanted = new Set(r?.wants ?? (inStory ? [MEMORY] : []));
     skills.replaceChildren();
     for (const id of listed) {
-      if (r && !unlocked.has(id)) continue;
+      if (inStory && id === ARM_MOVE && !s.activeSkills.has(id)) continue;
+      if (r && !unlocked.has(id) && !s.activeSkills.has(id)) continue;
       if (inStory && !r && UNMENTIONED_SKILLS.has(id) && !s.activeSkills.has(id)) continue;
       const granted = s.activeSkills.has(id);
       if (inStory && wanted.has(id) && !granted) continue; // the grant card above is that skill
@@ -1124,7 +1463,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (inStory) {
         const state = document.createElement("span");
         state.className = "agent-studio-skill-state microlabel";
-        state.textContent = fresh ? "new" : "granted";
+        state.textContent = fresh ? "new" : "added";
         row.append(state);
       } else if (canEdit) {
         const del = document.createElement("button");
@@ -1183,13 +1522,19 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   toggle.addEventListener("click", () => setDockOpen(!dockOpen));
+  mobileToggle.addEventListener("click", () => setDockOpen(!dockOpen));
   applyDockOpen(false);
-  // Narrow screens keep the bottom sheet they had: the picker goes back to the chat
-  // panel and the editor stands down until there is room for it.
+  // Mobile opens this same editor from the corner menu; its picker stays in chat.
   const setCompact = (/** @type {boolean} */ on) => {
+    const changed = compact !== on;
     compact = on;
-    dock.hidden = on;
+    if (on && draft?.isNew) chooserOpen = false;
+    if (changed) applyDockOpen(false);
+    dock.hidden = on && !dockOpen;
     opts.dockDirectives?.(on ? null : panelEl);
+    // A phone's stage is fixed to the whole display, under the browser's toolbar; the sheet is
+    // not. Beside the sheet, "just above it" is measured from the same edge.
+    (on ? root : (root.querySelector(".video-stage") ?? root)).append(leaveBtn);
     // Compact leaves Start/Stop to the sheet's own header, which has already claimed it.
     if (!on) opts.dockStartStop?.(headAction);
     render(true);
@@ -1231,23 +1576,33 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
   chooser.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    event.stopPropagation();
     chooserOpen = false;
     render(true);
     addBtn.focus();
   });
+  const onMenuKeyDown = (/** @type {KeyboardEvent} */ event) => {
+    if (event.key !== "Escape" || !compact || !dockOpen) return;
+    setDockOpen(false);
+    mobileToggle.focus();
+  };
+  document.addEventListener("keydown", onMenuKeyDown);
   // Capture-phase pointerdown: the stage and the picker swallow clicks, and a drag never
   // makes one. The row spans the panel, so only the button and the list itself count as inside.
   const onOutsideClick = (/** @type {PointerEvent} */ event) => {
     const path = event.composedPath();
+    if (compact && dockOpen && !path.includes(dock) && !path.includes(mobileToggle)) {
+      setDockOpen(false);
+    }
     if (chooserOpen && !path.includes(addBtn) && !path.includes(chooser)) {
       chooserOpen = false;
       render(true);
     }
   };
   document.addEventListener("pointerdown", onOutsideClick, true);
-  // Using the environment tiles is the lesson; the world changing under them is the proof.
+  // Finding the scene setup is the lesson: the pointer goes at the first click on it.
   const onSceneChange = (/** @type {Event} */ event) => {
-    if (!(event.target instanceof Element) || !event.target.closest(".sim-environment-section button")) return;
+    if (!(event.target instanceof Element) || !event.target.closest(".sim-scene-toggle, .sim-environment-section button")) return;
     sceneTaught = true;
     render(true);
   };
@@ -1278,7 +1633,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       opts.showView?.("orbit"); // the grasp was watched on a camera; the story continues in the scene
     }
   });
-  const unsubAgent = agentState.subscribe(() => render());
+  const unsubAgent = agentState.subscribe(() => {
+    autoArm(); // the roster may arrive after the first challenge snapshot
+    render();
+  });
   const unsubChallenge = session?.onChallenge?.((/** @type {any} */ block) => {
     challenge = block;
     settled?.();
@@ -1313,6 +1671,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   render();
 
   return {
+    mobileToggle,
     setCompact,
     /** Resolves once the world has said whether a story is running, so the boot splash can
      * cover the moment rather than the interface appearing and half of it leaving. */
@@ -1329,8 +1688,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       document.removeEventListener("innate:play-intro", onPlayIntro);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsideClick, true);
+      document.removeEventListener("keydown", onMenuKeyDown);
       root.removeEventListener("click", onSceneChange, true);
       sceneCue?.();
+      endTour();
       opts.onCreateAgent?.(() => {});
       uncue();
       hideDragHint();
@@ -1342,6 +1703,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       opts.dockDirectives?.(null);
       opts.dockStartStop?.(null);
       dock.remove();
+      mobileToggle.remove();
       leaveBtn.remove();
       whiteout.remove();
     },

@@ -1,0 +1,5 @@
+# Lockfiles are generated: collapse them in diffs and leave them out of language statistics.
+lerobot/uv.lock linguist-generated=true
+sim/uv.lock linguist-generated=true
+sim/viewer/package-lock.json linguist-generated=true
+webapp/package-lock.json linguist-generated=true
