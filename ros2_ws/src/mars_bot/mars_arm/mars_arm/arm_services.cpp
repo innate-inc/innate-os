@@ -307,11 +307,11 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
             return;
         }
 
+        claimArm();
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
         for (int i = 0; i < 6; ++i)
             latest_target_[i] = msg->data[i];
         has_target_ = true;
-        markArmOwned();
 
         // Switch to teleop gains when streaming commands arrive
         if (gain_mode_ != GainMode::TELEOP) {
@@ -344,8 +344,8 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
         arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
-        if (armUnowned()) {
-            markArmUnowned();  // a fresh grace period before the fold; an owned arm stays owned
+        if (armReleased()) {
+            releaseArm();  // a fresh grace period before the fold; a claimed arm stays claimed
         }
     } catch (const std::exception& e) {
         response->success = false;
@@ -371,7 +371,7 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         arm_torque_enabled_ = false;
-        markArmUnowned();
+        releaseArm();
         response->success = true;
         response->message = "Disabled torque for all arm servos";
         RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
@@ -409,7 +409,7 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
         dynamixel_->enableTorque(7);
 
         arm_torque_enabled_ = false;
-        markArmUnowned();
+        releaseArm();
         response->success = true;
         response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
         RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
@@ -474,7 +474,7 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
                         e.what());
         }
-        markArmUnowned();
+        releaseArm();
 
         // Build JSON response with error IDs and status
         json result;

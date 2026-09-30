@@ -83,7 +83,6 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
-    this->declare_parameter("rest_pose", std::vector<double>{});
     this->declare_parameter("auto_rest", true);
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
@@ -207,7 +206,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     // at the same time, and a client's goto queues behind a fold in flight.
     idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
                                                service_callback_group_);
-    markArmUnowned();  // the boot grace counts from here: servo init above took seconds
+    releaseArm();  // the boot grace counts from here: servo init above took seconds
 
     RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }

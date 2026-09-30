@@ -57,8 +57,10 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 // ========== PLAN AND EXECUTE ==========
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                           GainMode trajectory_gain_mode) {
-    markArmOwned();
+                                           GainMode trajectory_gain_mode, std::optional<uint64_t> claim) {
+    if (!claim) {
+        claimArm();
+    }
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
     trajectory_executing_ = true;
@@ -140,18 +142,21 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
         const auto& point = interpolated_trajectory[i];
 
-        // Re-assert per waypoint: an idle-decay check racing the switch above
-        // can stomp the mode once, leaving the trajectory on soft gains.
-        gain_mode_ = trajectory_gain_mode;
-
         // Send command via the control loop's pass-through path
         {
             std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+            if (claim && arm_claim_ != *claim) {
+                return false;
+            }
             for (size_t j = 0; j < 6 && j < point.size(); ++j) {
                 latest_target_[j] = point[j];
             }
             has_target_ = true;
         }
+
+        // Re-assert per waypoint: an idle-decay check racing the switch above
+        // can stomp the mode once, leaving the trajectory on soft gains.
+        gain_mode_ = trajectory_gain_mode;
 
         // Sleep until next waypoint (except for last point)
         if (i < interpolated_trajectory.size() - 1) {
@@ -170,59 +175,75 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
 
 // ========== REST FOLD ==========
 
-void MarsArmNode::idleRestCallback() {
-    if (!armUnowned() || !arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
-        return;
-    }
-    const auto unowned_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - unowned_since_.load());
-    if (unowned_s.count() < kRestWhenIdleS) {
-        return;
-    }
-    markArmOwned();  // one attempt per limp: a fold that stops is not pushed again
-    foldToRest();
+uint64_t MarsArmNode::claimArm() {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    released_at_ = {};
+    return ++arm_claim_;
 }
 
-void MarsArmNode::foldToRest() {
-    std::vector<double> rest = this->get_parameter("rest_pose").as_double_array();
-    if (rest.size() != 6) {
-        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: rest_pose must list 6 joint positions");
+void MarsArmNode::releaseArm() {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    released_at_ = std::chrono::steady_clock::now();
+    ++arm_claim_;
+}
+
+bool MarsArmNode::armReleased() {
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    return released_at_ != std::chrono::steady_clock::time_point{};
+}
+
+void MarsArmNode::idleRestCallback() {
+    if (!arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
         return;
     }
-    std::vector<double> measured;
+    uint64_t claim = 0;
+    {
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        const std::chrono::duration<double> released_for = std::chrono::steady_clock::now() - released_at_;
+        if (released_at_ == std::chrono::steady_clock::time_point{} || released_for.count() < kRestWhenIdleS) {
+            return;
+        }
+        // Claimed under the check's lock: a stream landing in between must win.
+        released_at_ = {};
+        claim = ++arm_claim_;
+    }
+    foldToRest(claim);  // one attempt per release: a fold that gives way is not pushed again
+}
+
+void MarsArmNode::foldToRest(uint64_t claim) {
+    std::vector<double> target;
     {
         std::lock_guard<std::mutex> lock(joint_state_mutex_);
-        measured = latest_joint_positions_;
+        target = latest_joint_positions_;
     }
-    if (measured.size() != 6) {
+    if (target.size() != 6) {
         RCLCPP_WARN(this->get_logger(), "Rest fold skipped: no joint state yet");
         return;
     }
+    const RestWaypoint& rest = kRestFold.back();
     double away = 0.0;
     for (size_t j = 0; j < kArmJoints; ++j) {
-        rest[j] = clampToJointRange(j, rest[j]);
-        away = std::max(away, std::abs(measured[j] - rest[j]));
+        away = std::max(away, std::abs(target[j] - clampToJointRange(j, rest.joints[j])));
     }
     if (away < kAtRestRad) {
         RCLCPP_INFO(this->get_logger(), "Rest fold: arm already at rest");
         return;
     }
-    std::vector<double> target = measured;
     {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
         // j6 is current-based position control: re-commanding it above the
         // standing grip target zeroes the preload and drops a held object.
-        target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
+        target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : target[5]);
     }
-    rest[5] = target[5];
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest");
-    for (const RestWaypoint& waypoint : {kRestLift, RestWaypoint{rest, kRestPoseDurationS}}) {
+    for (const RestWaypoint& waypoint : kRestFold) {
         for (size_t j = 0; j < target.size(); ++j) {
             if (!std::isnan(waypoint.joints[j])) {
-                target[j] = waypoint.joints[j];
+                target[j] = clampToJointRange(j, waypoint.joints[j]);
             }
         }
-        if (!planAndExecuteTrajectory(target, waypoint.duration_s)) {
-            RCLCPP_WARN(this->get_logger(), "Rest fold stopped: the trajectory could not start (see the log)");
+        if (!planAndExecuteTrajectory(target, waypoint.duration_s, GainMode::SCHEDULED, claim)) {
+            RCLCPP_INFO(this->get_logger(), "Rest fold stopped: something else took the arm");
             return;
         }
     }
@@ -231,7 +252,7 @@ void MarsArmNode::foldToRest() {
 
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                         const std::vector<double>& segment_durations) {
-    markArmOwned();
+    claimArm();
     // See planAndExecuteTrajectory: block the idle gain decay while executing.
     trajectory_executing_ = true;
     struct HoldGuard {

@@ -27,30 +27,30 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold: how long an unowned arm waits, after going limp or after torque
+// Rest fold: how long a released arm waits, after going limp or after torque
 // comes back, before folding itself; a skill recovering a tripped servo
-// commands the arm well within this. Only rest_pose is a parameter, because
-// brain_client's Manipulation.REST must mirror it; the rest is the driver's.
+// commands the arm well within this.
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kAtRestRad = 0.05;
 
 // One leg of the rest fold: joints in /mars/arm/state radians, kHold keeps a
-// joint where it is, then how long the spline takes.
+// joint at its current target, then how long the spline takes.
 struct RestWaypoint {
-    std::vector<double> joints;
+    std::array<double, 6> joints;
     double duration_s;
 };
 constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
-// The path before rest_pose itself. A collapsed arm rests its weight on the
-// gripper tip, and pitching the wrist up under that load stalled it at its
-// 1.75 A limit, so shoulder and elbow raise the wrist first (forearm level,
-// ~10 cm above the shoulder), slower than the fold: at 1.5 s the shoulder
-// fell 0.22 rad behind.
+// A collapsed arm rests its weight on the gripper tip, and pitching the wrist
+// up under that load stalled it at its 1.75 A limit, so shoulder and elbow
+// raise the wrist first (forearm level, ~10 cm above the shoulder), slower
+// than the fold: at 1.5 s the shoulder fell 0.22 rad behind. The grip holds
+// throughout so a held object is not dropped. The last row is
+// Manipulation.REST (brain_client); keep the two in step.
 // clang-format off
-//                                   yaw    shoulder  elbow  wrist  roll   grip    seconds
-inline const RestWaypoint kRestLift{{kHold, -0.9,     0.9,   kHold, kHold, kHold}, 2.5};
+//                                                     yaw     shoulder  elbow   wrist  roll   grip    seconds
+static constexpr std::array<RestWaypoint, 2> kRestFold{{{{kHold,  -0.9,     0.9,    kHold, kHold, kHold}, 2.5},
+                                                        {{1.5708, -1.2195,  1.5723, -0.3,  0.0,   kHold}, 3.0}}};
 // clang-format on
-static constexpr double kRestPoseDurationS = 3.0;
 // Swung back past kShoulderClearanceRad the arm hits the body, unless the base
 // yaw is out to the side. The limit ramps from the joint's own limit at the
 // outer yaws to the clearance angle at the inner ones (see shoulderMinLimit).

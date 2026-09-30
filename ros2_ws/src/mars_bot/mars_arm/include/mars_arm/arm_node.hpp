@@ -28,7 +28,7 @@
 #include <array>
 #include <deque>
 #include <mutex>
-#include <atomic>
+#include <optional>
 
 namespace mars_arm {
 
@@ -89,12 +89,15 @@ class MarsArmNode : public rclcpp::Node {
     std::vector<std::vector<double>> computeCubicSplineTrajectory(const std::vector<double>& start,
                                                                   const std::vector<double>& goal, double duration,
                                                                   double dt);
+    // Without a claim the trajectory takes the arm and runs to its end; run
+    // under one, it stops (false) as soon as anything else claims the arm.
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED);
-    // Fold to rest_pose keeping the standing grip, once torque is back and
-    // nothing has owned the arm for a while.
+                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED,
+                                  std::optional<uint64_t> claim = std::nullopt);
+    // Fold along kRestFold keeping the standing grip, once torque is back and
+    // the arm has sat released for kRestWhenIdleS.
     void idleRestCallback();
-    void foldToRest();
+    void foldToRest(uint64_t claim);
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                const std::vector<double>& segment_durations);
     void armGotoJSCallback(const std::shared_ptr<mars_msgs::srv::GotoJS::Request> request,
@@ -130,20 +133,16 @@ class MarsArmNode : public rclcpp::Node {
     // Direct pass-through (guarded by arm_command_mutex_)
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
-    // Who owns the arm, for the idle watchdog: the moment it went limp (end of
-    // boot, torque_off, reboot, a tripped servo) or torque last came back to it
-    // while still limp; zero once anything drives it. A skill that parked the
-    // arm at the floor owns it, so the watchdog leaves it alone.
-    std::atomic<std::chrono::steady_clock::time_point> unowned_since_{};
-    bool armUnowned() const {
-        return unowned_since_.load() != std::chrono::steady_clock::time_point{};
-    }
-    void markArmUnowned() {
-        unowned_since_ = std::chrono::steady_clock::now();
-    }
-    void markArmOwned() {
-        unowned_since_ = std::chrono::steady_clock::time_point{};
-    }
+    // Who drives the arm, guarded by arm_command_mutex_ with the target it
+    // governs. Anything that commands the arm takes a new claim; going limp
+    // (end of boot, torque_off, reboot, a tripped servo) releases it. A skill
+    // that parked the arm at the floor still holds its claim, so the fold
+    // leaves it alone.
+    uint64_t arm_claim_{0};
+    std::chrono::steady_clock::time_point released_at_{};  // zero while claimed
+    uint64_t claimArm();
+    void releaseArm();
+    bool armReleased();
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
 
     // Joint state tracking for planning
