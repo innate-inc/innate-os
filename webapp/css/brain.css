@@ -748,6 +748,7 @@
 }
 .br-qcard.user .k { color: var(--br-aqua); }
 .br-qcard.motion .k { color: var(--br-aqua); }
+.br-qcard.skill_result .k { color: var(--br-orange); }
 .br-qcard .t {
   color: var(--text);
   font-size: 13px;

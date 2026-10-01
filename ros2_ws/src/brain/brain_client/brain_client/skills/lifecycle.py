@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 PRIMITIVE_LIFECYCLE_STATUSES = {"running", "completed", "interrupted", "failed"}
+PRIMITIVE_TERMINAL_STATUSES = frozenset(PRIMITIVE_LIFECYCLE_STATUSES - {"running"})
 
 # Tags a chained child's start/finish smuggled through the parent's feedback
 # stream (children run on the parent's goal, so they have no lifecycle of

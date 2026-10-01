@@ -165,7 +165,7 @@ export function startDemo(h) {
       await turn({ withSock: true, think: 1600, thoughts: "Navigation is progressing; the sock is getting closer to the bottom of the frame. No correction needed." });
       await sleep(2400); if (!on) return;
       h.onSkill({ skill_name: "navigate_to_position", primitive_id: "demo-nav-" + D.turn, status: "completed" });
-      h.onTrace({ ev: "event", kind: "info", text: "Skill navigate_to_position completed" });
+      h.onTrace({ ev: "event", kind: "skill_result", text: "Skill navigate_to_position completed" });
       D.running = null;
       D.nextIn = 3;
       await sleep(1200); if (!on) return;

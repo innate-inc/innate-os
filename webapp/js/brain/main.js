@@ -352,7 +352,7 @@ export function createBrainMonitor(root, opts = {}) {
   /** @param {string} kind @param {string} text */
   function addQueueCard(kind, text) {
     const div = document.createElement("div");
-    div.className = "br-qcard " + (kind === "user" ? "user" : "");
+    div.className = `br-qcard ${kind}`;
     div.title = "Queued for the next look — the model sees it next turn";
     div.innerHTML = `<div class="k">${kind}</div><div class="t"></div>`;
     /** @type {HTMLElement} */ (div.querySelector(".t")).textContent = trunc(text, 160);

@@ -16,11 +16,13 @@ from brain_client.state.battery import Battery
 
 
 class EventKind(StrEnum):
-    """What queued a stimulus — USER is load-bearing: only user speech preempts a turn."""
+    """What queued a stimulus. USER and SKILL_RESULT are load-bearing: they alone
+    preempt a turn and cut its pauses short (``_URGENT`` in brain/agent.py)."""
 
     INFO = "info"
     USER = "user"
     MOTION = "motion"
+    SKILL_RESULT = "skill_result"  # a skill ended: completed, failed or interrupted
 
 
 @dataclass(frozen=True)
