@@ -116,6 +116,8 @@ def build_agent_instances(
                     raise ValueError(f"{name} must be an integer >= {minimum} or None")
             if type(agent.minimal_system_prompt) is not bool:
                 raise ValueError("minimal_system_prompt must be a boolean")
+            if type(agent.wait_for_skill_completion) is not bool:
+                raise ValueError("wait_for_skill_completion must be a boolean")
             agent.uses_gaze()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster

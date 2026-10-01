@@ -1405,3 +1405,39 @@ def test_minimal_system_prompt_omits_generic_identity_and_running_boilerplate():
     assert directive in normal
     assert "Your hardware" in normal
     assert "generic guidance" in normal
+
+
+@pytest.mark.parametrize("wake", ["completed", "failed", "cancelled", "user"])
+def test_completion_only_agent_skips_feedback_inference_and_wakes(agent_factory, wake):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(
+        wait_for_skill_completion=True, _turn_intervals=(None, None), get_prompt=lambda: "Collect socks."
+    )
+    state.primitive_running = RunningSkill("pickup", "innate-os/pickup")
+    called = threading.Event()
+    answers(agent, Replay(script=lambda _: (called.set(), [call_reply(WAIT)])[1]))
+    agent.start()
+    try:
+        agent.on_skill_feedback("pickup", "working")
+        agent.add_event("motion nearby")
+        assert not called.wait(timeout=0.15)
+        if wake == "user":
+            agent.on_user_message("stop picking")
+        else:
+            state.primitive_running = None
+            agent.on_skill_event(wake, "pickup", "result")
+        assert called.wait(timeout=0.8)
+    finally:
+        agent.stop()
+
+
+def test_completion_wait_is_cancellable_and_opt_in(agent_factory):
+    agent, state = agent_factory()
+    state.primitive_running = RunningSkill("pickup", "innate-os/pickup")
+    # Default agents keep ordinary supervision.
+    asyncio.run_coroutine_threadsafe(agent._await_skill_completion(), agent._runtime.loop).result(timeout=0.5)
+    state.current_directive = SimpleNamespace(wait_for_skill_completion=True)
+    future = asyncio.run_coroutine_threadsafe(agent._await_skill_completion(), agent._runtime.loop)
+    time.sleep(0.05)
+    assert not future.done()
+    assert future.cancel()

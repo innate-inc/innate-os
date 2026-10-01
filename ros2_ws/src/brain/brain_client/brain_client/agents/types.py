@@ -48,6 +48,8 @@ class Agent(ABC):
 
     # Use the directive as the whole system prompt for a specialized agent.
     minimal_system_prompt: bool = False
+    # Wake for user instructions/results, without polling the model during skills.
+    wait_for_skill_completion: bool = False
 
     # Optional per-agent conversation budgets; None inherits robot settings.
     history_max_entries: int | None = None

@@ -355,6 +355,7 @@ class BrainAgent:
         reruns = 0
         try:
             while True:
+                await self._await_skill_completion()
                 await self._await_camera()
                 self._user_spoke.clear()
                 self._skill_finished.clear()
@@ -523,6 +524,19 @@ class BrainAgent:
             TraceEvent.TURN_ERROR, turn=self._turn_count, error=str(error), streak=self._error_streak, backoff=backoff
         )
         await self._pause(backoff, seen=seen, user_only=True)
+
+    async def _await_skill_completion(self) -> None:
+        """Specialized agents skip routine supervision inference, not user/result events."""
+        while (
+            getattr(self._state.current_directive, "wait_for_skill_completion", False)
+            and self._state.primitive_running is not None
+        ):
+            self._user_spoke.clear()
+            if any(event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events):
+                return
+            # Feedback/motion remain queued, but cannot start model requests.
+            # stop() cancels this await; terminal results and user input wake it.
+            await self._user_spoke.wait()
 
     async def _await_camera(self) -> None:
         """Hold turns while the camera feed is down; tell the user if it stays down."""

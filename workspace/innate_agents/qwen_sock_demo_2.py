@@ -8,6 +8,8 @@ from innate_skills.pick_sock_qwen_search import PickSockQwenSearch
 class QwenSockDemo2(QwenSockAgent):
     """Two-skill sock collection: search/pick, then marker drop."""
 
+    wait_for_skill_completion = True
+
     @property
     def id(self) -> str:
         return "qwen_sock_demo_2"
