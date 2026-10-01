@@ -1091,7 +1091,7 @@ class PickAnyObject(Skill):
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
-        if not self.llm.available:
+        if getattr(self, "requires_llm", True) and not self.llm.available:
             self.fail(f"No way to reach {self.llm.model}: set GEMINI_API_KEY or INNATE_SERVICE_KEY")
 
         # Per-run reset: don't carry the last run's object or grip rating.

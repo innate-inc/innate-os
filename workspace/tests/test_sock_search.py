@@ -62,7 +62,7 @@ class SockSearchTests(unittest.TestCase):
         tree = ast.parse((ROOT / "innate_agents/qwen_sock_demo_2.py").read_text())
         tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
         pick, drop = object(), object()
-        env = {"QwenSockAgent": object, "PickSockQwenSearch": pick, "DropInBoxAruco": drop}
+        env = {"QwenSockAgent": object, "PickSockYoloe": pick, "DropInBoxAruco": drop}
         exec(compile(tree, "agent", "exec"), env)
         agent = env["QwenSockDemo2"]()
         self.assertEqual(agent.get_skills(), [pick, drop])

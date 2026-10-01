@@ -76,20 +76,23 @@ class PickSockFast(PickAnyObject):
     def _parse_detections(self, text):
         return vision.parse_det_cands_boxed(text)
 
-    def _detect_px(self, prompt):
+    def _detect_candidates(self, prompt):
         # Re-detections retain all candidates so the existing identity gate can
         # keep the chosen sock rather than silently switching to a nearby one.
-        self._target_description = prompt
-        self.overlay.readout("looking for " + prompt, busy=True)
         selection = "one best match" if self._last_seen is None else "all matching socks"
         text, img = ask_head(
             self,
             self._detection_question(selection),
             self._p["settle_s"],
         )
+        return self._parse_detections(text), img
+
+    def _detect_px(self, prompt):
+        self._target_description = prompt
+        self.overlay.readout("looking for " + prompt, busy=True)
+        cands, img = self._detect_candidates(prompt)
         self._local_detection_box = None
         self._local_detection_image = img
-        cands = self._parse_detections(text)
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
             self.overlay.clear("target")

@@ -162,7 +162,7 @@ class SockPromptTests(unittest.TestCase):
         methods = [
             n
             for n in cls.body
-            if isinstance(n, ast.FunctionDef) and n.name in ("_detect_px", "_detection_question", "_parse_detections")
+            if isinstance(n, ast.FunctionDef) and n.name in ("_detect_px", "_detect_candidates", "_detection_question", "_parse_detections")
         ]
         exec(compile(ast.Module(body=methods, type_ignores=[]), "sock", "exec"), env)
         s = NS(
@@ -173,6 +173,7 @@ class SockPromptTests(unittest.TestCase):
             _sighting=lambda c: (1, 2, 0.3),
             _draw_sighting=Mock(),
         )
+        s._detect_candidates = lambda prompt: env["_detect_candidates"](s, prompt)
         s._detection_question = lambda selection: env["_detection_question"](s, selection)
         s._parse_detections = lambda text: env["_parse_detections"](s, text)
         self.assertEqual(env["_detect_px"](s, "sock"), (100, 200))
