@@ -36,6 +36,8 @@ class FastDropTests(unittest.TestCase):
         s.sleep = Mock()
         s._over_rim = False
         s._released = False
+        s.joint_states = NS(position=[0.1, 0.2, 0.3, 0.4, 0.0, 0.1])
+        s.manipulation.move_joints.side_effect = lambda j, **kw: self.events.append(j[4])
 
     def move(self, x, y, z, **kw):
         self.events.append(z)
@@ -43,7 +45,31 @@ class FastDropTests(unittest.TestCase):
 
     def test_raise_reach_release_then_clear(self):
         self.s._release_at(0.23, 0)
-        self.assertEqual(self.events, [0.28, 0.24, "open", "lift-clear"])
+        self.assertEqual(self.events, [0.28, 0.24, "open", -math.pi / 2, math.pi / 2, "lift-clear"])
+
+    def test_shake_preserves_arm_and_open_grip(self):
+        self.s._release_at(0.23, 0)
+        for call in self.s.manipulation.move_joints.call_args_list:
+            self.assertEqual(call.args[0][:4], [0.1, 0.2, 0.3, 0.4])
+            self.assertEqual(len(call.args[0]), 5)
+        self.assertAlmostEqual(self.s.manipulation.move_joints.call_args_list[1].kwargs["duration"], math.pi / 2)
+
+    def test_missing_joints_does_not_shake_or_retreat(self):
+        self.s.joint_states = None
+        with self.assertRaises(Failed):
+            self.s._release_at(0.23, 0)
+        self.s.manipulation.move_joints.assert_not_called()
+        self.assertTrue(self.s._released)
+        self.assertTrue(self.s._over_rim)
+
+    def test_cancel_during_shake_stops_second_rotation(self):
+        self.s.manipulation.move_joints.side_effect = lambda *a, **kw: setattr(
+            self.s.check_cancelled, "side_effect", Failed("stop")
+        )
+        with self.assertRaises(Failed):
+            self.s._release_at(0.23, 0)
+        self.assertEqual(self.s.manipulation.move_joints.call_count, 1)
+        self.assertTrue(self.s._over_rim)
 
     def test_failed_raise_never_reaches_or_opens(self):
         self.s.manipulation.move_to.side_effect = lambda *a, **kw: NS(x=0.24, y=0, z=0.1)

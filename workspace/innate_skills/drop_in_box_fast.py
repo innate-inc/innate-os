@@ -110,9 +110,27 @@ class DropInBoxFast(DropInBox):
         self.check_cancelled()
         self.manipulation.gripper_open(duration=0.6)
         self._released = True
-        self.sleep(p["release_settle_s"])
+        self._shake_release()
         self._lift_out()
         return x, y, self.RELEASE_Z
+
+    def _shake_release(self):
+        """Shake only wrist roll, preserving the overhead arm pose and open claw."""
+        self.check_cancelled()
+        joints = self.joint_states
+        if joints is None or len(joints.position) < 5:
+            raise SkillFailed("No arm joint state for release shake")
+        target = list(joints.position[:5])
+        if not all(math.isfinite(v) for v in target):
+            raise SkillFailed("Invalid arm joint state for release shake")
+        # Absolute wrist positions, within joint5's +/-pi/2 limits.
+        # Keep the other four joints fixed; five-value commands preserve OPEN.
+        for angle in (-math.pi / 2, math.pi / 2):
+            self.check_cancelled()
+            duration = max(0.2, abs(angle - target[4]) / 2.0)
+            target[4] = angle
+            self.manipulation.move_joints(list(target), duration=duration)
+        self.check_cancelled()
 
     @staticmethod
     def _require_pose(pose, x, y, z):
