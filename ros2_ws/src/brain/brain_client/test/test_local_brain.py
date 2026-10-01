@@ -1198,12 +1198,17 @@ def test_the_mic_holds_the_floor_until_the_transcript_went_out_and_beats_meanwhi
     assert sent == [("speaking", {"speaking": True})] * 2  # the beat
 
     endpointer.in_speech = False
-    mic._transcript_due = time.monotonic() + 5  # closed and committed: Scribe owes a transcript
+    owed = time.monotonic() + 5
+    mic._pending_commits.extend([(owed, True), (owed, True)])  # two closed utterances, both committed
     mic._report_speaking()
     assert len(sent) == 2  # still held
     mic._on_elevenlabs_message(None, json.dumps({"message_type": "committed_transcript", "text": "hello there"}))
+    time.sleep(0.06)
     mic._report_speaking()
-    assert sent[2:] == [("chat_in", "hello there"), ("speaking", {"speaking": False})]
+    assert sent[2:] == [("chat_in", "hello there"), ("speaking", {"speaking": True})]  # the second is still owed
+    mic._on_elevenlabs_message(None, json.dumps({"message_type": "committed_transcript", "text": "and this"}))
+    mic._report_speaking()
+    assert sent[4:] == [("chat_in", "and this"), ("speaking", {"speaking": False})]
 
 
 def test_speech_streamer_speaks_sentence_by_sentence():
