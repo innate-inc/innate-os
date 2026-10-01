@@ -46,6 +46,10 @@ class Agent(ABC):
     # JSON object replacing global request extras for this agent only.
     model_extra_body: str | None = None
 
+    # Optional per-agent conversation budgets; None inherits robot settings.
+    history_max_entries: int | None = None
+    history_max_image_turns: int | None = None
+
     # Validated once by the loader; the brain never evaluates workspace getters.
     _turn_intervals: tuple[float | None, float | None] = (None, None)
 

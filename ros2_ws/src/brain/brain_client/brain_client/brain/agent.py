@@ -428,6 +428,12 @@ class BrainAgent:
         message = ChatContext.user_message(text, [jpeg for _, jpeg in frames])
         tools = self._build_tools(events)
         directive = self._state.current_directive
+        entries = getattr(directive, "history_max_entries", None)
+        image_turns = getattr(directive, "history_max_image_turns", None)
+        context.set_history_limits(
+            self._config.history_max_entries if entries is None else entries,
+            self._config.history_max_image_turns if image_turns is None else image_turns,
+        )
         system = build_system_prompt(
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,

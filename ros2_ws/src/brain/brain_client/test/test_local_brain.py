@@ -1369,3 +1369,29 @@ def test_completion_response_race_cannot_commit_stale_tools(agent_factory):
     run_turn(agent)
     assert agent._context.history == ()
     assert agent._events[-1].kind == EventKind.SKILL_RESULT
+
+
+def test_short_agent_history_keeps_results_but_only_current_images():
+    replay = Replay([reply(Text("ok"))])
+    context = make_context(replay, max_history=100, max_image_turns=20)
+    for i in range(20):
+        context.absorb(ChatContext.user_message(f"observation {i}", [JPEG]), call_reply("wait", call_id=str(i)))
+        context.add_tool_outcomes([(ToolCall(str(i), "wait", {}), "waiting")])
+    context.set_history_limits(12, 0)
+    assert context.history_len <= 12
+    assert context.history[0].role == Role.USER
+    assert context.image_turn_count == 0
+    current = ChatContext.user_message("Skill pick_sock_qwen completed: held", [JPEG, JPEG])
+    context.generate(current, [], "S")
+    assert sum(images_in(m) for m in replay.last.messages) == 2
+    assert list(replay.last.messages[-1].texts()) == ["Skill pick_sock_qwen completed: held"]
+    calls = {c.id for m in replay.last.messages for c in m.calls()}
+    for m in replay.last.messages:
+        for part in m.parts:
+            if isinstance(part, ToolResult):
+                assert part.call_id in calls
+    context.absorb(current, reply(Text("ok")))
+    assert context.image_turn_count == 0
+    context.set_history_limits(60, 2)
+    context.absorb(ChatContext.user_message("other agent", [JPEG]), reply(Text("ok")))
+    assert context.image_turn_count == 1

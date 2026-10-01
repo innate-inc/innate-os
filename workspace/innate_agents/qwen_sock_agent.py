@@ -12,6 +12,10 @@ class QwenSockAgent(SockRehearsedAgent):
     Pickup also uses Qwen; tracking and motion retain the rehearsed behavior.
     """
 
+    # A few recent actions/results, with only the current camera observation.
+    history_max_entries = 12
+    history_max_image_turns = 0
+
     model = "openai-chat:qwen3.8-flash-next-iq4-xs-mtp3"
     model_extra_body = '{"chat_template_kwargs":{"enable_thinking":false}}'
 
