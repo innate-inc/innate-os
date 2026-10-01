@@ -51,7 +51,7 @@ class EffortTests(unittest.TestCase):
         t.body = [n for n in t.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
         exec(compile(t, "skill", "exec"), env)
         q = env["PickSockQwen"]
-        self.assertIn('enable_thinking":false', q.llm.extra_body)
+        self.assertFalse(__import__("json").loads(q.llm.extra_body)["chat_template_kwargs"]["enable_thinking"])
         self.assertFalse(hasattr(q.llm, "base_url"))
         base = env["PickSockFast"]
         other = object()
@@ -100,9 +100,21 @@ class EffortTests(unittest.TestCase):
         got = parse('[{"box_2d":[800,280,880,340],"grasp_point":[310,840]}]')
         self.assertAlmostEqual(got[0][0], 198.4)
         self.assertAlmostEqual(got[0][1], 403.2)
+        named = '{"detections":[{"x_min":280,"y_min":800,"x_max":340,"y_max":880}]}'
+        self.assertEqual(parse(named), got)
+        self.assertEqual(parse("```json\n" + named + "\n```"), got)
+        self.assertEqual(parse('[{"bbox_2d":[280,800,340,880],"coordinate_order":"xyxy"}]'), got)
+        self.assertEqual(parse('[{"bbox_2d":[800,280,880,340],"coordinate_order":"yxyx"}]'), got)
         for text in (
             "[]",
             "no socks",
+            '{"detections":[]}',
+            '[{"bbox_2d":[558,558,590,602],"label":"sock"}]',
+            '{"detections":"bad"}',
+            '{"detections":[[]]}',
+            '{"detections":[{"x_min":0,"y_min":0,"x_max":true,"y_max":100}]}',
+            '{"detections":[{"x_min":0,"y_min":0,"x_max":1001,"y_max":100}]}',
+            '{"detections":[{"x_min":0,"y_min":0,"x_max":100,"y_max":100}',
             '[{"box_2d":[-1,0,20,30]}]',
             '[{"box_2d":[20,0,10,30]}]',
             '[{"box_2d":[true,0,20,30]}]',

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 import json
 import math
+import re
 
 from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.pick_sock_fast import PickSockFast
@@ -14,7 +15,39 @@ class PickSockQwen(PickSockFast):
 
     llm: Llm = Llm(
         "openai-chat:qwen3.8-flash-next-iq4-xs-mtp3",
-        extra_body='{"chat_template_kwargs":{"enable_thinking":false}}',
+        extra_body=json.dumps(
+            {
+                "chat_template_kwargs": {"enable_thinking": False},
+                "max_tokens": 384,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "sock_detections",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "detections": {
+                                    "type": "array",
+                                    "maxItems": 4,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            name: {"type": "integer", "minimum": 0, "maximum": 1000}
+                                            for name in ("x_min", "y_min", "x_max", "y_max")
+                                        },
+                                        "required": ["x_min", "y_min", "x_max", "y_max"],
+                                        "additionalProperties": False,
+                                    },
+                                }
+                            },
+                            "required": ["detections"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+            }
+        ),
         thinking="minimal",
     )
 
@@ -26,9 +59,10 @@ class PickSockQwen(PickSockFast):
     def _detection_question(self, selection):
         return (
             "Find the sock on the floor. Return " + selection + ". "
-            'Output ONLY a JSON list of {"box_2d":[ymin,xmin,ymax,xmax]}. '
-            "Coordinates are integers from 0 to 1000: vertical first, horizontal second. "
-            "Use tight bounding boxes. If none are visible, output []."
+            'Return {"detections":[{"x_min":...,"y_min":...,"x_max":...,"y_max":...}]}. '
+            "Coordinates are integers from 0 to 1000. x is horizontal from the left; "
+            "y is vertical from the top. Use tight bounding boxes. "
+            'If none are visible, return {"detections":[]}.'
         )
 
     def _detect_px(self, prompt):
@@ -46,11 +80,36 @@ class PickSockQwen(PickSockFast):
         label = f"[QwenDetection #{getattr(self, '_detection_number', 0)}]"
         self.logger.info(f"{label} raw_reply={text!r}")
         boxes = []
-        detections = vision.parse_dets(text)
+        try:
+            # Accept fenced JSON from compatible servers, but never guess an
+            # ambiguous array's axis order from the shape of the object.
+            payload = json.loads(re.sub(r"```(?:json)?", "", text or "").strip())
+        except (ValueError, TypeError):
+            self.logger.info(f"{label} rejected response: missing or malformed JSON")
+            return []
+        detections = payload.get("detections", [payload]) if isinstance(payload, dict) else payload
+        if not isinstance(detections, list):
+            self.logger.info(f"{label} rejected response: detections must be a list")
+            return []
         if not detections:
-            self.logger.info(f"{label} no detection objects parsed; see raw_reply")
+            self.logger.info(f"{label} model returned no detections")
         for det in detections:
-            box = det.get("box_2d") if isinstance(det, dict) else None
+            if not isinstance(det, dict):
+                self.logger.info(f"{label} rejected detection: expected object, got {det!r}")
+                continue
+            if all(k in det for k in ("x_min", "y_min", "x_max", "y_max")):
+                box = [det["y_min"], det["x_min"], det["y_max"], det["x_max"]]
+            elif "box_2d" in det:
+                box = det["box_2d"]  # legacy skill contract: y,x,y,x
+            elif "bbox_2d" in det and det.get("coordinate_order") in ("xyxy", "yxyx"):
+                box = det["bbox_2d"]
+                if det["coordinate_order"] == "xyxy" and isinstance(box, list) and len(box) == 4:
+                    box = [box[1], box[0], box[3], box[2]]
+            else:
+                self.logger.info(
+                    f"{label} rejected detection: missing named coordinates or ambiguous box order: {det!r}"
+                )
+                continue
             if not isinstance(box, (list, tuple)) or len(box) != 4:
                 self.logger.info(f"{label} rejected box: expected four coordinates, got {box!r}")
                 continue
