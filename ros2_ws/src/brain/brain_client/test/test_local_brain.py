@@ -505,8 +505,10 @@ def test_approach_goal_stops_short_and_faces_the_point():
 # ---------- agent loop (fake node, no network) ----------
 
 import asyncio  # noqa: E402
+import importlib.util  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 from innate_llm import Backend, Llm  # noqa: E402
@@ -1052,6 +1054,156 @@ def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     assert all(f'"{word}"' in calls[2] for word in ("one", "two", "three"))  # the capped run carried it all
     assert '"four"' in calls[3]
     agent.stop()
+
+
+# ---------- the floor: a reply waits while the user is talking ----------
+
+MICRO_INPUT = Path(__file__).resolve().parents[5] / "workspace" / "inputs" / "micro_input.py"
+
+
+def floor_constants(monkeypatch, **values: float) -> None:
+    from brain_client.brain import agent as agent_module
+
+    for name, value in values.items():
+        monkeypatch.setattr(agent_module, name, value)
+
+
+def held_reply(agent: BrainAgent, *sentences: str) -> threading.Event:
+    """Script one reply, streamed a sentence at a time; the event is set once it has all streamed."""
+    generated = threading.Event()
+
+    def script(request: Request):
+        def events():
+            for sentence in sentences:
+                yield TextDelta(sentence + " ")
+            generated.set()
+            yield reply(Text(" ".join(sentences)))
+
+        return events()
+
+    answers(agent, Replay(script=script))
+    return generated
+
+
+def wait_until(condition, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while not condition() and time.time() < deadline:
+        time.sleep(0.02)
+
+
+def test_a_reply_ready_mid_utterance_waits_and_the_late_transcript_reruns_it(agent_factory):
+    traces = []
+    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
+    generated = threading.Event()
+    turn_inputs = []
+
+    def script(request: Request):
+        turn_inputs.append(request.messages[-1].text())
+        if len(turn_inputs) > 1:
+            return [TextDelta("Blue."), reply(Text("Blue."))]
+
+        def events():
+            yield TextDelta("Take your time.")
+            generated.set()
+            yield reply(Text("Take your time."))
+
+        return events()
+
+    answers(agent, Replay(script=script))
+    agent.set_user_speaking(True)  # the mic opened an utterance: the user is mid-sentence
+    agent.on_user_message("Um.")
+    agent.start()
+    assert generated.wait(timeout=5)
+    time.sleep(0.3)
+    assert agent._chat.spoken == []  # the reply is complete, but the user has the floor
+
+    agent.on_user_message("What do you think is the best colour?")  # a slow batch transcript
+    agent.set_user_speaking(False)  # the mic releases the floor behind it
+    wait_until(lambda: len(turn_inputs) > 1)
+    assert "turn_preempted" in [t["ev"] for t in traces]
+    assert '"Um."' in turn_inputs[1] and '"What do you think is the best colour?"' in turn_inputs[1]
+    wait_until(lambda: agent._chat.spoken)
+    assert agent._chat.spoken == [("Blue.", True)]  # answered once, with everything heard
+    agent.stop()
+
+
+def test_a_released_floor_with_no_transcript_frees_the_held_reply_after_the_grace(agent_factory):
+    agent, state = agent_factory()
+    generated = held_reply(agent, "Still here.", "Go on.")
+    agent.set_user_speaking(True)
+    agent.on_user_message("hello")
+    agent.start()
+    assert generated.wait(timeout=5)
+    time.sleep(0.2)
+    assert agent._chat.spoken == []
+    agent.set_user_speaking(False)  # a cough: the utterance closed and nothing was transcribed
+    time.sleep(0.15)
+    assert agent._chat.spoken == []  # the grace, in case a transcript is still on its way
+    wait_until(lambda: len(agent._chat.spoken) == 2)
+    assert agent._chat.spoken == [("Still here.", True), ("Go on.", False)]  # held sentences, in order
+    agent.stop()
+
+
+def test_the_hold_outlives_the_stale_window_while_the_mic_keeps_repeating(agent_factory, monkeypatch):
+    floor_constants(monkeypatch, _SPEAKING_STALE_SEC=0.4)
+    agent, state = agent_factory()
+    generated = held_reply(agent, "Go on.")
+    agent.set_user_speaking(True)
+    agent.on_user_message("so, here is the thing")
+    agent.start()
+    assert generated.wait(timeout=5)
+    for _ in range(8):  # a long sentence: a beat lands within every stale window
+        time.sleep(0.1)
+        agent.set_user_speaking(True)
+    assert agent._chat.spoken == []
+    wait_until(lambda: agent._chat.spoken)  # the beat stopped: the mic is gone, not the user still talking
+    assert agent._chat.spoken == [("Go on.", True)]
+    agent.stop()
+
+
+def test_a_floor_held_past_the_cap_is_taken_anyway(agent_factory, monkeypatch):
+    floor_constants(monkeypatch, _FLOOR_HOLD_MAX_SEC=0.3)
+    agent, state = agent_factory()
+    generated = held_reply(agent, "Anyone there?")
+    agent.set_user_speaking(True)
+    agent.on_user_message("hello")
+    agent.start()
+    assert generated.wait(timeout=5)
+    deadline = time.time() + 2
+    while not agent._chat.spoken and time.time() < deadline:  # a VAD stuck voiced: the beat never stops
+        time.sleep(0.05)
+        agent.set_user_speaking(True)
+    assert agent._chat.spoken == [("Anyone there?", True)]
+    agent.stop()
+
+
+@pytest.mark.skipif(not MICRO_INPUT.exists(), reason="the workspace is not beside this package")
+def test_the_mic_holds_the_floor_until_the_transcript_went_out_and_beats_meanwhile(monkeypatch):
+    spec = importlib.util.spec_from_file_location("micro_input_under_test", MICRO_INPUT)
+    micro_input = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(micro_input)
+    monkeypatch.setattr(micro_input, "FLOOR_HEARTBEAT_SECS", 0.05)
+    mic = micro_input.MicroInput()
+    mic.set_active(True)
+    sent = []
+    mic.set_data_callback(lambda name, data, kind: sent.append((kind, data)))
+    mic._backend = "elevenlabs"
+    endpointer = mic._endpointer = SimpleNamespace(in_speech=True)
+
+    mic._report_speaking()
+    mic._report_speaking()  # unchanged and within the beat: not repeated
+    assert sent == [("speaking", {"speaking": True})]
+    time.sleep(0.06)
+    mic._report_speaking()
+    assert sent == [("speaking", {"speaking": True})] * 2  # the beat
+
+    endpointer.in_speech = False
+    mic._transcript_due = time.monotonic() + 5  # closed and committed: Scribe owes a transcript
+    mic._report_speaking()
+    assert len(sent) == 2  # still held
+    mic._on_elevenlabs_message(None, json.dumps({"message_type": "committed_transcript", "text": "hello there"}))
+    mic._report_speaking()
+    assert sent[2:] == [("chat_in", "hello there"), ("speaking", {"speaking": False})]
 
 
 def test_speech_streamer_speaks_sentence_by_sentence():

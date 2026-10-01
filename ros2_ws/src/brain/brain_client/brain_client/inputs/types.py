@@ -134,9 +134,11 @@ class InputDevice(ABC):
                       - "custom": Any other data the agent should see
                       - "telemetry": UI-only status the agent must NOT see
                         (published on /input_manager/telemetry for the webapp)
-                      - "speaking": {"speaking": bool} when the user starts or
-                        stops talking, so the robot holds a reply rather than
-                        talking over them (/input_manager/user_speaking)
+                      - "speaking": {"speaking": bool} — True while the user has
+                        the floor (an utterance open, or its transcript on the
+                        way), repeated every second meanwhile; False once
+                        released. The brain holds a reply while it is True
+                        (/input_manager/user_speaking)
 
         Example:
             self.send_data({

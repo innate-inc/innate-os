@@ -437,7 +437,9 @@ class BrainClientNode(Node):
 
     def _on_camera_motion(self) -> None:
         if not self.state.is_brain_active or self.brain.in_conversation() or self._robot_speaking():
-            return  # someone moving mid-conversation is the person already talking, not news
+            # Someone moving mid-conversation is the person already talking, not news. Only
+            # the early wake-up is lost: the idle look still sees a newcomer within seconds.
+            return
         # MOTION lets the brain dashboard show the wake-up cue.
         self.brain.add_event(
             "Motion detected in the camera view — something or someone is moving nearby.", kind=EventKind.MOTION

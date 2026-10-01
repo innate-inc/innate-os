@@ -80,11 +80,24 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
-# A reply ready while the user is mid-utterance waits for it to close, then this
-# long for its transcript (~0.3-0.5 s Scribe commit) to land and abandon the turn.
-_TRANSCRIPT_GRACE_SEC = 1.0
-_FLOOR_HOLD_MAX_SEC = 10.0  # a stuck "speaking" signal must not mute the robot
+# The mic holds the floor from the first voiced chunk until it has sent the
+# transcript, repeating "speaking" every second meanwhile (workspace/inputs/micro_input.py).
+_SPEAKING_STALE_SEC = 3.0  # this long without a repeat, the mic is gone — not the user still talking
+_TRANSCRIPT_GRACE_SEC = 0.5  # after the release: the transcript sent just before it rides another topic
+# Speech force-closes at 30 s (batch_stt.MAX_UTTERANCE_SECS) and its transcript
+# abandons the turn, so only a VAD stuck voiced holds longer — and must not mute the robot.
+_FLOOR_HOLD_MAX_SEC = 35.0
 _CONVERSATION_SEC = 20.0  # motion this soon after the user spoke is the same person, not news
+
+
+async def _wait_for_event(event: asyncio.Event, timeout: float) -> None:
+    """``wait_for(event.wait(), timeout)`` minus a 3.10 quirk: a cancel landing as
+    the event fires is swallowed there, and a held turn would commit instead of unwinding."""
+    waiter = asyncio.ensure_future(event.wait())
+    try:
+        await asyncio.wait({waiter}, timeout=timeout)
+    finally:
+        waiter.cancel()
 
 
 def _retry_note(error: Exception) -> str:
@@ -180,8 +193,9 @@ class BrainAgent:
         self._turn_in_flight = False
         self._speaker: SpeechStreamer | None = None  # the in-flight turn's streamer (the racing loop reads it)
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
-        self._user_speaking = False  # the mic has an utterance open (loop thread writes)
-        self._user_quiet_at = -math.inf  # monotonic time that utterance closed
+        self._user_speaking = False  # the mic reports the user has the floor (loop thread writes)
+        self._user_speaking_at = -math.inf  # monotonic time of its latest such report
+        self._user_quiet_at = -math.inf  # monotonic time the floor was released
         self._last_user_at = -math.inf  # monotonic time of the latest user message
 
         self._runtime = LoopThread("brain-agent")
@@ -535,11 +549,12 @@ class BrainAgent:
             self._pause_until = 0.0
 
     def _floor_wait(self) -> float:
-        """Seconds a reply must still hold off: open-ended while the user is
-        mid-utterance, then the grace for that utterance's transcript to land."""
+        """Seconds a reply must still hold off: while the mic keeps reporting the
+        user's utterance, then the grace for its transcript to land."""
+        now = time.monotonic()
         if self._user_speaking:
-            return math.inf
-        return self._user_quiet_at + _TRANSCRIPT_GRACE_SEC - time.monotonic()
+            return self._user_speaking_at + _SPEAKING_STALE_SEC - now
+        return self._user_quiet_at + _TRANSCRIPT_GRACE_SEC - now
 
     def _user_has_floor(self) -> bool:
         return self._floor_wait() > 0
@@ -554,8 +569,7 @@ class BrainAgent:
         deadline = time.monotonic() + _FLOOR_HOLD_MAX_SEC
         while (wait := min(self._floor_wait(), deadline - time.monotonic())) > 0:
             self._floor_changed.clear()
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._floor_changed.wait(), wait)
+            await _wait_for_event(self._floor_changed, wait)
 
     def _interval(self) -> float:
         directive = self._state.current_directive
@@ -791,12 +805,15 @@ class BrainAgent:
         return time.monotonic() - self._last_user_at < _CONVERSATION_SEC
 
     def set_user_speaking(self, speaking: bool) -> None:
-        """The mic's endpointer opened or closed an utterance (any thread)."""
+        """The mic took or released the floor, or repeats that it is held (any thread)."""
         self._runtime.post(self._on_user_speaking, speaking)
 
     def _on_user_speaking(self, speaking: bool) -> None:
-        if self._user_speaking and not speaking:
-            self._user_quiet_at = time.monotonic()
+        now = time.monotonic()
+        if speaking:
+            self._user_speaking_at = now
+        elif self._user_speaking:
+            self._user_quiet_at = now
         self._user_speaking = speaking
         self._floor_changed.set()
 

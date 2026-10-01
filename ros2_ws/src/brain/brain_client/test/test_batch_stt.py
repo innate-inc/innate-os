@@ -6,6 +6,9 @@ replies, the proxy client's form-only body, and the Http mover both vendor
 paths ride."""
 
 import json
+import threading
+import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -17,6 +20,7 @@ from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
     NO_SPEECH,
     TRANSCRIBE_TIMEOUT_SECS,
+    BatchSttSession,
     elevenlabs_proxy_transcriber,
     gemini_transcriber,
     pcm_to_wav,
@@ -171,3 +175,48 @@ def test_proxy_form_without_files_sends_an_urlencoded_body():
     request = requests[0]
     assert request.headers["content-type"] == "application/x-www-form-urlencoded"
     assert request.read() == b"model_id=scribe_v2"
+
+
+class Voiced:
+    """A detector the test flips by hand; the attributes are the VoicedDetector surface."""
+
+    threshold = 0.5
+
+    def __init__(self):
+        self.level = 0.0
+        self.voiced = False
+        self.on = False
+
+    def __call__(self, chunk: bytes) -> bool:
+        self.voiced = self.on
+        return self.on
+
+
+def test_a_closed_utterance_is_in_flight_until_its_transcription_settles():
+    release = threading.Event()
+    transcripts = []
+    detector = Voiced()
+    session = BatchSttSession(
+        transcriber=lambda wav: "hello" if release.wait(timeout=5) else "",
+        sample_rate=24_000,
+        is_voiced=detector,
+        silence_secs=0.1,
+        on_transcript=transcripts.append,
+        logger=SimpleNamespace(info=lambda *a: None, error=lambda *a: None),
+    )
+    session.start()
+    chunk = b"\x00\x00" * 480  # 20 ms
+    detector.on = True
+    for _ in range(15):  # 0.3 s of speech, past MIN_VOICED_SECS
+        session.feed(chunk)
+    assert session.in_speech and session.in_flight == 0
+    detector.on = False
+    for _ in range(6):  # 0.12 s of silence closes it
+        session.feed(chunk)
+    assert not session.in_speech and session.in_flight == 1  # the user still has the floor
+    release.set()
+    deadline = time.time() + 5
+    while session.in_flight and time.time() < deadline:
+        time.sleep(0.01)
+    assert transcripts == ["hello"] and session.in_flight == 0
+    session.stop()
