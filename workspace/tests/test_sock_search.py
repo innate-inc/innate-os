@@ -58,12 +58,13 @@ class SockSearchTests(unittest.TestCase):
                          [-math.pi / 6, math.pi / 3])
         self.obj.host.say.assert_called_once()
 
-    def test_agent_exposes_only_pick_and_drop(self):
+    def test_agent_exposes_pick_drop_wave_and_microphone(self):
         tree = ast.parse((ROOT / "innate_agents/qwen_sock_demo_2.py").read_text())
         tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
-        pick, drop = object(), object()
-        env = {"QwenSockAgent": object, "PickSockYoloe": pick, "DropInBoxAruco": drop}
+        pick, drop, wave, mic = object(), object(), object(), object()
+        env = {"QwenSockAgent": object, "PickSockYoloe": pick, "DropInBoxAruco": drop, "Wave": wave, "MicroInput": mic}
         exec(compile(tree, "agent", "exec"), env)
         agent = env["QwenSockDemo2"]()
-        self.assertEqual(agent.get_skills(), [pick, drop])
+        self.assertEqual(agent.get_skills(), [pick, drop, wave])
+        self.assertEqual(agent.get_inputs(), [mic])
         self.assertEqual(agent.display_name, "Qwen Sock Demo 2")
