@@ -289,9 +289,10 @@ class MarkerDock:
             host.sleep(LOOP_PERIOD)
         raise SkillFailed("Box marker not found after looking around; stopped holding sock")
 
-    def run(self):
+    def run(self, follower=None):
         host = self.host
-        follower = MarkerFollower(host.mobility)
+        if follower is None:
+            follower = MarkerFollower(host.mobility)
         raw = host.main_image
         start = last_seen = time.monotonic()
         lock = lost = stable = 0

@@ -102,3 +102,24 @@ turn from the unsmoothed horizontal error (capped at 0.35 rad/s). Three fresh
 frames within 8 pixels end recovery. Missing observations reset recovery; it
 never turns blindly from a stale marker. A five-second recovery timeout prevents
 release when recentering fails.
+
+## Stationary Gemini rehearsal
+
+Select **Gemini Stationary Sock Demo** (`gemini_sock_stationary_agent`). It uses
+Gemini 3.6 Flash for the agent and for sock detection, with no microphone, gaze,
+or navigation tool. The sequence is pickup, marker drop, right turn of 90 degrees,
+then the next sock. Use the app to stop it.
+
+- `pick_sock_stationary(prompt: str)`: describe the sock's color. Place it within
+  arm reach on the floor. One Gemini detection, then the established close/twist,
+  lift, and gripper check. No base search, approach, correction, or backup.
+- `drop_in_box_stationary()`: rotates toward the taught marker box, checks the
+  same marker alignment/distance, releases from above and raises the arm. No
+  forward/backward approach or retreat. Place the box at the taught distance
+  from the robot's fixed turning center; an incorrect distance times out without
+  releasing. It still requires the existing marker teaching configuration.
+
+Out-of-reach socks fail instead of moving the robot. The original moving demo
+agents and skills remain available. Software tests verify zero commanded
+translation; physical placement, wheel slip, and successful grasp/drop still need
+rehearsal on the robot.
