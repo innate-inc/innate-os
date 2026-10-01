@@ -43,6 +43,7 @@ def detection_candidates(payload, threshold=0.05):
 class PickSockYoloe(PickSockFast):
     """Search by turning, then approach and pick a green floor sock using YOLOE."""
 
+    detection_prompt = "green sock"
     requires_llm = False
     _p = {
         **PickSockFast._p,
@@ -54,7 +55,7 @@ class PickSockYoloe(PickSockFast):
 
     def execute(self) -> SkillReturn:
         """Find and pick a green sock. Turns to search automatically."""
-        return super().execute("green sock")
+        return super().execute(self.detection_prompt)
 
     def _detect_candidates(self, prompt):
         self.mobility.stop()
@@ -65,7 +66,7 @@ class PickSockYoloe(PickSockFast):
         boundary = uuid.uuid4().hex
         jpeg = base64.b64decode(img)
         body = (
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ngreen sock\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{self.detection_prompt}\r\n"
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"frame.jpg\"\r\n"
             "Content-Type: image/jpeg\r\n\r\n"
         ).encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
@@ -82,7 +83,7 @@ class PickSockYoloe(PickSockFast):
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise SkillFailed(f"YOLOE detection failed: {error}") from error
         self.logger.info(
-            f"[YOLOE] prompt=green sock elapsed={time.monotonic() - started:.3f}s "
+            f"[YOLOE] prompt={self.detection_prompt!r} elapsed={time.monotonic() - started:.3f}s "
             f"detections={len(candidates)} boxes={payload['detections']}"
         )
         return candidates, img
