@@ -438,6 +438,7 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            minimal=getattr(directive, "minimal_system_prompt", False),
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")

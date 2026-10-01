@@ -1395,3 +1395,13 @@ def test_short_agent_history_keeps_results_but_only_current_images():
     context.set_history_limits(60, 2)
     context.absorb(ChatContext.user_message("other agent", [JPEG]), reply(Text("ok")))
     assert context.image_turn_count == 1
+
+
+
+def test_minimal_system_prompt_omits_generic_identity_and_running_boilerplate():
+    directive = "Pick socks silently; wait for skill results."
+    assert build_system_prompt(directive, running_guidance="generic guidance", minimal=True) == directive
+    normal = build_system_prompt(directive, running_guidance="generic guidance")
+    assert directive in normal
+    assert "Your hardware" in normal
+    assert "generic guidance" in normal

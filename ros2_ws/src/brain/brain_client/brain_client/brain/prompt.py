@@ -102,9 +102,15 @@ A skill is running right now. Guidance while it runs:
 
 
 def build_system_prompt(
-    directive_prompt: str | None, identity: RobotIdentity | None = None, running_guidance: str = ""
+    directive_prompt: str | None,
+    identity: RobotIdentity | None = None,
+    running_guidance: str = "",
+    *,
+    minimal: bool = False,
 ) -> str:
     directive = (directive_prompt or "").strip() or "Be a helpful home robot."
+    if minimal:
+        return directive
     prompt = _SYSTEM_PROMPT.format(directive=directive, identity=_identity_block(identity))
     if running_guidance:
         prompt += _RUNNING_GUIDANCE.format(guidance=running_guidance)
