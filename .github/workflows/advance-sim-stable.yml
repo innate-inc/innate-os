@@ -31,7 +31,7 @@ jobs:
     if: github.repository == 'innate-inc/innate-os' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: main
           # Full history: pushing from a shallow clone is rejected, and the
