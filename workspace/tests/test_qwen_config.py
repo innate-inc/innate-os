@@ -69,7 +69,7 @@ class EffortTests(unittest.TestCase):
         base = NS(execute=Mock(return_value="done"))
         env = {"PickAnyObject": base, "SkillReturn": str}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), "pickup", "exec"), env)
-        host = object()
+        host = NS()
         self.assertEqual(env["execute"](host), "done")
         base.execute.assert_called_once_with(host, "the sock on the floor")
 
@@ -95,7 +95,7 @@ class EffortTests(unittest.TestCase):
         exec(compile(ast.Module(body=[fn], type_ignores=[]), "qwen", "exec"), env)
 
         def parse(text):
-            return env["_parse_detections"](None, text)
+            return env["_parse_detections"](NS(logger=Mock()), text)
 
         got = parse('[{"box_2d":[800,280,880,340],"grasp_point":[310,840]}]')
         self.assertAlmostEqual(got[0][0], 198.4)
