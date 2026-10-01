@@ -379,7 +379,7 @@ class BoxSearchTests(unittest.TestCase):
         commands = [c.kwargs for c in h.mobility.send_cmd_vel.call_args_list]
         self.assertTrue(any(c["angular_z"] > 0 for c in commands))
         self.assertTrue(all(c["linear_x"] == 0 for c in commands))
-        self.assertLessEqual(max(c["angular_z"] for c in commands), 0.25)
+        self.assertLessEqual(max(c["angular_z"] for c in commands), 0.5)
         h.mobility.stop.assert_called()
 
     def test_search_does_not_lock_on_one_repeated_frame(self):

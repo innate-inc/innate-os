@@ -44,7 +44,13 @@ class PickSockYoloe(PickSockFast):
     """Search by turning, then approach and pick a green floor sock using YOLOE."""
 
     requires_llm = False
-    _p = {**PickSockFast._p, "search_turns_deg": (0, -90, -90, -90), "silent_search": True}
+    _p = {
+        **PickSockFast._p,
+        "search_turns_deg": (0, -90, -90, -90),
+        "silent_search": True,
+        "rot_wz_max": 1.1,
+        "rot_kp": 3.0,
+    }
 
     def execute(self) -> SkillReturn:
         """Find and pick a green sock. Turns to search automatically."""

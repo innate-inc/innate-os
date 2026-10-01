@@ -1,4 +1,5 @@
 import ast
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -36,6 +37,7 @@ class MarkerDropTests(unittest.TestCase):
         tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
         self.config = dict(head_tilt_deg=-12, near_xy=[0.23, 0], image_size=[640, 480])
         env = dict(
+            time=time,
             SkillReturn=str,
             SkillFailed=RuntimeError,
             DropInBoxFast=base,
@@ -47,6 +49,7 @@ class MarkerDropTests(unittest.TestCase):
         exec(compile(tree, "marker_drop", "exec"), env)
         self.s = env["DropInBoxAruco"]()
         s = self.s
+        s.logger = Mock()
         s.manipulation = Mock()
         s.manipulation.clamp_reach = lambda x, y: (x, y)
         s.manipulation.reachable.return_value = True

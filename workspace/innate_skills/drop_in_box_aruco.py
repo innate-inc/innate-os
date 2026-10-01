@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Innate Inc
 """Rehearsed fixed-box drop with live marker guidance and no Gemini calls."""
 
+import time
+
 from innate_skills.approach import FloorApproach
 from innate_skills.box_marker import MarkerDock, load_config
 from innate_skills.drop_in_box_fast import DropInBoxFast
@@ -50,16 +52,24 @@ class DropInBoxAruco(DropInBoxFast):
             MarkerDock(self, config).run()
             if not fresh_sock_held(self):
                 raise SkillFailed("Sock slipped during approach; refusing an empty drop")
+            released_at = time.monotonic()
             self._release_at(near_x, near_y)
+            self.logger.info(f"[DropTiming] arm release/shake/clear: {time.monotonic() - released_at:.2f}s")
             # _release_at raises the arm and verifies clearance before returning.
             if self._over_rim:
                 raise SkillFailed("Arm has not cleared the rim; refusing retreat")
-            retreat = FloorApproach(self, {**self._p, "drive_v_max": 0.10, "drive_v_min": 0.04}, self._detect_px)
+            retreat = FloorApproach(
+                self, {**self._p, "drive_v_max": 0.20, "drive_v_min": 0.04, "drive_kp": 1.2}, self._detect_px
+            )
+            retreat_at = time.monotonic()
             if not retreat.drive(-0.15):
                 raise SkillFailed("Released at taught pose, but retreat failed")
+            self.logger.info(f"[DropTiming] retreat: {time.monotonic() - retreat_at:.2f}s")
             # No vision verdict: release at a taught pose is not proof of landing.
             return "Released sock at the taught box pose and raised the arm; landing was not visually verified."
         finally:
             self.mobility.stop()
+            fold_at = time.monotonic()
             self._retract()
+            self.logger.info(f"[DropTiming] retract: {time.monotonic() - fold_at:.2f}s")
             self.head.set_position(0)

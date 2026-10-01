@@ -230,7 +230,7 @@ class MarkerDock:
 
     horizontal_tolerance = 8
     size_tolerance = 0.06
-    search_speed = 0.25
+    search_speed = 0.5
     stationary = False
 
     def __init__(self, host, config):

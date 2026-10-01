@@ -52,7 +52,7 @@ class EasingTests(unittest.TestCase):
             r.step(-0.18, -0.9)
         self.assertLess(r.vx, -0.17)
 
-    def simulate(self, amount, turning=False, fail=None):
+    def simulate(self, amount, turning=False, fail=None, params=None):
         position = [0.0, 0.0, 0.0]
         cmd = [0.0, 0.0]
         commands = []
@@ -85,6 +85,7 @@ class EasingTests(unittest.TestCase):
             odom_xyt=odom,
             host=NS(mobility=NS(send_cmd_vel=send, stop=lambda: stops.append(True)), sleep=sleep, logger=Mock()),
         )
+        s.p.update(params or {})
         try:
             result = self.move(s, amount, turning=turning)
         finally:
@@ -97,6 +98,19 @@ class EasingTests(unittest.TestCase):
             ok, pos, cmd = self.simulate(amount, turn)
             self.assertTrue(ok)
             self.assertLessEqual(abs(pos[2 if turn else 0] - amount), math.radians(2.5) if turn else 0.003)
+
+    def test_faster_retreat_keeps_acceleration_and_arrival_bounds(self):
+        old = {"drive_kp": 0.3, "drive_v_max": 0.1, "drive_tol_m": 0.015}
+        self.simulate(-0.15, params=old)
+        old_time = self.t
+        self.t = 0
+        ok, pos, commands = self.simulate(-0.15, params={**old, "drive_kp": 1.2, "drive_v_max": 0.2})
+        self.assertTrue(ok)
+        self.assertLess(self.t, old_time * 0.7)
+        self.assertLessEqual(abs(pos[0] + 0.15), 0.015)
+        self.assertLessEqual(max(abs(v) for v, _ in commands), 0.2)
+        for (v0, _), (v1, _) in zip(commands, commands[1:]):
+            self.assertLessEqual(abs(v1 - v0), 0.2 * 0.03 + 1e-9)
 
     def test_feedback_loss_and_cancel_stop_immediately(self):
         ok, _, _ = self.simulate(0.2, fail="odom")
