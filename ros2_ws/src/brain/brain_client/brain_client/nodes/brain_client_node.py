@@ -34,7 +34,7 @@ from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.agents.initializer import initialize_agents
@@ -335,6 +335,7 @@ class BrainClientNode(Node):
     def _create_always_on_subscriptions(self) -> None:
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
+        self.create_subscription(Bool, "/input_manager/user_speaking", self._on_user_speaking, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
@@ -435,14 +436,22 @@ class BrainClientNode(Node):
         )
 
     def _on_camera_motion(self) -> None:
-        if not self.state.is_brain_active:
+        if not self.state.is_brain_active or self.brain.in_conversation() or self._robot_speaking():
+            # Someone moving mid-conversation is the person already talking, not news. Only
+            # the early wake-up is lost: the idle look still sees a newcomer within seconds.
             return
         # MOTION lets the brain dashboard show the wake-up cue.
         self.brain.add_event(
             "Motion detected in the camera view — something or someone is moving nearby.", kind=EventKind.MOTION
         )
 
+    def _robot_speaking(self) -> bool:
+        return self._tts_handler is not None and self._tts_handler.is_playing
+
     # ================= always-on subscription callbacks =================
+    def _on_user_speaking(self, msg: Bool) -> None:
+        self.brain.set_user_speaking(msg.data)
+
     def _on_chat_in(self, msg: String) -> None:
         try:
             data = json.loads(msg.data)

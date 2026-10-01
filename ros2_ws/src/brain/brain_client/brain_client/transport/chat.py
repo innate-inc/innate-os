@@ -14,9 +14,13 @@ import json
 import re
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from brain_client.brain.context import split_tool_narration
 from brain_client.common.enums import StrEnum
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _REPLY_IDS = itertools.count(1)
@@ -105,8 +109,8 @@ class ChatManager:
         if self._tts_handler is not None:
             self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
 
-    def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self)
+    def stream_speech(self, hold: Callable[[], bool] | None = None) -> SpeechStreamer:
+        return SpeechStreamer(self, hold)
 
 
 class SpeechStreamer:
@@ -118,10 +122,15 @@ class SpeechStreamer:
     speak atomic, and :meth:`try_abandon` decides mute-if-unspoken atomically —
     without it, a reply could voice its first sentence right after the loop
     decided to abandon it.
+
+    While ``hold`` is true the reply has not started, so sentences queue up
+    unspoken (still abandonable) until :meth:`flush` lets them out in order.
     """
 
-    def __init__(self, chat: ChatManager):
+    def __init__(self, chat: ChatManager, hold: Callable[[], bool] | None = None):
         self._chat = chat
+        self._hold = hold
+        self._held: list[str] = []
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -135,14 +144,20 @@ class SpeechStreamer:
             self._say(sentence)
 
     def flush(self) -> None:
-        self._say(self._buffer)
-        self._buffer = ""
+        """Speak what is left: held sentences first, then the unterminated tail."""
+        with self._lock:
+            self._hold = None
+            held, self._held = self._held, []
+            for sentence in (*held, self._buffer):
+                self._say_locked(sentence)
+            self._buffer = ""
 
     def mute(self) -> None:
         """Drop everything not yet spoken — the reply went stale mid-stream."""
         with self._lock:
             self._muted = True
             self._buffer = ""
+            self._held = []
 
     def try_abandon(self) -> bool:
         """Mute iff nothing has been spoken yet; True when the reply was abandoned.
@@ -156,6 +171,7 @@ class SpeechStreamer:
                 return False
             self._muted = True
             self._buffer = ""
+            self._held = []
             return True
 
     def _say(self, sentence: str) -> None:
@@ -164,6 +180,9 @@ class SpeechStreamer:
 
     def _say_locked(self, sentence: str) -> None:
         if self._muted:
+            return
+        if self._held or (self._hold is not None and not self.spoke and self._hold()):
+            self._held.append(sentence)
             return
         # Leaked tool narration, never speech — cut mid-sentence too (the model
         # appends it without a boundary) and mute the rest of the reply. Shared

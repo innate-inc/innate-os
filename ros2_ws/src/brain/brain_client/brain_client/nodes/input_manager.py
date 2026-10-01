@@ -33,8 +33,14 @@ class InputManagerNode(Node):
         self.chat_in_pub = self.create_publisher(String, "/brain/chat_in", 10)
         self.custom_pub = self.create_publisher(String, "/input_manager/custom", 10)
         self.telemetry_pub = self.create_publisher(String, "/input_manager/telemetry", 10)
+        self.speaking_pub = self.create_publisher(Bool, "/input_manager/user_speaking", 10)
         self.manager = InputDeviceManager(
-            self, proxy, chat_in_pub=self.chat_in_pub, custom_pub=self.custom_pub, telemetry_pub=self.telemetry_pub
+            self,
+            proxy,
+            chat_in_pub=self.chat_in_pub,
+            custom_pub=self.custom_pub,
+            telemetry_pub=self.telemetry_pub,
+            speaking_pub=self.speaking_pub,
         )
 
         self.create_subscription(String, "/input_manager/active_inputs", self._on_active_inputs, 10)
@@ -56,7 +62,7 @@ class InputManagerNode(Node):
         # An empty list disables biasing and its ElevenLabs surcharge.
         self.declare_parameter("stt_keyterms", list(DEFAULT_KEYTERMS))
         self.declare_parameter("stt_vad_threshold", 0.2)
-        self.declare_parameter("stt_vad_silence_secs", 0.5)
+        self.declare_parameter("stt_vad_silence_secs", 0.7)
         self.declare_parameter("stt_energy_threshold", 0.01)
         self.declare_parameter("elevenlabs_batch_stt_model", "scribe_v2")
         self.declare_parameter("gemini_stt_model", "gemini-3.6-flash")
