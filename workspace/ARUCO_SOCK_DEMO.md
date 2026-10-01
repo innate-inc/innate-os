@@ -95,3 +95,10 @@ there is no combined autonomous pickup-and-delivery skill.
 The user reported a successful Qwen pickup on MARS 47. No matched repeatability
 or throughput benchmark has been completed. Automated checks do not establish
 physical reliability on different floors, boxes, socks, or gripper calibrations.
+
+When the marker crosses from more than 24 pixels on one side to more than 24
+pixels on the other, docking brakes translation and corrects with an in-place
+turn from the unsmoothed horizontal error (capped at 0.25 rad/s). Three fresh
+frames within 8 pixels end recovery. Missing observations reset recovery; it
+never turns blindly from a stale marker. A five-second recovery timeout prevents
+release when recentering fails.

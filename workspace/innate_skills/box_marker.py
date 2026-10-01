@@ -191,6 +191,39 @@ class MarkerFollower:
         self._last_cmd_time = None
 
 
+class MarkerOvershootRecovery:
+    """A clear side crossing triggers a bounded, raw-image turning correction."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.side = 0
+        self.started = None
+        self.centered = 0
+
+    def update(self, offset, now):
+        side = 1 if offset > 24 else -1 if offset < -24 else 0
+        if self.started is None:
+            if side and self.side and side != self.side:
+                self.started = now
+            elif side:
+                self.side = side
+        if self.started is None:
+            return None
+        if now - self.started > 5:
+            raise SkillFailed("Box overshoot recovery timed out; stopped before release")
+        if abs(offset) <= 8:
+            self.centered += 1
+            if self.centered >= 3:
+                self.reset()
+            return 0.0
+        self.centered = 0
+        # Positive image error means the box is right: command a right turn.
+        # No filtered past-left error may override the observed correction.
+        return max(-0.25, min(0.25, -1.5 * offset / (IMG_W / 2)))
+
+
 class MarkerDock:
     """Image-based servo adapted from FollowAruco; no runtime pose fitting."""
 
@@ -262,6 +295,7 @@ class MarkerDock:
         raw = host.main_image
         start = last_seen = time.monotonic()
         lock = lost = stable = 0
+        recovery = MarkerOvershootRecovery()
         try:
             self._find_marker(follower)
             raw = host.main_image
@@ -276,6 +310,7 @@ class MarkerDock:
                     quad = self.detector.detect_quad(vision.b64_to_gray(image))
                 features = marker_features(quad) if quad is not None else None
                 if features is None:
+                    recovery.reset()
                     stable = 0
                     if lock < LOCK_CONFIRM_FRAMES:
                         lock = 0
@@ -294,6 +329,20 @@ class MarkerDock:
                     du, dv = features[:2] - self.goal[:2]
                     size_error = 1 - features[2] / self.goal[2]
                     if lock >= LOCK_CONFIRM_FRAMES:
+                        correction = recovery.update(float(du), now)
+                        if correction is not None:
+                            stable = 0
+                            follower._offset_filtered = follower._size_error_filtered = None
+                            # Brake translation first, then turn in place using
+                            # the existing gentle acceleration/strong braking.
+                            follower._send_cmd(0.0, correction if abs(follower._cmd_linear) <= 0.005 else 0.0)
+                            host.logger.info(
+                                f"[MarkerDock] overshoot recovery offset={du:.1f}px "
+                                f"requested_turn={correction:.3f} cmd=({follower._cmd_linear:.3f},"
+                                f"{follower._cmd_angular:.3f})"
+                            )
+                            host.sleep(LOOP_PERIOD)
+                            continue
                         if abs(du) <= 8 and abs(dv) <= 20 and abs(size_error) <= 0.06:
                             # Brake through the same slew limit before declaring
                             # arrival. Cancellation and marker loss still stop immediately.

@@ -395,3 +395,52 @@ class BoxSearchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Camera stale"):
             dock.run()
         h.mobility.stop.assert_called()
+
+
+class OvershootRecoveryTests(unittest.TestCase):
+    def test_left_overshoot_turns_right_and_recenters(self):
+        r = load_marker()["MarkerOvershootRecovery"]()
+        for i, du in enumerate([-200, -50, -5, 10]):
+            self.assertIsNone(r.update(du, i * 0.1))
+        self.assertLess(r.update(45, 0.4), 0)
+        self.assertEqual(r.update(5, 0.5), 0)
+        self.assertEqual(r.update(4, 0.6), 0)
+        self.assertEqual(r.update(3, 0.7), 0)
+        self.assertIsNone(r.update(3, 0.8))
+
+    def test_mirror_jitter_loss_and_timeout(self):
+        cls = load_marker()["MarkerOvershootRecovery"]
+        r = cls()
+        self.assertIsNone(r.update(200, 0))
+        self.assertGreater(r.update(-45, 0.1), 0)
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            r.update(-40, 6)
+        r.reset()
+        for i, du in enumerate([-10, 10, -7, 7]):
+            self.assertIsNone(r.update(du, i))
+        r.update(-100, 4)
+        r.reset()  # no turning on stale/missing observations
+        self.assertIsNone(r.update(100, 5))
+
+    def test_docking_recovery_commands_right_without_forward_motion(self):
+        e = load_marker()
+        helper = MarkerGeometryTests()
+        helper.e = e
+        clock = [0.0]
+        e["time"] = NS(monotonic=lambda: clock[0])
+        h = NS(main_image=NS(gray=None), mobility=Mock(), logger=Mock(), check_cancelled=Mock())
+        dock = e["MarkerDock"](h, helper.config())
+        dock._find_marker = lambda follower: None
+        offsets = iter([-80] * 12 + [45] * 20 + [0] * 30)
+
+        def sleep(dt):
+            clock[0] += dt
+            h.main_image = NS(gray=dock.target_quad + [next(offsets, 0), 0])
+
+        h.sleep = sleep
+        dock.detector = NS(detect_quad=lambda gray: gray)
+        self.assertEqual(dock.run(), (0.23, 0))
+        commands = [c.kwargs for c in h.mobility.send_cmd_vel.call_args_list]
+        self.assertTrue(any(c["angular_z"] < -0.03 for c in commands))
+        self.assertTrue(all(abs(c["linear_x"]) < 1e-9 for c in commands))
+        self.assertTrue(any("overshoot recovery" in c.args[0] for c in h.logger.info.call_args_list))
