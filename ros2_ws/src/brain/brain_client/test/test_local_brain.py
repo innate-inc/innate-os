@@ -1210,6 +1210,11 @@ def test_the_mic_holds_the_floor_until_the_transcript_went_out_and_beats_meanwhi
     mic._report_speaking()
     assert sent[4:] == [("chat_in", "and this"), ("speaking", {"speaking": False})]
 
+    # A commit Scribe never answered expires instead of absorbing the next commit's answer.
+    mic._pending_commits.extend([(time.monotonic() - 1, True), (time.monotonic() + 5, True)])
+    mic._on_elevenlabs_message(None, json.dumps({"message_type": "committed_transcript", "text": "third"}))
+    assert not mic._pending_commits and not mic._transcript_owed()
+
 
 def test_speech_streamer_speaks_sentence_by_sentence():
     spoken = []

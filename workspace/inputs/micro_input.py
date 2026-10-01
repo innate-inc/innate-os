@@ -302,14 +302,22 @@ class MicroInput(InputDevice):
         return endpointer is not None and (endpointer.in_speech or self._transcript_owed())
 
     def _transcript_owed(self) -> bool:
-        now = time.monotonic()
         with self._commits_lock:
-            return any(holds_speech and now < due for due, holds_speech in self._pending_commits)
+            self._drop_unanswered_locked()
+            return any(holds_speech for _, holds_speech in self._pending_commits)
 
     def _retire_commit(self) -> None:
         with self._commits_lock:
+            self._drop_unanswered_locked()
             if self._pending_commits:
                 self._pending_commits.popleft()
+
+    def _drop_unanswered_locked(self) -> None:
+        # A commit Scribe never answered would otherwise absorb the next answer,
+        # leaving every later commit one behind for the rest of the session.
+        now = time.monotonic()
+        while self._pending_commits and self._pending_commits[0][0] <= now:
+            self._pending_commits.popleft()
 
     def _forget_commits(self) -> None:
         with self._commits_lock:
