@@ -109,7 +109,7 @@ class EasingTests(unittest.TestCase):
         self.assertLess(self.t, old_time * 0.7)
         self.assertLessEqual(abs(pos[0] + 0.15), 0.015)
         self.assertLessEqual(max(abs(v) for v, _ in commands), 0.2)
-        for (v0, _), (v1, _) in zip(commands, commands[1:]):
+        for (v0, _), (v1, _) in zip(commands, commands[1:], strict=False):
             self.assertLessEqual(abs(v1 - v0), 0.2 * 0.03 + 1e-9)
 
     def test_feedback_loss_and_cancel_stop_immediately(self):
