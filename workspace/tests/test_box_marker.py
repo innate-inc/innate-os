@@ -329,12 +329,34 @@ class BoxMotionCapsTests(unittest.TestCase):
             self.assertLessEqual(v, 0.15)
             self.assertGreaterEqual(v, -0.08)
             self.assertLessEqual(abs(w), 0.5)
-            self.assertLessEqual(abs(v - previous[0]), 0.02 + 1e-9)
-            self.assertLessEqual(abs(w - previous[1]), 0.08 + 1e-9)
+            self.assertLessEqual(
+                abs(v - previous[0]), (f.linear_braking if abs(v) < abs(previous[0]) else f.linear_slew) * 0.1 + 1e-9
+            )
+            self.assertLessEqual(
+                abs(w - previous[1]), (f.angular_braking if abs(w) < abs(previous[1]) else f.angular_slew) * 0.1 + 1e-9
+            )
             previous = v, w
         f._stop()
         m.stop.assert_called()
         self.assertEqual(f._cmd_linear, 0.0)
+
+    def test_brakes_to_zero_before_gently_reversing(self):
+        e = load_marker()
+        clock = [0.0]
+        e["time"] = NS(monotonic=lambda: clock[0])
+        f = e["MarkerFollower"](Mock())
+        f._cmd_linear, f._cmd_angular = 0.15, 0.5
+        f._last_cmd_time = 0.0
+        for _ in range(4):
+            clock[0] += 0.1
+            f._send_cmd(-0.15, -0.5)
+            self.assertGreaterEqual(f._cmd_linear, 0)
+        self.assertEqual(f._cmd_linear, 0)
+        self.assertLessEqual(abs(f._cmd_angular), f.angular_slew * 0.1 + 1e-9)
+        clock[0] += 0.1
+        f._send_cmd(-0.15, -0.5)
+        self.assertAlmostEqual(f._cmd_linear, -f.linear_slew * 0.1)
+        self.assertLessEqual(abs(f._cmd_angular), f.angular_slew * 0.2 + 1e-9)
 
 
 class BoxSearchTests(unittest.TestCase):

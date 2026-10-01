@@ -176,6 +176,8 @@ class MarkerFollower:
     max_angular = 0.5
     linear_slew = 0.2 / 3
     angular_slew = 0.8 / 3
+    linear_braking = 0.4
+    angular_braking = 2.0
     _smooth = staticmethod(FollowAruco._smooth)
     _send_cmd = FollowAruco._send_cmd
     _stop = FollowAruco._stop

@@ -174,8 +174,19 @@ class FollowAruco(Skill):
         )
         linear_slew = getattr(self, "linear_slew", LINEAR_SLEW)
         angular_slew = getattr(self, "angular_slew", ANGULAR_SLEW)
-        self._cmd_linear += float(np.clip(linear - self._cmd_linear, -linear_slew * dt, linear_slew * dt))
-        self._cmd_angular += float(np.clip(angular - self._cmd_angular, -angular_slew * dt, angular_slew * dt))
+        for field, target, accel, brake in (
+            ("_cmd_linear", linear, linear_slew, getattr(self, "linear_braking", None)),
+            ("_cmd_angular", angular, angular_slew, getattr(self, "angular_braking", None)),
+        ):
+            current = getattr(self, field)
+            # Docking opts into stronger braking; standalone FollowAruco keeps
+            # its existing symmetric slew behavior. Reverse through zero so
+            # the braking rate cannot become acceleration in the other direction.
+            reversing = current * target < 0
+            if brake is not None and reversing:
+                target = 0.0
+            rate = brake if brake is not None and (reversing or abs(target) < abs(current)) else accel
+            setattr(self, field, current + float(np.clip(target - current, -rate * dt, rate * dt)))
         self.mobility.send_cmd_vel(linear_x=self._cmd_linear, angular_z=self._cmd_angular, duration=CMD_DURATION)
 
     def _stop(self):
