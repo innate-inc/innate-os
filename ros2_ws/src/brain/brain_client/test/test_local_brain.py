@@ -1214,6 +1214,10 @@ def test_the_mic_holds_the_floor_until_the_transcript_went_out_and_beats_meanwhi
     mic._pending_commits.extend([(time.monotonic() - 1, True), (time.monotonic() + 5, True)])
     mic._on_elevenlabs_message(None, json.dumps({"message_type": "committed_transcript", "text": "late"}))
     assert mic._transcript_owed() and len(mic._pending_commits) == 1
+    # An unanswered speech commit stops holding the floor at its own deadline, newer commits or not.
+    mic._pending_commits.clear()
+    mic._pending_commits.extend([(time.monotonic() - 1, True), (time.monotonic() + 5, False)])
+    assert not mic._transcript_owed()
     # Every commit past its wait (an answer never came): the queue resyncs.
     mic._pending_commits.clear()
     mic._pending_commits.append((time.monotonic() - 1, True))

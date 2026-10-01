@@ -114,6 +114,7 @@ FLOOR_HEARTBEAT_SECS = 1.0
 # A Scribe commit answers in ~0.3-0.5 s; one unanswered this long is lost and
 # must not keep the floor.
 SCRIBE_TRANSCRIPT_WAIT_SECS = 5.0
+MAX_PENDING_COMMITS = 16  # a socket that stays open but stops answering must not grow the queue forever
 
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
@@ -231,7 +232,7 @@ class MicroInput(InputDevice):
         self._pending_filler: tuple[str, float] | None = None  # (text, monotonic time) awaiting the next transcript
         # One (answer deadline, holds speech) per Scribe commit, oldest first: Scribe
         # answers commits in order, and one answer must not release a later commit's floor.
-        self._pending_commits: deque[tuple[float, bool]] = deque()
+        self._pending_commits: deque[tuple[float, bool]] = deque(maxlen=MAX_PENDING_COMMITS)
         self._commits_lock = threading.Lock()  # appended by the mic, retired by the socket thread
         self._speaking_lock = threading.Lock()  # one decide-and-send at a time, or an edge could arrive out of order
         self._speaking_reported = False
@@ -302,9 +303,11 @@ class MicroInput(InputDevice):
         return endpointer is not None and (endpointer.in_speech or self._transcript_owed())
 
     def _transcript_owed(self) -> bool:
+        now = time.monotonic()
         with self._commits_lock:
             self._drop_unanswered_locked()
-            return any(holds_speech for _, holds_speech in self._pending_commits)
+            # Each commit holds the floor for its own wait only; a newer one never extends it.
+            return any(holds_speech and now < due for due, holds_speech in self._pending_commits)
 
     def _retire_commit(self) -> None:
         with self._commits_lock:
