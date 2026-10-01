@@ -43,6 +43,8 @@ class Agent(ABC):
     # The model this agent thinks with, as "vendor:name"; None uses the robot's
     # llm_model setting. Activating the agent switches the brain to it.
     model: str | None = None
+    # JSON object replacing global request extras for this agent only.
+    model_extra_body: str | None = None
 
     # Validated once by the loader; the brain never evaluates workspace getters.
     _turn_intervals: tuple[float | None, float | None] = (None, None)

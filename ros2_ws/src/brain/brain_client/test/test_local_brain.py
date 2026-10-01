@@ -1292,3 +1292,29 @@ def test_a_key_saved_in_settings_reaches_the_process_and_a_cleared_one_leaves_it
     robot_llm.refresh_keys()
     assert "ANTHROPIC_API_KEY" not in os.environ
     assert os.environ["OPENAI_API_KEY"] == "from-the-container"
+
+
+def test_agent_request_extras_are_isolated_and_rolled_back(agent_factory, monkeypatch):
+    agent, _ = agent_factory()
+    from brain_client.brain import agent as agent_module
+
+    seen = []
+
+    def configure(spec, proxy, **kwargs):
+        seen.append(kwargs["extra_body"])
+        provider = None if spec == "openai-chat:unavailable" else Replay([reply(Text("ok"))])
+        return Llm(spec, provider, Backend.DIRECT)
+
+    monkeypatch.setattr(agent_module, "configure", configure)
+    agent._extra_body = '{"service_tier":"ultrafast"}'
+    extra = '{"chat_template_kwargs":{"enable_thinking":false}}'
+    assert agent.use_model("openai-chat:qwen", agent=True, model_extra_body=extra)[0]
+    original = agent._context
+    assert seen[-1] == extra
+    assert agent.use_model("openai-chat:qwen", agent=True, model_extra_body="{}")[0]
+    assert agent._context is not original  # same model, changed request settings
+    assert not agent.use_model("openai-chat:unavailable", agent=True, model_extra_body=extra)[0]
+    assert agent._agent_extra_body == "{}"
+    assert agent.use_model(None, agent=True)[0]
+    assert seen[-1] == agent._extra_body
+    assert agent._agent_extra_body is None

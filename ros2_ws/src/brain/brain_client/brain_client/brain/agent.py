@@ -137,6 +137,7 @@ class BrainAgent:
         # so a LAN server's URL takes effect the same turn its model name does.
         self._default_spec = config.llm_model  # the robot's setting; an agent may name its own
         self._agent_spec: str | None = None
+        self._agent_extra_body: str | None = None
         self._thinking = config.llm_thinking
         self._base_url = config.llm_base_url
         self._extra_body = config.llm_extra_body
@@ -247,7 +248,7 @@ class BrainAgent:
         self._events.clear()
         return unwound
 
-    def use_model(self, spec: str | None, *, agent: bool) -> tuple[bool, str]:
+    def use_model(self, spec: str | None, *, agent: bool, model_extra_body: str | None = None) -> tuple[bool, str]:
         """Switch to ``spec`` — the active agent's model (``agent``) or the robot's setting.
 
         A switch starts a fresh conversation: history is a transcript of parts the previous
@@ -258,9 +259,14 @@ class BrainAgent:
         """
         wanted_agent = spec if agent else self._agent_spec
         wanted_default = self._default_spec if agent else (spec or DEFAULT_MODEL)
-        ok, detail = self._reconfigure(wanted_agent or wanted_default)
+        previous_extra = self._agent_extra_body
+        if agent:
+            self._agent_extra_body = model_extra_body
+        ok, detail = self._reconfigure(wanted_agent or wanted_default, force=previous_extra != self._agent_extra_body)
         if ok:
             self._agent_spec, self._default_spec = wanted_agent, wanted_default
+        else:
+            self._agent_extra_body = previous_extra
         return ok, detail
 
     def use_llm_setting(self, name: str, value: str) -> tuple[bool, str]:
@@ -289,7 +295,12 @@ class BrainAgent:
         wanted = wanted or self._agent_spec or self._default_spec
         refresh_keys()
         try:
-            llm = configure(wanted, self._proxy, base_url=self._base_url, extra_body=self._extra_body)
+            llm = configure(
+                wanted,
+                self._proxy,
+                base_url=self._base_url,
+                extra_body=self._agent_extra_body if self._agent_extra_body is not None else self._extra_body,
+            )
         except ValueError as error:  # an unknown vendor prefix, or extra_body that is not JSON
             return False, str(error)
         if not force and llm.spec == self.model and self._context is not None:

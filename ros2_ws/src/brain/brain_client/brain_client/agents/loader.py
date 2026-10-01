@@ -15,6 +15,7 @@ several agents per file.
 from __future__ import annotations
 
 import base64
+import json
 import math
 from pathlib import Path
 
@@ -104,6 +105,11 @@ def build_agent_instances(
                 if not isinstance(agent.model, str) or not agent.model.strip():
                     raise ValueError("model must be a 'vendor:name' string or None")
                 agent.model = agent.model.strip()
+            if agent.model_extra_body is not None:
+                if not isinstance(agent.model_extra_body, str) or not isinstance(
+                    json.loads(agent.model_extra_body), dict
+                ):
+                    raise ValueError("model_extra_body must be a JSON object string or None")
             agent.uses_gaze()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster

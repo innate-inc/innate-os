@@ -132,11 +132,14 @@ class FollowAruco(Skill):
         data = np.frombuffer(frame.jpeg, dtype=np.uint8)
         return cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
 
-    def _drive_toward(self, quad) -> None:
+    def _drive_toward(
+        self, quad, *, target_center_x=None, target_size_frac=TARGET_SIZE_FRAC, size_deadband=SIZE_DEADBAND
+    ) -> None:
         center_x = quad[:, 0].mean()
-        offset = (center_x - self._frame_width / 2) / (self._frame_width / 2)
+        center_target = self._frame_width / 2 if target_center_x is None else target_center_x
+        offset = (center_x - center_target) / (self._frame_width / 2)
         side_frac = np.mean([np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)]) / self._frame_width
-        size_error = 1.0 - side_frac / TARGET_SIZE_FRAC
+        size_error = 1.0 - side_frac / target_size_frac
 
         self._offset_filtered = self._smooth(self._offset_filtered, offset)
         self._size_error_filtered = self._smooth(self._size_error_filtered, size_error)
@@ -145,8 +148,8 @@ class FollowAruco(Skill):
 
         linear = 0.0
         err = self._size_error_filtered
-        if abs(err) > SIZE_DEADBAND:
-            past_deadband = err - np.copysign(SIZE_DEADBAND, err)
+        if abs(err) > size_deadband:
+            past_deadband = err - np.copysign(size_deadband, err)
             linear = float(np.clip(LINEAR_GAIN * past_deadband, -MAX_REVERSE, MAX_LINEAR))
 
         self._send_cmd(linear, angular)
@@ -163,8 +166,16 @@ class FollowAruco(Skill):
         now = time.monotonic()
         dt = min(now - self._last_cmd_time, CMD_DURATION) if self._last_cmd_time is not None else LOOP_PERIOD
         self._last_cmd_time = now
-        self._cmd_linear += float(np.clip(linear - self._cmd_linear, -LINEAR_SLEW * dt, LINEAR_SLEW * dt))
-        self._cmd_angular += float(np.clip(angular - self._cmd_angular, -ANGULAR_SLEW * dt, ANGULAR_SLEW * dt))
+        linear = float(
+            np.clip(linear, -getattr(self, "max_reverse", MAX_REVERSE), getattr(self, "max_linear", MAX_LINEAR))
+        )
+        angular = float(
+            np.clip(angular, -getattr(self, "max_angular", MAX_ANGULAR), getattr(self, "max_angular", MAX_ANGULAR))
+        )
+        linear_slew = getattr(self, "linear_slew", LINEAR_SLEW)
+        angular_slew = getattr(self, "angular_slew", ANGULAR_SLEW)
+        self._cmd_linear += float(np.clip(linear - self._cmd_linear, -linear_slew * dt, linear_slew * dt))
+        self._cmd_angular += float(np.clip(angular - self._cmd_angular, -angular_slew * dt, angular_slew * dt))
         self.mobility.send_cmd_vel(linear_x=self._cmd_linear, angular_z=self._cmd_angular, duration=CMD_DURATION)
 
     def _stop(self):

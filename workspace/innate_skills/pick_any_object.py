@@ -404,14 +404,19 @@ class PickAnyObject(Skill):
         """Best-effort teardown: carry if holding, else fold to rest. Never
         raises. REST, not ZERO: after a failed descent the arm can be near the
         floor, and the zero posture would sweep the gripper through it."""
-        joints = CARRY_ARM + [-self._p["close_strength"]] if keep_grip else list(self.manipulation.REST)
+        joints = (
+            self._p.get("carry_joints", CARRY_ARM) + [-self._p["close_strength"]]
+            if keep_grip
+            else list(self.manipulation.REST)
+        )
         try:
             if not (keep_grip and self._carried):
-                self.manipulation.move_joints(joints, duration=FOLD_S)
+                self.manipulation.move_joints(joints, duration=self._p.get("fold_s", FOLD_S))
                 # Committed teardown (runs after cancel): time.sleep on purpose.
                 time.sleep(0.3)
-            # Re-command so the servos settle under the shifted load.
-            self.manipulation.move_joints(joints, duration=0.5)
+            # Fast pickup already joined the carry motion during verification.
+            if not (keep_grip and self._carried and self._p.get("skip_carry_repeat", False)):
+                self.manipulation.move_joints(joints, duration=0.5)
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
@@ -804,6 +809,11 @@ class PickAnyObject(Skill):
             raise LookupError("joint states missing or short")
         return list(js.position[:6])
 
+    def _close_grip(self) -> bool:
+        """Close the claw; return whether a specialized pickup also twisted."""
+        self.manipulation.gripper_close(self._p["close_strength"], duration=self._p["close_s"])
+        return False
+
     def _close_twist_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         """Close, joint-space twist+lift (IK would unwind j5). Uses time.sleep
         on purpose: the fingers have committed, and a cancel must not unwind
@@ -816,7 +826,7 @@ class PickAnyObject(Skill):
         # gripper_close holds the arm's standing target — the lifted pose —
         # while the claw shuts.
         try:
-            self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
+            twisted = self._close_grip()
         except ArmFailed as e:
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
         # Fingers have committed: from here teardown must fold with the grip
@@ -833,13 +843,13 @@ class PickAnyObject(Skill):
         # eject the object. Gemini's grip_strength doubles as the hardness signal.
         lifted = False
         try:
-            if self._soft_object:
+            if self._soft_object and not twisted:
                 j = self._arm_joints()
                 # A rolled wrist can already sit near the +1.4 stop: twist the way that has room.
                 twist = p["twist_rad"] if j[4] + p["twist_rad"] <= 1.4 else -p["twist_rad"]
                 j[4] = max(-1.4, min(1.4, j[4] + twist))
                 j[5] = grip
-                self.manipulation.move_joints(j, duration=1.0)
+                self.manipulation.move_joints(j, duration=p.get("twist_s", 1.0))
                 time.sleep(0.1)  # joint_states lags the move by a tick
             j = self._arm_joints()
             j[1] = max(-1.4, j[1] - p["lift_rad"])
@@ -862,7 +872,14 @@ class PickAnyObject(Skill):
             # arm_pitch, not the grasp pitch: the vertical tool axis is out of
             # reach at 0.22 m and stops mattering once the object is held.
             self.manipulation.move_to(
-                x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
+                x,
+                y,
+                0.22,
+                roll=roll,
+                pitch=p["arm_pitch"],
+                yaw=yaw,
+                duration=p.get("fallback_lift_s", 2.0),
+                tolerance_xy=0.10,
             )
 
     def _lift_before_close(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
@@ -899,7 +916,7 @@ class PickAnyObject(Skill):
                 self.logger.warning(f"[PickAnyObject] pre-close lift skipped ({e}); closing at the floor")
                 return
             rise = (settled.z - z0) if settled is not None else 0.0
-            if rise >= p["close_lift_min_m"]:
+            if rise >= p["close_lift_min_m"] - p.get("close_lift_tolerance_m", 0.0):
                 return
             self.logger.info(f"[PickAnyObject] pre-close lift rose {rise * 1000:.0f} mm (try {attempt})")
 
@@ -928,13 +945,26 @@ class PickAnyObject(Skill):
         if px is not None:
             self.overlay.reticle("grasp", px, label="grasp")
 
+    def _approach_grasp(self, x, y, z):
+        self.manipulation.move_to(
+            x,
+            y,
+            z,
+            pitch=self._p["arm_pitch"],
+            duration=self._p["hover_s"],
+            grip=self.manipulation.GRIPPER_OPEN,
+        )
+        self._claw_open()
+        return z
+
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
         p = self._p
         x, y = self.manipulation.clamp_reach(xy[0] - p["grasp_x_off"], xy[1])
         self._aim(x, y)
 
-        self.manipulation.torque_on()
+        if not (p.get("reuse_enabled_torque", False) and self.manipulation.torque_enabled is True):
+            self.manipulation.torque_on()
         if p["wrist_steps"] >= 1:
             self.overlay.stage("align")
             self.overlay.readout("aligning the wrist camera")
@@ -945,10 +975,7 @@ class PickAnyObject(Skill):
             self._aim(x, y)
         else:
             z, roll = p["hover_z"], 0.0
-            self.manipulation.move_to(
-                x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"], grip=self.manipulation.GRIPPER_OPEN
-            )
-            self._claw_open()
+            z = self._approach_grasp(x, y, z)
 
         self.overlay.stage("grasp")
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
@@ -958,12 +985,16 @@ class PickAnyObject(Skill):
         self._close_twist_lift(x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
-        """Back up, then check floor clear + gripper not open. Gemini gets both
+        """Check the grasp, optionally in place for a large sock. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
         object isn't mistaken for a dropped one."""
         self.overlay.stage("verify")
         self.overlay.clear("grasp")
-        approach.drive(-VERIFY_BACKUP_M, brisk=True)
+        in_place = self._p.get("verify_in_place", False)
+        if not in_place:
+            approach.drive(-VERIFY_BACKUP_M, brisk=True)
+        else:
+            self.mobility.stop()
         main_img = settled_frame(self, self._p["settle_s"])
         js = self.joint_states
         j6 = js.position[5] if js is not None and len(js.position) > 5 else None
@@ -984,17 +1015,23 @@ class PickAnyObject(Skill):
         floor_text = (
             self.llm.ask(
                 images,
-                f"Robot just tried to pick up '{prompt}' and backed up a step. "
-                f"{' '.join(labels)} "
-                f"Is '{prompt}' lying loose on the floor/carpet DIRECTLY in "
-                "front of the robot (the spot it just grabbed at), OUT of the "
-                "robot's gripper? An object held between the gripper fingers "
-                "counts as grabbed even if it is still touching or resting on "
-                "the floor — answer NO for that, as for anything hanging from "
-                "the gripper. If several similar objects are visible, judge "
-                "ONLY the grab spot just ahead — identical objects lying "
-                "elsewhere do not count. Answer YES only if the object is on "
-                "the floor free of the gripper. Answer only YES or NO.",
+                (
+                    f"Robot just lifted after trying to pick up '{prompt}'. "
+                    f"{' '.join(labels)} Is the sock visibly held between or hanging from the gripper fingers? "
+                    "Answer YES only if visibly held, otherwise NO."
+                    if in_place
+                    else f"Robot just tried to pick up '{prompt}' and backed up a step. "
+                    f"{' '.join(labels)} "
+                    f"Is '{prompt}' lying loose on the floor/carpet DIRECTLY in "
+                    "front of the robot (the spot it just grabbed at), OUT of the "
+                    "robot's gripper? An object held between the gripper fingers "
+                    "counts as grabbed even if it is still touching or resting on "
+                    "the floor — answer NO for that, as for anything hanging from "
+                    "the gripper. If several similar objects are visible, judge "
+                    "ONLY the grab spot just ahead — identical objects lying "
+                    "elsewhere do not count. Answer YES only if the object is on "
+                    "the floor free of the gripper. Answer only YES or NO."
+                ),
                 logger=self.logger,
             )
             if images
@@ -1015,9 +1052,9 @@ class PickAnyObject(Skill):
             # verdict at all (no cameras, or the call failed after retries):
             # fall back to the gripper evidence alone rather than report a
             # demonstrably held object as a missed grasp.
-            held = j6_ok
+            held = False if in_place else j6_ok
         else:
-            held = said_no and j6_ok
+            held = (said_yes if in_place else said_no) and j6_ok
         self.logger.info(
             f"[PickAnyObject] verify: floor={floor_text!r} j6={j6} "
             f"({len(images)} cams) -> {'HELD' if held else 'NOT HELD'}"
@@ -1028,12 +1065,20 @@ class PickAnyObject(Skill):
         return held
 
     def _fold_to_carry(self) -> None:
+        self._carry_started = False
         try:
-            self.manipulation.move_joints(CARRY_ARM + [-self._p["close_strength"]], duration=FOLD_S, block=False)
+            self.manipulation.move_joints(
+                self._p.get("carry_joints", CARRY_ARM) + [-self._p["close_strength"]],
+                duration=self._p.get("fold_s", FOLD_S),
+                block=False,
+            )
+            self._carry_started = True
         except ArmFailed as e:  # best effort: teardown folds again either way
             self.logger.warning(f"[PickAnyObject] carry fold not accepted ({e})")
 
     def _join_fold(self) -> None:
+        if not self._carry_started:
+            return
         try:
             self.manipulation.wait()
             self._carried = True
@@ -1059,30 +1104,26 @@ class PickAnyObject(Skill):
             self.head.set_position(int(round(self._p["tilt_deg"])))
             # Fold clear of the head camera before searching
             # (5-joint move: the claw keeps whatever it currently holds).
-            self.manipulation.move_joints(NAV_ARM, duration=2.0)
+            self.manipulation.move_joints(NAV_ARM, duration=self._p.get("nav_arm_s", 2.0))
 
             approach = FloorApproach(self, self._p, self._detect_px)
             self.overlay.begin(prompt, stages=self._stages(), frame=(IMG_W, IMG_H))
-            self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
             self.overlay.readout("parked over it")
-            self.say("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers
             # committed — only a verified miss clears it.
             if not self._grasp_verified(prompt, approach):
                 self._holding = False
-                self.say("I couldn't get a grip on it.")
-                raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")
-            self.say("Got it.")
-            return f"Picked up '{prompt}' (verified: floor clear after backing up)"
+                raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after pickup)")
+            verification = "object held in place" if self._p.get("verify_in_place") else "floor clear after backing up"
+            return f"Picked up '{prompt}' (verified: {verification})"
         except ArmFailed as e:
             # A clean arm give-up is a skill failure, not a crash. SkillFailed
             # and SkillCancelled propagate untouched — the framework owns them.
             self.fail(str(e))
         except ArmUnhealthy as e:
-            self.say("My arm isn't responding properly, stopping.")
             self.fail(f"Arm servo failure: {e}")
         finally:
             self.mobility.stop()
