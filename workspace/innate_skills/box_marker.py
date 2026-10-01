@@ -173,7 +173,7 @@ class MarkerFollower:
     # steering law, but bound both speeding up and slowing down.
     max_linear = 0.15
     max_reverse = 0.08
-    max_angular = 0.5
+    max_angular = 0.6
     linear_slew = 0.2 / 3
     angular_slew = 0.8 / 3
     linear_braking = 0.4
@@ -221,7 +221,7 @@ class MarkerOvershootRecovery:
         self.centered = 0
         # Positive image error means the box is right: command a right turn.
         # No filtered past-left error may override the observed correction.
-        return max(-0.25, min(0.25, -1.5 * offset / (IMG_W / 2)))
+        return max(-0.35, min(0.35, -1.5 * offset / (IMG_W / 2)))
 
 
 class MarkerDock:

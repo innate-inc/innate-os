@@ -328,7 +328,7 @@ class BoxMotionCapsTests(unittest.TestCase):
             v, w = cmd["linear_x"], cmd["angular_z"]
             self.assertLessEqual(v, 0.15)
             self.assertGreaterEqual(v, -0.08)
-            self.assertLessEqual(abs(w), 0.5)
+            self.assertLessEqual(abs(w), 0.6)
             self.assertLessEqual(
                 abs(v - previous[0]), (f.linear_braking if abs(v) < abs(previous[0]) else f.linear_slew) * 0.1 + 1e-9
             )

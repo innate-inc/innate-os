@@ -61,7 +61,7 @@ Marker docking now calls FollowAruco's actual `_drive_toward`, `_smooth`,
 unchanged. Docking supplies the taught target center/size and a 4% size deadband,
 then finishes on three fresh observations within 8 pixels horizontal, 20 pixels
 vertical and 6% size error. Docking caps forward speed at 0.15 m/s, reverse at 0.08 m/s, and turning at
-0.5 rad/s, with 0.067 m/s² linear and 0.267 rad/s² angular acceleration limits. Braking uses separate limits of 0.4 m/s² and
+0.6 rad/s, with 0.067 m/s² linear and 0.267 rad/s² angular acceleration limits. Braking uses separate limits of 0.4 m/s² and
 2.0 rad/s²; direction reversals brake to zero before gently accelerating again. The
 post-clearance retreat is capped at 0.10 m/s. Standalone FollowAruco defaults
 remain unchanged. There is no separate
@@ -98,7 +98,7 @@ physical reliability on different floors, boxes, socks, or gripper calibrations.
 
 When the marker crosses from more than 24 pixels on one side to more than 24
 pixels on the other, docking brakes translation and corrects with an in-place
-turn from the unsmoothed horizontal error (capped at 0.25 rad/s). Three fresh
+turn from the unsmoothed horizontal error (capped at 0.35 rad/s). Three fresh
 frames within 8 pixels end recovery. Missing observations reset recovery; it
 never turns blindly from a stale marker. A five-second recovery timeout prevents
 release when recentering fails.
