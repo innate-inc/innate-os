@@ -122,6 +122,7 @@ class MemoryRecorder:
         self._covariance_at = 0.0  # monotonic arrival of the last AMCL message
         self._head_pitch = 0.0
         self._confident_since: float | None = None
+        self._pose_doubted = False  # the latest localization was an ambiguous match
         self._grid: Map | None = None  # sight-line + paint truth for admissions and refreshes
         self._grid_at = 0.0  # monotonic arrival of the last /map message
         self._coverage = Coverage()
@@ -142,6 +143,7 @@ class MemoryRecorder:
         node.create_subscription(String, config.current_nav_mode_topic, self._on_nav_mode, 10)
         node.create_subscription(String, config.current_map_topic, self._on_current_map, 10)
         node.create_subscription(PoseWithCovarianceStamped, config.amcl_pose_topic, self._on_amcl_pose, latched_qos)
+        node.create_subscription(String, "/localization/status", self._on_localization_status, latched_qos)
         node.create_subscription(String, config.map_saved_topic, self._on_map_saved, latched_qos)
         node.create_subscription(String, config.mapping_session_topic, self._on_mapping_session, latched_qos)
         node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)
@@ -169,7 +171,7 @@ class MemoryRecorder:
     def _recordable_moment(self) -> bool:
         if self._nav_mode == "mapping":
             return self._mapping_started is not None and self._slam_alive()
-        return self._nav_mode == "navigation" and bool(self._map_name) and self._confident()
+        return self._nav_mode == "navigation" and bool(self._map_name) and self._confident() and not self._pose_doubted
 
     def _on_nav_mode(self, msg: String) -> None:
         if msg.data != self._nav_mode:
@@ -204,6 +206,7 @@ class MemoryRecorder:
             payload = json.loads(msg.data)
             map_name, stamp = str(payload["map"]), float(payload["stamp"])
             mapping_started = float(payload["mapping_started"]) if "mapping_started" in payload else None
+            rotation = float(payload.get("rotation", 0.0))
         except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             self._logger.error(f"[Memory] unreadable map-save announcement: {msg.data!r}")
             return
@@ -213,7 +216,7 @@ class MemoryRecorder:
             self._logger.info(f"[Memory] ignoring a stale save announcement for {map_name} ({age:.0f}s old)")
             return
         try:
-            promoted = self._store.promote_mapping_session(map_name, mapping_started)
+            promoted = self._store.promote_mapping_session(map_name, mapping_started, rotation)
         except StaleStageError as error:
             self._logger.error(f"[Memory] stage not promoted to {map_name} — another session built it: {error}")
             return
@@ -224,6 +227,20 @@ class MemoryRecorder:
             self._logger.error(f"[Memory] mapping-session memories not promoted: {map_name} has no readable map file")
         elif promoted:
             self._logger.info(f"[Memory] promoted {promoted} mapping-session memories to {map_name}")
+
+    def _on_localization_status(self, msg: String) -> None:
+        """grid_localizer seeds AMCL even when another place fits the scan nearly as well, and
+        AMCL then converges on that guess with a confident covariance; only a confident match
+        or a hand placement (grid_localizer publishes both as "localized") vouches for it again."""
+        if msg.data in ("localized", "localized_low_confidence"):
+            doubted = msg.data == "localized_low_confidence"
+            if doubted != self._pose_doubted:
+                self._logger.info(
+                    "[Memory] localization is ambiguous; not recording until it is confirmed"
+                    if doubted
+                    else "[Memory] localization confirmed; recording resumes"
+                )
+            self._pose_doubted = doubted
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
         covariance = msg.pose.covariance

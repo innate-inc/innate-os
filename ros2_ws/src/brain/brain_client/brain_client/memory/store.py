@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import Lock
 
@@ -158,7 +159,9 @@ class MemoryStore:
             self._revision += 1
             self.last_change_monotonic = time.monotonic()
 
-    def promote_mapping_session(self, map_name: str, mapping_started: float | None = None) -> int | None:
+    def promote_mapping_session(
+        self, map_name: str, mapping_started: float | None = None, rotation: float = 0.0
+    ) -> int | None:
         """Hand the staged mapping-session memories to the just-saved map:
         copy the stage into the map's directory with its fingerprint stamped,
         replacing whatever the name held before (the room was just re-mapped,
@@ -171,6 +174,9 @@ class MemoryStore:
         map can't be fingerprinted, with the stage kept. ``mapping_started``
         is the save's session identity: a stage another session built raises
         :class:`StaleStageError` — it must never land in a foreign map.
+        ``rotation`` is how far the save turned the SLAM frame to square the
+        map's walls: the stage keeps the session's frame, each promoted copy
+        is carried into its own map's.
         """
         stage = self._root / MAPPING_SESSION
         index = _staged_index(stage)
@@ -195,6 +201,7 @@ class MemoryStore:
         stamped = json.loads((tmp / "index.json").read_text())
         stamped["map"] = map_name
         stamped["fingerprint"] = fingerprint
+        stamped["memories"] = [asdict(_turned(Memory(**entry), rotation)) for entry in stamped["memories"]]
         # Not write_text: stage files are only ever replaced, never edited in
         # place -- that is what keeps every hardlinked file frozen, this one
         # included.
@@ -502,3 +509,14 @@ def _map_fingerprint(maps_dir: Path, map_name: str) -> str:
         return hashlib.sha256(_map_source(maps_dir, map_name).read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _turned(memory: Memory, rotation: float) -> Memory:
+    """``memory`` in the frame turned by ``rotation`` about its origin."""
+    c, s = math.cos(rotation), math.sin(rotation)
+    return replace(
+        memory,
+        x=memory.x * c - memory.y * s,
+        y=memory.x * s + memory.y * c,
+        theta=math.remainder(memory.theta + rotation, math.tau),
+    )

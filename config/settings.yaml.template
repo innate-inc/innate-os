@@ -135,6 +135,7 @@
 # mars_arm:
 #   ros__parameters:
 #     max_jerk: 150.0               # rad/s^3 trajectory jerk limit (0 disables)
+#     auto_rest: true               # fold the arm to rest when nothing commands it after boot or a torque cycle
 
 # ── Camera: main (stereo; hardware only) ──────────────────────────────
 # Resolution is staged: the sensor captures the full side-by-side stereo frame at
@@ -194,9 +195,10 @@
 # ── Localization (grid localizer) ─────────────────────────────────────
 # navigation_grid_localizer:
 #   ros__parameters:
-#     max_score_threshold: 0.3      # lower = stricter match required to accept a pose
+#     confidence_threshold: 0.75    # evidence share the best pose needs to count as confidently localized
 #     max_range: 12.0               # max lidar range used for matching (m)
-#     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
+#     auto_recover: true            # relocalize on its own when AMCL has lost the robot
+#     stall_detection: false        # stop navigation when the wheels spin but the lidar shows the robot standing still
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────
 # (Gemini credentials are connectivity and live in .env.) The TTS voice is global;

@@ -46,8 +46,8 @@ def generate_launch_description():
                 name="virtual_mars",
                 output="screen",
             ),
-            # Stand-in for the CUDA-only grid_localizer: satisfies the mode
-            # manager's lifecycle + `localize` Trigger, seeding AMCL with the
+            # Stand-in for grid_localizer: satisfies the mode manager's
+            # lifecycle + `localize` Trigger, seeding AMCL with the
             # ground-truth pose.
             Node(
                 package="mars_sim_driver",

@@ -1,6 +1,6 @@
-"""Sim stand-in for mars_nav's grid_localizer (which is CUDA-only and can't
-run in the container). Same contract: lifecycle node named
-navigation_grid_localizer, latched /initialpose, a `localize` Trigger -- but
+"""Sim stand-in for mars_nav's grid_localizer. Same contract: lifecycle node named
+navigation_grid_localizer, latched /initialpose, `localize` and
+`localization/hand_placed` Triggers -- but
 "localization" is just the driver's ground-truth odom pose (map == odom in
 sim until AMCL refines it)."""
 
@@ -68,6 +68,7 @@ class GridLocalizerSim(LifecycleNode):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(Int64, "/virtual_mars/world_epoch", self._on_world_epoch, latched)
         self.create_service(Trigger, "localize", self._on_localize)
+        self.create_service(Trigger, "localization/hand_placed", self._on_hand_placed)
 
     def _on_odom(self, msg):
         self._last_odom = msg
@@ -195,6 +196,11 @@ class GridLocalizerSim(LifecycleNode):
     def _on_localize(self, _request, response):
         response.success = self._begin_localization()
         response.message = "ground-truth pose published" if response.success else "no odom yet"
+        return response
+
+    def _on_hand_placed(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
+        response.success = True
+        response.message = "ground truth needs no vouching"
         return response
 
     def _begin_localization(self) -> bool:

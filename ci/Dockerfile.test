@@ -36,7 +36,6 @@ RUN if ! cmp -s /tmp/pr-apt-deps.txt /root/innate-os/ros2_ws/apt-dependencies.co
     if ! cmp -s /tmp/pr-pip-reqs.txt /root/innate-os/ros2_ws/pip-requirements.txt; then \
         echo "pip-requirements.txt changed since the base build; installing..." && \
         grep -v 'pypi.jetson-ai-lab.io' /tmp/pr-pip-reqs.txt | \
-            grep -v -E '^cupy' | \
             grep -v -E '^pynput' | \
             grep -v -E '^bluezero' > /tmp/pr-pip-reqs.filtered.txt && \
         uv pip install --system -r /tmp/pr-pip-reqs.filtered.txt && \

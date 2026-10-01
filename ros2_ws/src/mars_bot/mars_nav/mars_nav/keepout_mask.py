@@ -29,6 +29,16 @@ class GridSpec:
 
 
 _OFFSET_BY_ONE = bytes.maketrans(bytes(range(256)), bytes((value + 1) & 0xFF for value in range(256)))
+_UNKNOWN_AS_FREE = bytes.maketrans(b"\xff", b"\x00")
+
+
+def _raw(cells: Sequence[int]) -> bytes:
+    try:
+        # rclpy hands the grid over as array('b'): hash it at C speed — /map
+        # ticks at 2 Hz for the whole mapping session.
+        return bytes(memoryview(cells))
+    except TypeError:
+        return bytes(int(value) & 0xFF for value in cells)
 
 
 def map_fingerprint(spec: GridSpec, cells: Sequence[int]) -> str:
@@ -48,14 +58,13 @@ def map_fingerprint(spec: GridSpec, cells: Sequence[int]) -> str:
         )
     )
     digest.update(spec.frame_id.encode("utf-8"))
-    try:
-        # rclpy hands the grid over as array('b'): hash it at C speed — /map
-        # ticks at 2 Hz for the whole mapping session.
-        raw = bytes(memoryview(cells))
-    except TypeError:
-        raw = bytes(int(value) & 0xFF for value in cells)
-    digest.update(raw.translate(_OFFSET_BY_ONE))
+    digest.update(_raw(cells).translate(_OFFSET_BY_ONE))
     return digest.hexdigest()
+
+
+def legacy_fingerprint(spec: GridSpec, cells: Sequence[int]) -> str:
+    """The fingerprint this map had while map_server still loaded its unexplored cells as free."""
+    return map_fingerprint(spec, _raw(cells).translate(_UNKNOWN_AS_FREE))
 
 
 def encode_edit_frame(frame_id: str, map_hash: str) -> str:
