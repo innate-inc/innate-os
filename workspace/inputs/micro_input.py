@@ -232,7 +232,8 @@ class MicroInput(InputDevice):
         self._pending_filler: tuple[str, float] | None = None  # (text, monotonic time) awaiting the next transcript
         # One (answer deadline, holds speech) per Scribe commit, oldest first: Scribe
         # answers commits in order, and one answer must not release a later commit's floor.
-        self._pending_commits: deque[tuple[float, bool]] = deque(maxlen=MAX_PENDING_COMMITS)
+        self._pending_commits: deque[tuple[float, bool]] = deque()
+        self._evicted_commits = 0  # past MAX_PENDING_COMMITS: their answers are still owed, in order
         self._commits_lock = threading.Lock()  # appended by the mic, retired by the socket thread
         self._speaking_lock = threading.Lock()  # one decide-and-send at a time, or an edge could arrive out of order
         self._speaking_reported = False
@@ -312,8 +313,17 @@ class MicroInput(InputDevice):
     def _retire_commit(self) -> None:
         with self._commits_lock:
             self._drop_unanswered_locked()
-            if self._pending_commits:
+            if self._evicted_commits:
+                self._evicted_commits -= 1  # the oldest answers belong to the evicted commits
+            elif self._pending_commits:
                 self._pending_commits.popleft()
+
+    def _queue_commit(self, due: float, holds_speech: bool) -> None:
+        with self._commits_lock:
+            if len(self._pending_commits) >= MAX_PENDING_COMMITS:
+                self._pending_commits.popleft()
+                self._evicted_commits += 1
+            self._pending_commits.append((due, holds_speech))
 
     def _drop_unanswered_locked(self) -> None:
         # Answers match commits strictly in order, so a late answer retires its own
@@ -322,10 +332,12 @@ class MicroInput(InputDevice):
         # of answers matched one commit behind.
         if self._pending_commits and self._pending_commits[-1][0] <= time.monotonic():
             self._pending_commits.clear()
+            self._evicted_commits = 0
 
     def _forget_commits(self) -> None:
         with self._commits_lock:
             self._pending_commits.clear()
+            self._evicted_commits = 0
 
     def _report_speaking(self) -> None:
         """Publish each take and release of the floor, and repeat "taken" every
@@ -773,8 +785,7 @@ class MicroInput(InputDevice):
             return
         self._commit_at = time.monotonic()
         self._streamed_bytes = 0
-        with self._commits_lock:
-            self._pending_commits.append((self._commit_at + SCRIBE_TRANSCRIPT_WAIT_SECS, expect_transcript))
+        self._queue_commit(self._commit_at + SCRIBE_TRANSCRIPT_WAIT_SECS, expect_transcript)
 
     def _safety_commit_due(self) -> bool:
         return self._streamed_bytes > SAFETY_COMMIT_SECS * DEFAULT_SAMPLE_RATE * 2

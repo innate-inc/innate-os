@@ -1218,6 +1218,14 @@ def test_the_mic_holds_the_floor_until_the_transcript_went_out_and_beats_meanwhi
     mic._pending_commits.clear()
     mic._pending_commits.extend([(time.monotonic() - 1, True), (time.monotonic() + 5, False)])
     assert not mic._transcript_owed()
+    # Commits evicted past the cap still own the next answers, in order.
+    mic._pending_commits.clear()
+    for _ in range(micro_input.MAX_PENDING_COMMITS + 1):
+        mic._queue_commit(time.monotonic() + 5, False)
+    mic._queue_commit(time.monotonic() + 5, True)
+    mic._retire_commit()
+    mic._retire_commit()  # the two evicted commits' answers
+    assert mic._transcript_owed() and mic._pending_commits[-1][1]
     # Every commit past its wait (an answer never came): the queue resyncs.
     mic._pending_commits.clear()
     mic._pending_commits.append((time.monotonic() - 1, True))
