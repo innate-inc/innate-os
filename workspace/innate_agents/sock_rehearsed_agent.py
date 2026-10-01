@@ -5,7 +5,6 @@ from innate_skills.navigate_locally import NavigateLocally
 from innate_skills.pick_sock_fast import PickSockFast
 from innate_skills.turn_in_place import TurnInPlace
 from innate_skills.wave import Wave
-from inputs.micro_input import MicroInput
 
 from innate import Agent, InputRef, SkillRef
 
@@ -25,7 +24,7 @@ class SockRehearsedAgent(Agent):
         return [TurnInPlace, NavigateLocally, PickSockFast, DropInBoxAruco, Wave]
 
     def get_inputs(self) -> list[InputRef]:
-        return [MicroInput]
+        return []
 
     def uses_gaze(self) -> bool:
         return False
@@ -48,4 +47,4 @@ If none is found after a full turn, wait silently. Socks in the box are already 
 If pickup fails, do not assume you hold a sock. If drop fails, do not advance to the
 next sock or repeatedly restart the drop: keep holding the sock and wait silently.
 Turn or navigate locally as needed, and wave when asked. Stay still when idle.
-Stop when the user says stop."""
+Follow stop commands from the app. Microphone input is disabled."""

@@ -149,6 +149,16 @@ class SockDemoTests(unittest.TestCase):
         cls().execute(0.5, 0.1, 45)
         call.assert_called_once_with(0.5, 0.1, theta_degrees=45, local_frame=True)
 
+    def test_rehearsed_and_qwen_agents_have_no_microphone(self):
+        names = ["TurnInPlace", "NavigateLocally", "PickSockFast", "DropInBoxAruco", "Wave", "PickSockQwen"]
+        env = {n: type(n, (), {}) for n in names}
+        env.update(Agent=object, SkillRef=object, InputRef=object)
+        rehearsed = load(ROOT / "innate_agents/sock_rehearsed_agent.py", env)["SockRehearsedAgent"]
+        qwen = load(ROOT / "innate_agents/qwen_sock_agent.py", dict(env, SockRehearsedAgent=rehearsed))["QwenSockAgent"]
+        for cls in (rehearsed, qwen):
+            self.assertEqual(cls().get_inputs(), [])
+            self.assertFalse(cls().uses_gaze())
+
     def test_agent_no_gaze_or_memory_and_exact_skills(self):
         names = ["TurnInPlace", "NavigateLocally", "PickSockFast", "DropInBoxFast", "Wave", "MicroInput"]
         env = {n: type(n, (), {}) for n in names}
