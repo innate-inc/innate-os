@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace mars_arm {
 
@@ -26,6 +27,88 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
+// A skill recovering a tripped servo re-commands the arm well within this.
+static constexpr double kRestWhenIdleS = 5.0;
+static constexpr double kAtRestRad = 0.05;
+// torque_on's enable walk or a head-only fix_error holds the bus 1-2.5 s; a
+// trajectory stalled longer than this is on a wedged bus.
+static constexpr double kPassThroughStallS = 5.0;
+
+// kHold keeps a joint at its current target.
+struct RestWaypoint {
+    std::array<double, 6> joints;
+    double duration_s;
+};
+constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
+// Shoulder and elbow lift first: pitching the wrist under a collapsed arm's
+// weight stalls it. The gripper levels before the arm folds down, or its tip
+// sweeps the floor. The last row must match Manipulation.REST.
+// clang-format off
+//                                                     yaw     shoulder  elbow   wrist  roll   grip    seconds
+static constexpr std::array<RestWaypoint, 3> kRestFold{{{{kHold,  -0.9,     0.9,    kHold, kHold, kHold}, 2.5},
+                                                        {{1.5708, kHold,    kHold,  -0.3,  0.0,   kHold}, 2.0},
+                                                        {{1.5708, -1.2195,  1.5723, -0.3,  0.0,   kHold}, 2.0}}};
+// clang-format on
+// Swung back past this the arm hits the body, unless the base yaw is out to
+// the side (see shoulderMinLimit).
+static constexpr double kShoulderClearanceRad = -0.5;
+static constexpr std::array<double, 4> kShoulderClearanceYaws{-1.35, -1.0, 1.0, 1.25};
+
+// Flat beyond the ends; xs ascending.
+template <size_t N>
+double piecewiseLinear(const std::array<double, N>& xs, const std::array<double, N>& ys, double x) {
+    if (x <= xs.front()) {
+        return ys.front();
+    }
+    for (size_t i = 1; i < N; ++i) {
+        if (x < xs[i]) {
+            const double t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+            return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+        }
+    }
+    return ys.back();
+}
+// j1-j5: the gripper is never retargeted, its standing position error is the grip force.
+static constexpr size_t kArmJoints = 5;
+
+// Per joint, whether the /mars/arm/state sign is the servo's negated.
+// clang-format off
+//                                              yaw    shoulder elbow  wrist  roll   grip
+static constexpr std::array<bool, 6> kJointFlipped{false, true,    true,  true,  false, true};
+// clang-format on
+inline bool flippedJoint(size_t joint) {
+    return joint < kJointFlipped.size() && kJointFlipped[joint];
+}
+inline double jointRad(int encoder, size_t joint) {
+    const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
+    return flippedJoint(joint) ? -rad : rad;
+}
+inline int jointEncoder(double rad, size_t joint) {
+    if (flippedJoint(joint)) {
+        rad = -rad;
+    }
+    return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
+}
+
+// The pitch chain's links as (forward, up) offsets in their parent joint's
+// frame at zero angle, metres: upper arm, forearm, wrist to gripper tip.
+struct Link {
+    double forward;
+    double up;
+};
+static constexpr std::array<Link, 3> kPitchLinks{{{0.02825, 0.12125}, {0.1375, 0.0045}, {0.110838, 0.0}}};
+
+// How far the gripper tip reaches forward of the shoulder joint, metres.
+inline double gripperTipX(double shoulder, double elbow, double wrist) {
+    const std::array<double, 3> pitches{shoulder, elbow, wrist};
+    double angle = 0.0;
+    double x = 0.0;
+    for (size_t i = 0; i < kPitchLinks.size(); ++i) {
+        angle += pitches[i];
+        x += kPitchLinks[i].forward * std::cos(angle) + kPitchLinks[i].up * std::sin(angle);
+    }
+    return x;
+}
 
 inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;
