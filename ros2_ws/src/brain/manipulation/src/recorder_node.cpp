@@ -228,6 +228,23 @@ void RecorderNode::subscribe_sensors() {
         odom_topic_, 10, std::bind(&RecorderNode::odom_callback, this, std::placeholders::_1));
 }
 
+std::string RecorderNode::missing_required_sensors() {
+    std::string missing;
+    auto add = [&missing](const std::string& topic) { missing += missing.empty() ? topic : ", " + topic; };
+    for (const auto& topic : image_topics_) {
+        if (!latest_images_[topic]) {
+            add(topic);
+        }
+    }
+    if (!latest_arm_state_) {
+        add(arm_state_topic_);
+    }
+    if (!latest_odom_) {
+        add(odom_topic_);
+    }
+    return missing;
+}
+
 void RecorderNode::unsubscribe_sensors() {
     image_subs_.clear();
     arm_state_sub_.reset();
@@ -494,9 +511,6 @@ void RecorderNode::activate_physical_primitive(
         current_episode_.reset();
     }
 
-    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
-    set_head_ai_position();
-
     std::string task_dir = request->task_directory;
     if (task_dir.empty()) {
         response->success = false;
@@ -519,6 +533,11 @@ void RecorderNode::activate_physical_primitive(
         return;
     }
 
+    // Before the head's 3 s settle, so sensor data is already queued when the caller opens an episode.
+    subscribe_sensors();
+    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
+    set_head_ai_position();
+
     // Derive display name from directory basename
     std::string display_name = fs::path(task_dir).filename().string();
 
@@ -529,6 +548,9 @@ void RecorderNode::activate_physical_primitive(
     } catch (const std::exception& e) {
         response->success = false;
         RCLCPP_ERROR(this->get_logger(), "Failed to activate task '%s': %s", display_name.c_str(), e.what());
+        if (state_ == State::IDLE) {
+            unsubscribe_sensors();
+        }
         return;
     }
 
@@ -541,7 +563,6 @@ void RecorderNode::activate_physical_primitive(
     current_task_name_ = display_name;
     current_task_dir_ = task_dir;
     state_ = State::TASK_ACTIVE;
-    subscribe_sensors();
     RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' started at %s.", display_name.c_str(),
                 task_dir.c_str());
     publish_status("active");
@@ -565,6 +586,14 @@ void RecorderNode::handle_new_episode(const std::shared_ptr<brain_messages::srv:
         response->success = false;
         response->message =
             "An episode is already " + state_to_string(state_) + ". Please save or cancel the current episode first.";
+        return;
+    }
+
+    if (const std::string missing = missing_required_sensors(); !missing.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Recorder not ready: no data yet on %s", missing.c_str());
+        publish_status("failed - waiting for sensors");
+        response->success = false;
+        response->message = "Recorder not ready: no data yet on " + missing + ". Try again in a moment.";
         return;
     }
 

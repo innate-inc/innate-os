@@ -23,12 +23,14 @@ from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
 from nav_msgs.msg import Odometry
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+from rclpy.serialization import deserialize_message
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
 from mars_nav.service_utils import call_service, get_node_state, transition_node
 
@@ -213,16 +215,15 @@ class ModeManager(Node):
         # Map persistence file
         self.map_file = os.path.join(state_dir, ".last_map")
 
-        # /mapping_pose (map->base_link at odom rate) feeds the webapp while
-        # mapping, and the switch into navigation polls map->base_link to
-        # confirm AMCL's seed. Idle in any other mode the /tf and /odom
-        # subscriptions cost ~16% of a core in Python, so the current_mode
-        # setter creates them for mapping/switching and drops them after.
+        # Raw and gated on mode, never destroyed: a destroy under this multi-threaded
+        # executor races its take (InvalidHandle), and an ignored raw message skips
+        # Python deserialization. map->base_link needs no /tf_static.
         self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener: tf2_ros.TransformListener | None = None
-        self.odom_sub = None
+        self.create_subscription(
+            TFMessage, "/tf", self._on_tf, 100, callback_group=MutuallyExclusiveCallbackGroup(), raw=True
+        )
+        self.create_subscription(Odometry, "/odom", self.odom_callback, 20, raw=True)
         self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
-        self._current_mode = "none"
 
         # Discover available maps first (needed for loading last map)
         self.available_maps = self.discover_maps()
@@ -295,31 +296,17 @@ class ModeManager(Node):
             5.0, self._lifecycle_watchdog, callback_group=self._internal_callbacks_group
         )
 
-    @property
-    def current_mode(self) -> str:
-        return self._current_mode
-
-    @current_mode.setter
-    def current_mode(self, mode: str) -> None:
-        self._current_mode = mode
-        self._set_mapping_pose_bridge(mode in ("mapping", "switching"))
-
-    def _set_mapping_pose_bridge(self, enabled: bool) -> None:
-        if enabled and self.odom_sub is None:
-            self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-            self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 20)
-        elif not enabled and self.odom_sub is not None:
-            self.destroy_subscription(self.odom_sub)
-            self.odom_sub = None
-            if self.tf_listener is not None:
-                self.tf_listener.unregister()
-                self.tf_listener = None
-            self.tf_buffer.clear()
-
-    def odom_callback(self, msg):
-        # Only publish mapping_pose in mapping mode
-        if getattr(self, "current_mode", None) != "mapping":
+    def _on_tf(self, raw: bytes) -> None:
+        # /mapping_pose while mapping; the switch into navigation polls map->base_link.
+        if self.current_mode not in ("mapping", "switching"):
             return
+        for transform in deserialize_message(raw, TFMessage).transforms:
+            self.tf_buffer.set_transform(transform, "mode_manager")
+
+    def odom_callback(self, raw: bytes) -> None:
+        if self.current_mode != "mapping":
+            return
+        msg = deserialize_message(raw, Odometry)
         try:
             tf_time = rclpy.time.Time()
             tf: TransformStamped = self.tf_buffer.lookup_transform("map", "base_link", tf_time)

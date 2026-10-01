@@ -28,6 +28,7 @@ Usage:
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,7 @@ from cv_bridge import CvBridge
 from mars_msgs.action import RunStereoCalibration
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool
@@ -56,6 +57,32 @@ from mars_cam.calibration_utils import (
 
 DEFAULT_STOP_SERVICE_NAME = "/mars/main_camera/stop_stereo_calibration"
 DEFAULT_DELETE_SERVICE_NAME = "/mars/main_camera/delete_stereo_calibration"
+
+
+class StereoFeed:
+    """Synchronized left/right raw streams, alive only for one calibration run.
+
+    Two raw 15 Hz streams cost the camera container 27 MB/s of serialization
+    while subscribed. They live on a private node and executor so close() can
+    stop the spin before destroying them: a destroy under the calibrator's
+    multi-threaded executor races its take (InvalidHandle).
+    """
+
+    def __init__(self, left_topic: str, right_topic: str, callback: Callable[[Image, Image], None]) -> None:
+        self._node = rclpy.create_node("stereo_calibrator_feed")
+        left = message_filters.Subscriber(self._node, Image, left_topic)
+        right = message_filters.Subscriber(self._node, Image, right_topic)
+        self._sync = message_filters.ApproximateTimeSynchronizer([left, right], queue_size=10, slop=0.1)
+        self._sync.registerCallback(callback)
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
+        self._thread = threading.Thread(target=self._executor.spin, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._executor.shutdown()
+        self._thread.join()
+        self._node.destroy_node()
 
 
 @dataclass
@@ -260,11 +287,9 @@ class StereoCalibrator(Node):
         if self.use_legacy_pattern:
             self.get_logger().debug("Legacy pattern enabled (for calib.io boards)")
 
-        self.left_sub = None
-        self.right_sub = None
-        self.sync = None
+        self._feed: StereoFeed | None = None
         if self.interactive and self.auto_start:
-            self._ensure_image_subscriptions()
+            self._feed = StereoFeed(self.left_topic, self.right_topic, self.image_callback)
 
         # Start keyboard input only in CLI interactive mode.
         if self.interactive and self.auto_start:
@@ -471,7 +496,8 @@ class StereoCalibrator(Node):
                 self.min_corners = int(goal.min_corners)
 
             setup_head(self)
-            self._ensure_image_subscriptions()
+            if self._feed is None:
+                self._feed = StereoFeed(self.left_topic, self.right_topic, self.image_callback)
 
             self._capture_enabled = True
             self._last_capture_time = time.time()
@@ -544,27 +570,15 @@ class StereoCalibrator(Node):
             return _make_result(False, f"Calibration failed: {e}")
         finally:
             self._watchdog_active = False
+            if self._feed is not None:
+                self._feed.close()
+                self._feed = None
             with self._active_goal_lock:
                 # Identity check: _goal_callback waits for the previous run to
                 # fully clear before accepting a new one, but guard anyway so a
                 # slow-to-exit old run can never clobber a newer goal's slot.
                 if self._active_goal is goal_handle:
                     self._active_goal = None
-
-    def _ensure_image_subscriptions(self) -> None:
-        # Created on the first goal and kept: calibration runs once per robot,
-        # and two raw 15 Hz streams cost the camera container 27 MB/s of
-        # serialization plus 5% of a core here for as long as they exist.
-        if self.sync is not None:
-            return
-        self.left_sub = message_filters.Subscriber(self, Image, self.left_topic)
-        self.right_sub = message_filters.Subscriber(self, Image, self.right_topic)
-        self.sync = message_filters.ApproximateTimeSynchronizer(
-            [self.left_sub, self.right_sub],
-            queue_size=10,
-            slop=0.1,  # 100ms tolerance
-        )
-        self.sync.registerCallback(self.image_callback)
 
     def image_callback(self, left_msg, right_msg):
         """Store latest left and right frames."""
