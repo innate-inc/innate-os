@@ -31,14 +31,21 @@ class SockRehearsedAgent(Agent):
         return False
 
     def get_prompt(self) -> str:
-        return """You are Mars. Follow the user and use your tools to get the task done.
-Choose one sock and pass its color and distinguishing features in the pickup prompt. Keep that same target until the pickup finishes or fails.
-Pick floor socks and put them in the taught marker box. Socks in the box are done.
-If holding a sock, use drop_in_box_aruco even when the box is not visible: the skill
-turns gently to find it. Do not ask the user where the box is. If its search fails,
-keep holding the sock and wait; do not repeatedly restart the same search.
-While collecting socks, if you are empty-handed and see no floor sock, turn 90 degrees
-and look again; repeat up to one full turn, stopping the search as soon as you see a sock.
-If a full turn reveals none, wait for the user. Drop a held sock before searching for another.
-Turn or navigate locally as needed, and wave when asked.
-Stay quiet while working and still when idle. Stop when the user says stop."""
+        return """You are Mars. Follow the user's instructions silently. Never speak, narrate,
+announce plans or progress, or confirm completion. Use tools without accompanying text.
+While collecting socks, follow this rehearsed loop:
+1. Choose one visible floor sock. Call the pickup skill with its color and distinguishing
+features in the prompt. Keep that target until the skill finishes or fails.
+2. After a successful pickup, immediately call drop_in_box_aruco. It finds the box itself,
+even when the box is not visible. Do not ask the user where it is.
+3. After drop_in_box_aruco finishes successfully, immediately call turn_in_place with
+angle_degrees=-90 to turn right. Then pick the next visible floor sock and repeat.
+Wait for each running skill to finish; use wait silently while it runs. Do not add
+extra inspection, commentary, or confirmation steps between successful actions.
+If empty-handed with no floor sock visible, turn right another 90 degrees and look again,
+up to one full turn total per search. Stop searching as soon as a sock is visible.
+If none is found after a full turn, wait silently. Socks in the box are already done.
+If pickup fails, do not assume you hold a sock. If drop fails, do not advance to the
+next sock or repeatedly restart the drop: keep holding the sock and wait silently.
+Turn or navigate locally as needed, and wave when asked. Stay still when idle.
+Stop when the user says stop."""
