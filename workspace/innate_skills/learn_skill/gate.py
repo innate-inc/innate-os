@@ -82,6 +82,8 @@ class DraftRejected(Exception):
 class Draft:
     class_name: str
     source: str
+    declares: frozenset[str] = frozenset()
+    """The interface and feed types annotated on the class: what the skill may move or read."""
 
     @property
     def module(self) -> str:
@@ -115,7 +117,21 @@ def check(source: str) -> Draft:
     if len(skills) != 1:
         raise DraftRejected("the file must define exactly one class that subclasses Skill")
     _check_execute(skills[0])
-    return Draft(skills[0].name, source)
+    return Draft(skills[0].name, source, _declares(skills[0]))
+
+
+def _declares(cls: ast.ClassDef) -> frozenset[str]:
+    """The types the class body annotates (``head: Head``, ``odom: "Odometry" | None``)."""
+    names: set[str] = set()
+    for node in cls.body:
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        for part in ast.walk(node.annotation):
+            if isinstance(part, ast.Name):
+                names.add(part.id)
+            elif isinstance(part, ast.Constant) and isinstance(part.value, str):
+                names.add(part.value)
+    return frozenset(names)
 
 
 def _check_node(node: ast.AST, own_privates: frozenset[str], modules: set[str], dotted: set[int]) -> None:
