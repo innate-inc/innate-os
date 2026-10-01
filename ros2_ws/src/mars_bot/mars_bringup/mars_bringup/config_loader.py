@@ -195,9 +195,8 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         "replay_base_speed_scale",
         "learned_base_speed_scale",
         # navigation_grid_localizer
-        "max_score_threshold",
+        "confidence_threshold",
         "max_range",
-        "auto_localize_timeout",
         # brain_client_node
         "vertical_fov",
         "x_cam",

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+import json
 import math
 import time
 from collections.abc import Iterator
@@ -7,6 +8,7 @@ from collections.abc import Iterator
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import String
 
 from innate import Map, Odometry, Pose, Skill, SkillCancelled, SkillFailed, SkillReturn, resource
 
@@ -91,6 +93,17 @@ class Nav2Controller:
         # true target (the replanned path's endpoint wiggles).
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._commanded_goal_pub = self.navigator.create_publisher(PoseStamped, "/nav/commanded_goal", latched)
+        # grid_localizer's stall verdicts, delivered while the navigator spins in isTaskComplete: a goal
+        # it cancelled must fail with the reason, or the agent retries into the same obstacle.
+        self._stall: tuple[float, str] | None = None
+        self.navigator.create_subscription(String, "/nav/stall", self._on_stall, 10)
+
+    def _on_stall(self, msg: String) -> None:
+        try:
+            verdict = json.loads(msg.data)
+            self._stall = (float(verdict["stamp"]), str(verdict["reason"]))
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+            self.logger.warning("Ignoring /nav/stall: expected a JSON object with 'stamp' and 'reason'")
 
     def _resolve_goal(self, x, y, theta, local_frame):
         if not local_frame:
@@ -251,6 +264,7 @@ class Nav2Controller:
         if path_navigator.getPath(goal_pose, goal_pose, use_start=False) is None:
             raise SkillFailed(self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame))
 
+        started = self.navigator.get_clock().now().nanoseconds / 1e9
         self.navigator.goToPose(goal_pose, behavior_tree="mapfree" if local_frame else "navigation")
 
         initial_distance = -1.0
@@ -306,6 +320,12 @@ class Nav2Controller:
             detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {last_pose[2]} frame"
         if last_recoveries > 0:
             detail += f" after {last_recoveries} recovery attempt{'s' if last_recoveries != 1 else ''}"
+        stall = self._stall
+        if stall is not None and stall[0] >= started:
+            raise SkillFailed(
+                f"Navigation was stopped: {stall[1]}. {detail}. Back away from the obstacle (drive backwards a short "
+                "distance) or choose another route before retrying: the same goal from here will stall again"
+            )
         cause = self._blocking_cause(goal_x, goal_y, goal_frame)
         detail += f"; {cause}" if cause is not None else "; the route may be blocked or the robot may be stuck"
         raise SkillFailed(detail + ". The target was not reached")

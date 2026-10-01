@@ -6,6 +6,7 @@ import glob
 import json
 import math
 import os
+import re
 import subprocess
 import threading
 import time
@@ -42,6 +43,27 @@ map_server_node = "navigation_map_server"
 bt_node = "bt_navigator"
 
 NAV_CANCEL_SERVICE = "/internal_navigate_to_pose/_action/cancel_goal"
+
+# map_saver writes unexplored cells as gray 205, occupancy (255 - 205) / 255 = 0.196; under its
+# default free_thresh of 0.25, map_server reloads all unexplored space as free floor.
+MAP_FREE_THRESH = 0.196
+_FREE_THRESH_LINE = re.compile(r"^free_thresh:[ \t]*([0-9.eE+-]+)", re.MULTILINE)
+
+
+def keep_unexplored_unknown(map_yaml: str) -> bool:
+    """Lower the map's free_thresh to MAP_FREE_THRESH if it is above it; True when the file was rewritten.
+    The new yaml is written beside the old one and swapped in, so a failed write leaves the map loadable."""
+    with open(map_yaml) as f:
+        text = f.read()
+    match = _FREE_THRESH_LINE.search(text)
+    if match is None or float(match.group(1)) <= MAP_FREE_THRESH:
+        return False
+    replacement = f"{map_yaml}.tmp"
+    with open(replacement, "w") as f:
+        f.write(_FREE_THRESH_LINE.sub(f"free_thresh: {MAP_FREE_THRESH}", text))
+    os.replace(replacement, map_yaml)
+    return True
+
 
 # Nodes that should only be configured (not activated) in specific modes
 configure_only_nodes = {
@@ -932,6 +954,11 @@ class ModeManager(Node):
 
         map_request = LoadMap.Request()
         map_request.map_url = os.path.join(self.maps_dir, self.current_map)
+        try:
+            if keep_unexplored_unknown(map_request.map_url):
+                self.get_logger().info(f"Updated {self.current_map}: its unexplored space now loads as unknown")
+        except (OSError, ValueError) as e:
+            self.get_logger().warning(f"Could not check {self.current_map}'s free_thresh: {e}")
 
         self.get_logger().info(f"Loading map: {self.current_map} on {node_name}")
 
@@ -1303,6 +1330,8 @@ class ModeManager(Node):
                 "map_saver_cli",
                 "-f",
                 map_path,
+                "--free",
+                str(MAP_FREE_THRESH),
                 "--ros-args",
                 "-p",
                 "save_map_timeout:=5000.0",

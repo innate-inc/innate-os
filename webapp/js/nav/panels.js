@@ -122,8 +122,8 @@ export function createNavPanels(root, store) {
   // Localization health, the mobile app's approach (LocalizationContext):
   // AMCL's pose covariance is the continuous truth — it streams with every
   // pose update, so a page opened at any time converges. grid_localizer's
-  // one-shot /localization/status is only caught when the page is already
-  // open as localization runs; it seeds the row, covariance then owns it.
+  // latched /localization/status seeds the row with the latest verdict, even
+  // on a page opened later; covariance then owns it.
   // A mislocalized robot is exactly what makes goals abort with "start in
   // lethal space", so this must be visible, not log-only.
   const CONFIDENT_VAR = 0.1; // m², same thresholds as the mobile app

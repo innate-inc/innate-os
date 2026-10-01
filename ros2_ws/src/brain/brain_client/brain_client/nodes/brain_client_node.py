@@ -340,6 +340,7 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
         self.create_subscription(String, "/brain/skill_status_update", self._on_skill_status, 10)
+        self.create_subscription(String, "/nav/stall", self._on_nav_stall, 10)
 
     def _create_services(self) -> None:
         self.create_service(GetChatHistory, "/brain/get_chat_history", self._svc_get_chat_history)
@@ -474,6 +475,19 @@ class BrainClientNode(Node):
             return
         self.get_logger().info(f"Received custom input from {data.get('input_device', 'unknown')}")
         self.brain.on_custom_input(data)
+
+    def _on_nav_stall(self, msg: String) -> None:
+        """grid_localizer cancelled navigation because the wheels were spinning in place. The agent must
+        hear why, or it retries the same goal into the same obstacle; the chat shows the user."""
+        try:
+            reason = json.loads(msg.data)["reason"]
+        except (json.JSONDecodeError, TypeError, KeyError):
+            self.get_logger().warn("[BrainClient] Ignoring /nav/stall: expected a JSON object with 'reason'.")
+            return
+        text = f"Navigation was stopped: {reason}. Back away before trying that route again."
+        self.chat.emit_system(text)
+        if self.state.is_brain_active:
+            self.brain.add_event(text)
 
     def _on_tts(self, msg: String) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the

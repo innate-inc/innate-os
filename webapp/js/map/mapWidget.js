@@ -18,6 +18,7 @@ import {
   CANCEL_NAVIGATION_SERVICE,
   LOCALIZE_SERVICE,
   SET_INITIAL_POSE_SERVICE,
+  HAND_PLACED_SERVICE,
   SCAN_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
   LOCAL_COSTMAP_TOPIC,
@@ -117,7 +118,7 @@ const PIN_SCALE_CSS = 1.2; // 24-unit glyph → ~29 css px tall, screen-sized at
 const GRID_FREE_RGB = [21, 21, 26];
 const GRID_WALL_RGB = [223, 225, 234];
 
-// /localize scan-matches for up to ~30 s before answering.
+// /localize answers in about half a second; the margin covers a loaded robot.
 const LOCALIZE_TIMEOUT_MS = 40_000;
 
 // Wheel-zoom bounds (metres of real-world width shown). The factor scales
@@ -294,7 +295,7 @@ export function createMap(root, opts = {}) {
   let goalGen = 0; // ignore settlements of superseded goals
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let statusClearTimer;
-  /** @param {"navigating" | "ok" | "fail" | "muted" | "hint"} kind @param {string} text @param {boolean} [autoclear] */
+  /** @param {"navigating" | "ok" | "warn" | "fail" | "muted" | "hint"} kind @param {string} text @param {boolean} [autoclear] */
   function setStatus(kind, text, autoclear = false) {
     clearTimeout(statusClearTimer);
     statusEl.hidden = false;
@@ -1782,10 +1783,17 @@ export function createMap(root, opts = {}) {
           },
         },
       });
-      setStatus("ok", "Position set", true);
     } catch (err) {
       setStatus("fail", `Set position failed — ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
+    // A hand placement vouches for the pose: the memory recorder resumes after an ambiguous match.
+    const noted = await ros.callService(HAND_PLACED_SERVICE).then(
+      (res) => res?.success === true,
+      () => false,
+    );
+    if (noted) setStatus("ok", "Position set", true);
+    else setStatus("warn", "Position set, but the localizer did not note it — memory recording may stay paused until you press Locate or place the robot again");
   }
 
   /** @param {number} x @param {number} y @param {number} yaw */

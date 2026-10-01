@@ -66,9 +66,6 @@ pynput
 # Hot reload
 watchdog
 
-# Cupy
-cupy-cuda12x
-
 # Debugging
 ros-mcp
 
