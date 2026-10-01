@@ -247,9 +247,11 @@ class FloorApproach:
     def search(self, prompt):
         """Scan: straight, right 30°, left 60°. First hit wins. (+yaw=left)"""
         self.host.overlay.stage("search")
-        for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
+        turns = self.p.get("search_turns_deg", (0, -30, 60))
+        for i, degrees in enumerate(turns):
+            turn = math.radians(degrees)
             if turn:
-                if i == 1:
+                if i == 1 and not self.p.get("silent_search", False):
                     self.host.say("Scanning around for it.")
                 # Best-effort: a rotate cut short (timeout / odom loss) still
                 # changed the view, and the localize below measures from
