@@ -16,11 +16,12 @@ from brain_client.state.battery import Battery
 
 
 class EventKind(StrEnum):
-    """What queued a stimulus — USER is load-bearing: only user speech preempts a turn."""
+    """What queued a stimulus — user speech and terminal skill results can preempt a turn."""
 
     INFO = "info"
     USER = "user"
     MOTION = "motion"
+    SKILL_RESULT = "skill_result"
 
 
 @dataclass(frozen=True)

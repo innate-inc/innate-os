@@ -1318,3 +1318,54 @@ def test_agent_request_extras_are_isolated_and_rolled_back(agent_factory, monkey
     assert agent.use_model(None, agent=True)[0]
     assert seen[-1] == agent._extra_body
     assert agent._agent_extra_body is None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_skill_result_preempts_inflight_supervision(agent_factory, status):
+    agent, state = agent_factory()
+    first, fresh, release = threading.Event(), threading.Event(), threading.Event()
+    inputs = []
+
+    def script(request):
+        inputs.append(request.messages[-1].text())
+        if len(inputs) == 1:
+            first.set()
+            release.wait(timeout=5)
+        else:
+            fresh.set()
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    agent.start()
+    try:
+        assert first.wait(timeout=3)
+        agent.on_skill_event(status, "pickup", "terminal result")
+        assert fresh.wait(timeout=0.8)  # no one-second feedback debounce
+        assert f"Skill pickup {status}: terminal result" in inputs[1]
+    finally:
+        release.set()
+        agent.stop()
+
+
+def test_skill_result_wakes_feedback_debounce(agent_factory):
+    agent, state = agent_factory()
+    future = asyncio.run_coroutine_threadsafe(agent._pause(10, user_only=True), agent._runtime.loop)
+    time.sleep(0.05)
+    agent.on_skill_feedback("pickup", "working")
+    time.sleep(0.05)
+    assert not future.done()
+    agent.on_skill_event("completed", "pickup")
+    future.result(timeout=0.5)
+
+
+def test_completion_response_race_cannot_commit_stale_tools(agent_factory):
+    agent, state = agent_factory()
+
+    def script(request):
+        agent._events.append(Event("Skill pickup completed", kind=EventKind.SKILL_RESULT))
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    run_turn(agent)
+    assert agent._context.history == ()
+    assert agent._events[-1].kind == EventKind.SKILL_RESULT

@@ -179,7 +179,8 @@ class BrainAgent:
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
-        self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
+        self._user_spoke = asyncio.Event()  # urgent wake: user speech or skill completion
+        self._skill_finished = asyncio.Event()
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -356,11 +357,12 @@ class BrainAgent:
             while True:
                 await self._await_camera()
                 self._user_spoke.clear()
+                self._skill_finished.clear()
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
                 await asyncio.wait((turn, spoke), return_when=asyncio.FIRST_COMPLETED)
                 spoke.cancel()
-                if reruns < _MAX_RERUNS and self._abandon(turn):
+                if (self._skill_finished.is_set() or reruns < _MAX_RERUNS) and self._abandon(turn):
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
                     reruns += 1
                     continue
@@ -387,7 +389,13 @@ class BrainAgent:
         check-then-mute could let the first sentence slip out after the decision.
         """
         speaker = self._speaker  # _turn publishes it before its first await
-        if turn.done() or speaker is None or not speaker.try_abandon():
+        if turn.done() or speaker is None:
+            return False
+        if self._skill_finished.is_set():
+            # A supervision answer based on a running skill is obsolete once
+            # its terminal result arrives, even if it already started speaking.
+            speaker.mute()
+        elif not speaker.try_abandon():
             return False
         self._trace(TraceEvent.TURN_PREEMPTED, turn=self._turn_count, after=self._elapsed())
         turn.cancel()
@@ -437,6 +445,11 @@ class BrainAgent:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=latency)
             return
 
+        if any(event.kind == EventKind.SKILL_RESULT for event in self._events[len(events):]):
+            # Result and response may become ready in the same loop tick.
+            # Never commit stale supervision tools/history in that race.
+            speaker.mute()
+            return
         decision = context.absorb(message, reply, latest_only_images=wrist_frames)
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
@@ -484,7 +497,7 @@ class BrainAgent:
     async def _back_off(self, error: Exception, seen: int) -> None:
         """Inference failures and turn-level bugs alike: retry, never die.
 
-        Events stay queued; only the user speaking ends the backoff early
+        Events stay queued; user speech or a new skill result ends backoff early
         (motion and feedback chatter must not turn a failing API into a hot
         retry loop).
         """
@@ -520,11 +533,11 @@ class BrainAgent:
     async def _pause(self, seconds: float, *, seen: int = 0, user_only: bool = False) -> None:
         """Sleep up to ``seconds``; the queue growing past ``seen`` events ends it early.
 
-        ``user_only`` narrows the early wake to user speech (the error backoff).
+        ``user_only`` limits waking to user speech or a terminal skill result.
         """
         wake = self._user_spoke if user_only else self._new_event
         wake.clear()
-        if any(not user_only or event.kind == EventKind.USER for event in self._events[seen:]):
+        if any(not user_only or event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events[seen:]):
             return
         self._pause_until = time.monotonic() + seconds
         try:
@@ -750,9 +763,11 @@ class BrainAgent:
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
 
     def _wake(self, kind: EventKind) -> None:
-        """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
+        """Loop thread: wake on events; speech and skill results can preempt a turn."""
         self._new_event.set()
-        if kind == EventKind.USER:
+        if kind == EventKind.SKILL_RESULT:
+            self._skill_finished.set()
+        if kind in (EventKind.USER, EventKind.SKILL_RESULT):
             self._user_spoke.set()
 
     def on_user_message(self, text: str) -> None:
@@ -768,7 +783,7 @@ class BrainAgent:
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
-        self.add_event(line, image=image)
+        self.add_event(line, image=image, kind=EventKind.SKILL_RESULT)
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)
