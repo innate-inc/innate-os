@@ -23,10 +23,31 @@ class PickSockStationary(PickSockFast):
         x, y = xy[0] - self._p["grasp_x_off"], xy[1]
         cx, cy = self.manipulation.clamp_reach(x, y)
         if not all(math.isfinite(v) for v in (x, y, cx, cy)) or math.hypot(cx - x, cy - y) > 0.002:
-            raise SkillFailed("Sock outside stationary arm reach; reposition the sock")
-        if not self.manipulation.reachable(x, y, self._p["hover_z"], pitch=self._p["arm_pitch"]):
-            raise SkillFailed("Sock hover unreachable without driving; reposition the sock")
-        return PickAnyObject._grasp_at(self, prompt, xy)
+            raise SkillFailed(
+                f"Sock outside stationary arm reach at x={x:.2f}m y={y:.2f}m; reposition or turn toward it"
+            )
+        self.logger.info(f"[StationarySock] floor_xy={xy!r} grasp_xy=({x:.3f},{y:.3f})")
+        original = self._p
+        # The 15 cm transit waypoint is optional. A nearby sock may have a
+        # valid low approach even when that high pose has no IK solution.
+        hover = next(
+            (
+                z
+                for z in (original["hover_z"], 0.12, 0.10)
+                if self.manipulation.reachable(x, y, z, pitch=original["arm_pitch"])
+            ),
+            None,
+        )
+        if hover is None or not self.manipulation.reachable(x, y, 0.08, pitch=original["arm_pitch"]):
+            raise SkillFailed(
+                f"No stationary arm approach at x={x:.2f}m y={y:.2f}m; reposition or turn toward the sock"
+            )
+        self.logger.info(f"[StationarySock] selected hover={hover:.2f}m; base remains stopped")
+        self._p = {**original, "hover_z": hover}
+        try:
+            return PickAnyObject._grasp_at(self, prompt, xy)
+        finally:
+            self._p = original
 
     def execute(self, prompt: str) -> SkillReturn:
         """Pick the described floor sock, including its color, without base motion."""

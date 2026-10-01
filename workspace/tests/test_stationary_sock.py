@@ -36,6 +36,7 @@ class StationarySockTests(unittest.TestCase):
         s.manipulation = Mock()
         s.manipulation.clamp_reach.side_effect = lambda x, y: (x, y)
         s.manipulation.reachable.return_value = True
+        s.logger = Mock()
         s.head = Mock()
         s.overlay = Mock()
         s.check_cancelled = Mock()
@@ -49,6 +50,20 @@ class StationarySockTests(unittest.TestCase):
         self.assertIn("without moving", s.execute("blue sock"))
         grasp.assert_called_once_with(s, "blue sock", (0.3, 0))
         self.assertEqual(s.mobility.stop.call_count, 2)
+
+    def test_lower_hover_fallback_restores_parameters(self):
+        s, grasp = self.pickup()
+        original = s._p
+        s.manipulation.reachable.side_effect = lambda x, y, z, **kw: z <= 0.12
+        heights = []
+        grasp.side_effect = lambda host, *a: heights.append(host._p["hover_z"])
+        s.execute("blue sock")
+        self.assertEqual(heights, [0.12])
+        self.assertIs(s._p, original)
+        grasp.side_effect = RuntimeError("cancelled during grasp")
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            s.execute("blue sock")
+        self.assertIs(s._p, original)
 
     def test_missing_unreachable_and_cancelled_never_drive(self):
         for mode in ("missing", "clamped", "unreachable", "cancelled", "empty"):
