@@ -593,7 +593,7 @@ def run_turn(agent: BrainAgent) -> None:
 def no_pause(agent: BrainAgent, monkeypatch) -> None:
     """Skip the between-turns / backoff pauses so tests don't sleep."""
 
-    async def skip(seconds, *, seen=0, user_only=False):
+    async def skip(seconds, *, seen=0, urgent_only=False):
         pass
 
     monkeypatch.setattr(agent, "_pause", skip)
@@ -693,7 +693,7 @@ def test_error_backoff_ignores_chatter_but_wakes_for_user_speech(agent_factory):
     # The backoff must stay a backoff under motion/feedback chatter — only the
     # user speaking earns a failing API an immediate retry.
     agent, state = agent_factory()
-    future = asyncio.run_coroutine_threadsafe(agent._pause(10.0, seen=0, user_only=True), agent._runtime.loop)
+    future = asyncio.run_coroutine_threadsafe(agent._pause(10.0, seen=0, urgent_only=True), agent._runtime.loop)
     time.sleep(0.1)
     agent.add_event("Motion detected in the camera view", kind=EventKind.MOTION)
     time.sleep(0.3)
@@ -1054,6 +1054,79 @@ def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     agent.stop()
 
 
+def test_a_skill_result_preempts_a_thinking_supervision_turn(agent_factory):
+    traces = []
+    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
+    thinking, release = threading.Event(), threading.Event()
+    requests = []
+
+    def script(request: Request):
+        requests.append(request)
+        thinking.set()
+        if len(requests) == 1:
+            release.wait(timeout=5)  # the supervision turn hangs mid-think
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    state.primitive_running = RunningSkill(
+        primitive_name="pick_any_object", skill_id="innate-os/pick", primitive_id="p1"
+    )
+    agent.start()
+    assert thinking.wait(timeout=5)
+    thinking.clear()
+    assert STOP_SKILL in [t.name for t in requests[0].tools]
+
+    state.primitive_running = None  # the runner frees the slot, then reports — in that order
+    agent.on_skill_event("completed", "pick_any_object", "grasped the cup")
+    assert thinking.wait(timeout=5)  # the rerun starts without waiting for the hung call
+    assert "Skill pick_any_object completed: grasped the cup" in requests[1].messages[-1].text()
+    assert STOP_SKILL not in [t.name for t in requests[1].tools]  # the free slot, not the stale picture
+    assert "turn_preempted" in [t["ev"] for t in traces]
+    release.set()
+    agent.stop()
+
+
+def test_skill_feedback_waits_for_the_turn_in_flight(agent_factory, monkeypatch):
+    traces = []
+    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
+    no_pause(agent, monkeypatch)
+    thinking, release = threading.Event(), threading.Event()
+    turn_inputs = []
+
+    def script(request: Request):
+        turn_inputs.append(request.messages[-1].text())
+        thinking.set()
+        if len(turn_inputs) == 1:
+            release.wait(timeout=5)
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    agent.start()
+    assert thinking.wait(timeout=5)
+    thinking.clear()
+    agent.on_skill_feedback("pick_any_object", "approaching the cup")  # chatter: it waits its turn
+    time.sleep(0.3)
+    assert not thinking.is_set() and not any(t["ev"] == "turn_preempted" for t in traces)
+    release.set()
+    assert thinking.wait(timeout=5)
+    assert "approaching the cup" in turn_inputs[1]
+    agent.stop()
+
+
+def test_a_skill_result_cuts_an_urgent_only_pause_short_but_feedback_does_not(agent_factory):
+    agent, state = agent_factory()
+
+    def pause(seconds: float) -> float:
+        started = time.monotonic()
+        asyncio.run_coroutine_threadsafe(agent._pause(seconds, urgent_only=True), agent._runtime.loop).result(timeout=5)
+        return time.monotonic() - started
+
+    agent.on_skill_feedback("pick_any_object", "approaching the cup")
+    assert pause(0.3) >= 0.25  # chatter waits the gap out
+    agent.on_skill_event("completed", "pick_any_object")
+    assert pause(2.0) < 0.5  # a result is looked at now
+
+
 def test_speech_streamer_speaks_sentence_by_sentence():
     spoken = []
     chat = SimpleNamespace(
@@ -1258,6 +1331,7 @@ def test_skill_completion_event_carries_the_result_image(agent_factory):
     agent.on_skill_event("completed", "inspect_shelf", "found the mug", image=JPEG)
     (event,) = agent._events
     assert event.image == JPEG and "found the mug" in event.text
+    assert event.kind == EventKind.SKILL_RESULT
 
 
 # ---------- prompt ----------

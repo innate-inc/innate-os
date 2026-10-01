@@ -9,9 +9,9 @@ The whole agent is one sequential coroutine on a dedicated loop thread
   the task; a turn still thinking unwinds at its await and can never absorb
   its response.
 * **Turns are transactional.** Events are consumed only when a turn commits,
-  so a failed or abandoned turn re-sends them. User speech abandons any turn
-  that has not begun to speak, and the rerun sees everything it saw plus the
-  new message.
+  so a failed or abandoned turn re-sends them. An urgent event — user speech,
+  a skill reaching its end — abandons any turn that has not begun to speak,
+  and the rerun sees everything it saw plus the new event.
 
 Threading contract: ROS callbacks (executor thread) only queue events and wake
 the loop; observing, history, and acting all happen in the coroutine.
@@ -78,7 +78,11 @@ _FRESH_FRAME_SEC = 3.0  # an older camera frame means the feed is broken; don't 
 _MAX_EVENTS_QUEUED = 30  # the oldest beyond this are dropped as stale stimuli
 _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as text only
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
-_EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
+_EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); urgent events skip it
+# What abandons a turn still thinking and cuts a pause short: the user, and a
+# skill's result — a supervision turn mid-think when the skill ends would
+# otherwise commit a stale picture, then wait the event gap on top.
+_URGENT = frozenset({EventKind.USER, EventKind.SKILL_RESULT})
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
 
 
@@ -178,7 +182,7 @@ class BrainAgent:
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
-        self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
+        self._urgent = asyncio.Event()  # like _new_event, but only _URGENT kinds set it
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -331,24 +335,24 @@ class BrainAgent:
 
     # ================= the loop =================
     async def _loop(self) -> None:
-        """Root task: turns forever, each racing the user's voice, with the 1 Hz
-        telemetry heartbeat alongside. A crash (a bug — transport failures back
+        """Root task: turns forever, each racing the urgent events (user speech, a
+        skill's result), with the 1 Hz telemetry heartbeat alongside. A crash (a bug — transport failures back
         off per turn) is reported in chat and leaves the loop down until restart.
         """
         context = self._context
         if context is None:
             return await self._heartbeat()  # no transport: telemetry only, no turns
         heartbeat = asyncio.ensure_future(self._heartbeat())
-        turn = spoke = None
+        turn = urgent = None
         reruns = 0
         try:
             while True:
                 await self._await_camera()
-                self._user_spoke.clear()
+                self._urgent.clear()
                 turn = asyncio.ensure_future(self._turn(context))
-                spoke = asyncio.ensure_future(self._user_spoke.wait())
-                await asyncio.wait((turn, spoke), return_when=asyncio.FIRST_COMPLETED)
-                spoke.cancel()
+                urgent = asyncio.ensure_future(self._urgent.wait())
+                await asyncio.wait((turn, urgent), return_when=asyncio.FIRST_COMPLETED)
+                urgent.cancel()
                 if reruns < _MAX_RERUNS and self._abandon(turn):
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
                     reruns += 1
@@ -358,7 +362,7 @@ class BrainAgent:
                 if not self._events:
                     await self._pause(self._interval())
                 else:
-                    await self._pause(_EVENT_TURN_GAP, user_only=True)
+                    await self._pause(_EVENT_TURN_GAP, urgent_only=True)
         except Exception as error:
             self._logger.error(f"[Brain] Agent loop crashed: {error!r}")
             self._chat.emit_system(f"⚠️ Brain loop crashed: {error!r} — stop and start the brain to recover.")
@@ -366,12 +370,12 @@ class BrainAgent:
             heartbeat.cancel()
             if self._speaker is not None:
                 self._speaker.mute()
-            for task in (turn, spoke):
+            for task in (turn, urgent):
                 if task is not None:
                     task.cancel()  # stop() can land mid-race; the turn dies with the loop
 
     def _abandon(self, turn: asyncio.Task[None]) -> bool:
-        """Cancel a thinking turn the user just talked over — unless it already
+        """Cancel a thinking turn an urgent event landed under — unless it already
         holds the floor. try_abandon is atomic with the reply stream: a plain
         check-then-mute could let the first sentence slip out after the decision.
         """
@@ -473,9 +477,9 @@ class BrainAgent:
     async def _back_off(self, error: Exception, seen: int) -> None:
         """Inference failures and turn-level bugs alike: retry, never die.
 
-        Events stay queued; only the user speaking ends the backoff early
-        (motion and feedback chatter must not turn a failing API into a hot
-        retry loop).
+        Events stay queued; only an urgent one (user speech, a skill's result)
+        ends the backoff early — motion and feedback chatter must not turn a
+        failing API into a hot retry loop.
         """
         self._error_streak += 1
         self._logger.error(f"[Brain] Turn failed ({self._error_streak}x): {error!r}")
@@ -491,7 +495,7 @@ class BrainAgent:
         self._trace(
             TraceEvent.TURN_ERROR, turn=self._turn_count, error=str(error), streak=self._error_streak, backoff=backoff
         )
-        await self._pause(backoff, seen=seen, user_only=True)
+        await self._pause(backoff, seen=seen, urgent_only=True)
 
     async def _await_camera(self) -> None:
         """Hold turns while the camera feed is down; tell the user if it stays down."""
@@ -506,14 +510,15 @@ class BrainAgent:
             await asyncio.sleep(0.2)
         self._chat.emit_system("✅ Camera feed is back.")
 
-    async def _pause(self, seconds: float, *, seen: int = 0, user_only: bool = False) -> None:
+    async def _pause(self, seconds: float, *, seen: int = 0, urgent_only: bool = False) -> None:
         """Sleep up to ``seconds``; the queue growing past ``seen`` events ends it early.
 
-        ``user_only`` narrows the early wake to user speech (the error backoff).
+        ``urgent_only`` narrows the early wake to _URGENT kinds (the error
+        backoff, the gap between event-driven turns).
         """
-        wake = self._user_spoke if user_only else self._new_event
+        wake = self._urgent if urgent_only else self._new_event
         wake.clear()
-        if any(not user_only or event.kind == EventKind.USER for event in self._events[seen:]):
+        if any(not urgent_only or event.kind in _URGENT for event in self._events[seen:]):
             return
         self._pause_until = time.monotonic() + seconds
         try:
@@ -739,10 +744,10 @@ class BrainAgent:
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
 
     def _wake(self, kind: EventKind) -> None:
-        """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
+        """Loop thread: end any pause; an urgent kind also abandons a turn still thinking."""
         self._new_event.set()
-        if kind == EventKind.USER:
-            self._user_spoke.set()
+        if kind in _URGENT:
+            self._urgent.set()
 
     def on_user_message(self, text: str) -> None:
         self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
@@ -757,7 +762,7 @@ class BrainAgent:
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
-        self.add_event(line, image=image)
+        self.add_event(line, image=image, kind=EventKind.SKILL_RESULT)
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)
