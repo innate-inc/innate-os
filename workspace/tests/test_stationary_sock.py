@@ -171,6 +171,24 @@ class StationarySockTests(unittest.TestCase):
             follower._drive_toward(dock.target_quad + [-100, 0], target_center_x=center[0])
             self.assertGreater(follower._send_cmd.call_args.args[1], 0.6)
 
+    def test_mobile_gemini_restores_approach_skills(self):
+        names = ["TurnInPlace", "NavigateLocally", "PickSockFast", "DropInBoxAruco", "Wave"]
+        env = {name: type(name, (), {}) for name in names}
+        env.update(Agent=object, SkillRef=object, InputRef=object)
+        base = load(ROOT / "innate_agents/sock_rehearsed_agent.py", env)["SockRehearsedAgent"]
+        env.update(SockRehearsedAgent=base, Llm=lambda model, **kw: NS(model=model, **kw))
+        pickup = load(ROOT / "innate_skills/pick_sock_gemini.py", env)["PickSockGemini"]
+        cls = load(ROOT / "innate_agents/gemini_sock_agent.py", env)["GeminiSockAgent"]
+        self.assertEqual(
+            [c.__name__ for c in cls().get_skills()],
+            ["TurnInPlace", "NavigateLocally", "PickSockGemini", "DropInBoxAruco", "Wave"],
+        )
+        self.assertEqual(cls().get_inputs(), [])
+        self.assertFalse(cls().uses_gaze())
+        self.assertEqual(pickup.llm.model, cls.model)
+        self.assertEqual(cls.model_extra_body, "{}")
+        self.assertIn("drop_in_box_aruco", cls().get_prompt())
+
     def test_agent_exposes_only_rotation_arm_skills_and_no_microphone(self):
         names = ["TurnInPlace", "PickSockStationary", "DropInBoxStationary", "Wave"]
         env = {n: type(n, (), {}) for n in names}
