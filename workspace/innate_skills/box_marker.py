@@ -194,7 +194,8 @@ class MarkerFollower:
 class MarkerOvershootRecovery:
     """A clear side crossing triggers a bounded, raw-image turning correction."""
 
-    def __init__(self):
+    def __init__(self, center_tolerance=8):
+        self.center_tolerance = center_tolerance
         self.reset()
 
     def reset(self):
@@ -213,7 +214,7 @@ class MarkerOvershootRecovery:
             return None
         if now - self.started > 5:
             raise SkillFailed("Box overshoot recovery timed out; stopped before release")
-        if abs(offset) <= 8:
+        if abs(offset) <= self.center_tolerance:
             self.centered += 1
             if self.centered >= 3:
                 self.reset()
@@ -226,6 +227,11 @@ class MarkerOvershootRecovery:
 
 class MarkerDock:
     """Image-based servo adapted from FollowAruco; no runtime pose fitting."""
+
+    horizontal_tolerance = 8
+    size_tolerance = 0.06
+    search_speed = 0.25
+    stationary = False
 
     def __init__(self, host, config):
         self.host, self.config = host, validate_config(config)
@@ -285,7 +291,7 @@ class MarkerDock:
                     break
                 # The same acceleration cap used for docking applies here.
                 # Never translate while searching with a sock in the gripper.
-                follower._send_cmd(0.0, 0.25)
+                follower._send_cmd(0.0, self.search_speed)
             host.sleep(LOOP_PERIOD)
         raise SkillFailed("Box marker not found after looking around; stopped holding sock")
 
@@ -296,7 +302,7 @@ class MarkerDock:
         raw = host.main_image
         start = last_seen = time.monotonic()
         lock = lost = stable = 0
-        recovery = MarkerOvershootRecovery()
+        recovery = MarkerOvershootRecovery(self.horizontal_tolerance)
         try:
             self._find_marker(follower)
             raw = host.main_image
@@ -344,7 +350,9 @@ class MarkerDock:
                             )
                             host.sleep(LOOP_PERIOD)
                             continue
-                        if abs(du) <= 8 and abs(dv) <= 20 and abs(size_error) <= 0.06:
+                        if abs(du) <= self.horizontal_tolerance and (
+                            self.stationary or (abs(dv) <= 20 and abs(size_error) <= self.size_tolerance)
+                        ):
                             # Brake through the same slew limit before declaring
                             # arrival. Cancellation and marker loss still stop immediately.
                             follower._send_cmd(0.0, 0.0)

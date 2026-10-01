@@ -114,10 +114,11 @@ then the next sock. Use the app to stop it.
   arm reach on the floor. One Gemini detection, then the established close/twist,
   lift, and gripper check. No base search, approach, correction, or backup.
 - `drop_in_box_stationary()`: rotates toward the taught marker box, checks the
-  same marker alignment/distance, releases from above and raises the arm. No
+  marker bearing only, releases from above and raises the arm. No
   forward/backward approach or retreat. Place the box at the taught distance
-  from the robot's fixed turning center; an incorrect distance times out without
-  releasing. It still requires the existing marker teaching configuration.
+  from the robot's fixed turning center; distance and tag size are trusted to the
+  operator. Search turns at 0.6 rad/s, alignment is capped at 0.8 rad/s, and
+  horizontal tolerance is 24 pixels (previously 8). It still requires the existing marker teaching configuration.
 
 Out-of-reach socks fail instead of moving the robot. The original moving demo
 agents and skills remain available. Software tests verify zero commanded

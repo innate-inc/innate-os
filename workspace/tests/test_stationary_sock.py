@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
+import test_box_marker
 from test_box_marker import load_marker
 from test_sock_demo import ROOT, load
 
@@ -82,10 +83,13 @@ class StationarySockTests(unittest.TestCase):
                 SkillFailed=RuntimeError,
                 load_config=lambda: config,
                 MarkerFollower=e["MarkerFollower"],
-                MarkerDock=dock,
+                MarkerDock=object,
+                math=math,
+                IMG_W=640,
                 fresh_sock_held=lambda s: True,
             ),
         )["DropInBoxStationary"]
+        cls.execute.__globals__["StationaryBoxDock"] = dock
         s = cls()
         s._p = dict(tilt_deg=-12, drop_inset=0.08, drop_inset_min=0.04, carry_x=0.2, arm_pitch=1.3, travel_joints=[])
         s.RELEASE_Z = 0.24
@@ -111,6 +115,46 @@ class StationarySockTests(unittest.TestCase):
             self.assertEqual(call.kwargs["linear_x"], 0)
         s._release_at.assert_called_once_with(0.23, 0)
         s.mobility.stop.assert_called_once()
+
+    def test_stationary_accepts_centered_tag_independent_of_size(self):
+        for scale in (0.7, 1.12, 1.4):
+            e = load_marker()
+            helper = test_box_marker.MarkerGeometryTests()
+            helper.e = e
+            clock = [0.0]
+            e["time"] = NS(monotonic=lambda clock=clock: clock[0])
+            h = NS(main_image=NS(gray="frame"), mobility=Mock(), logger=Mock(), check_cancelled=Mock())
+
+            def sleep(dt, clock=clock, h=h):
+                clock[0] += dt
+                h.main_image = NS(gray="frame")
+
+            h.sleep = sleep
+            env = load(
+                ROOT / "innate_skills/drop_in_box_stationary.py",
+                dict(
+                    math=math,
+                    IMG_W=640,
+                    MarkerDock=e["MarkerDock"],
+                    MarkerFollower=e["MarkerFollower"],
+                    DropInBoxFast=object,
+                    SkillReturn=str,
+                ),
+            )
+            dock = env["StationaryBoxDock"](h, helper.config())
+            center = dock.target_quad.mean(axis=0)
+            quad = (dock.target_quad - center) * scale + center + [20, 25]
+            dock.detector = NS(detect_quad=lambda gray, quad=quad: quad)
+            follower = env["StationaryBoxFollower"](h.mobility)
+            self.assertEqual(dock.run(follower), (0.23, 0))
+            self.assertLess(clock[0], 3)
+            for c in h.mobility.send_cmd_vel.call_args_list:
+                self.assertEqual(c.kwargs["linear_x"], 0)
+            follower._send_cmd = Mock()
+            follower._drive_toward(dock.target_quad + [100, 0], target_center_x=center[0])
+            self.assertLess(follower._send_cmd.call_args.args[1], -0.6)
+            follower._drive_toward(dock.target_quad + [-100, 0], target_center_x=center[0])
+            self.assertGreater(follower._send_cmd.call_args.args[1], 0.6)
 
     def test_agent_exposes_only_rotation_arm_skills_and_no_microphone(self):
         names = ["TurnInPlace", "PickSockStationary", "DropInBoxStationary", "Wave"]

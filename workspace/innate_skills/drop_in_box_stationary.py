@@ -2,18 +2,40 @@
 # Copyright (c) 2026 Innate Inc
 """Rotation-only rehearsed drop; no approach or retreat translation."""
 
+import math
+
 from innate_skills.box_marker import MarkerDock, MarkerFollower, load_config
 from innate_skills.drop_in_box_fast import DropInBoxFast
 from innate_skills.sock_grip import fresh_sock_held
 
 from innate import SkillReturn
 from innate.exceptions import SkillFailed
+from innate.geometry import IMG_W
+
+
+class StationaryBoxFollower(MarkerFollower):
+    """Use current marker error, with firm turning and the existing gentle ramp."""
+
+    max_linear = max_reverse = 0.0
+    max_angular = 0.8
+
+    def _drive_toward(self, corners, *, target_center_x, **kwargs):
+        offset = float(corners[:, 0].mean()) - target_center_x
+        # Raw bearing avoids steering on the previous side after crossing center.
+        speed = min(self.max_angular, max(0.18, 2.4 * abs(offset) / (IMG_W / 2)))
+        self._send_cmd(0.0, -math.copysign(speed, offset) if offset else 0.0)
+
+
+class StationaryBoxDock(MarkerDock):
+    horizontal_tolerance = 24  # 3x wider than the mobile dock
+    search_speed = 0.6
+    stationary = True
 
 
 class DropInBoxStationary(DropInBoxFast):
     """Rotate toward the taught box and drop from above. Never translate the base.
 
-    Place the box at the taught reachable distance; wrong distance fails closed.
+    The operator places the box at the taught reachable distance. Only bearing is checked.
     """
 
     def execute(self) -> SkillReturn:
@@ -41,9 +63,8 @@ class DropInBoxStationary(DropInBoxFast):
             self._carry_pose(self._p["travel_joints"])
             self.overlay.begin("marker box", stages=["approach", "release"], frame=tuple(config["image_size"]))
             self.overlay.stage("approach")
-            follower = MarkerFollower(self.mobility)
-            follower.max_linear = follower.max_reverse = 0.0
-            MarkerDock(self, config).run(follower=follower)
+            follower = StationaryBoxFollower(self.mobility)
+            StationaryBoxDock(self, config).run(follower=follower)
             if not fresh_sock_held(self):
                 raise SkillFailed("Sock slipped during approach; refusing an empty drop")
             self._release_at(near_x, near_y)
