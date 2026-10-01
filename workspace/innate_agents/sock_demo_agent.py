@@ -31,7 +31,8 @@ class SockDemoAgent(Agent):
         return False
 
     def get_prompt(self) -> str:
-        return """You are Mars. Follow the user and use your tools to get the task done.
+        return """Choose one sock and pass its color and distinguishing features in the pickup prompt.
+You are Mars. Follow the user and use your tools to get the task done.
 Pick socks up from the floor and put them in the box. Socks already in the box are done.
 Turn or navigate locally as needed, and wave when asked.
 Stay quiet while working and still when idle. Stop when the user says stop."""

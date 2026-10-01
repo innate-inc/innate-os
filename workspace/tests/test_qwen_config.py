@@ -63,15 +63,39 @@ class EffortTests(unittest.TestCase):
         self.assertEqual(a.get_skills(), [q, other])
         self.assertIn('enable_thinking":false', a.model_extra_body)
 
-    def test_fixed_skill_target(self):
+    def test_described_skill_target(self):
+        import json
+
+        env = dict(
+            json=json,
+            Llm=lambda *a, **kw: None,
+            SkillReturn=str,
+            PickSockFast=type("Base", (), {"execute": lambda self, prompt: prompt}),
+        )
         t = ast.parse((R / "workspace/innate_skills/pick_sock_qwen.py").read_text())
-        fn = next(n for n in ast.walk(t) if isinstance(n, ast.FunctionDef) and n.name == "execute")
-        base = NS(execute=Mock(return_value="done"))
-        env = {"PickAnyObject": base, "SkillReturn": str}
-        exec(compile(ast.Module(body=[fn], type_ignores=[]), "pickup", "exec"), env)
-        host = NS()
-        self.assertEqual(env["execute"](host), "done")
-        base.execute.assert_called_once_with(host, "the sock on the floor")
+        t.body = [n for n in t.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
+        exec(compile(t, "qwen", "exec"), env)
+        skill = env["PickSockQwen"]()
+        self.assertEqual(skill.execute("the blue sock"), "the blue sock")
+        skill._target_description = "the blue sock"
+        self.assertIn("the blue sock", skill._detection_question("all matching socks"))
+
+    def test_sock_identity_never_reanchors_after_repeated_misses(self):
+        t = ast.parse((R / "workspace/innate_skills/pick_any_object.py").read_text())
+        fn = next(n for n in ast.walk(t) if isinstance(n, ast.FunctionDef) and n.name == "_choose_cand")
+        env = {"MEM_COAST_LIMIT": 3}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "identity", "exec"), env)
+        host = NS(
+            _last_seen=(1, 2, 0.5),
+            _coasts=0,
+            logger=Mock(),
+            _p={"lock_target_identity": True, "mem_gate_m": 0.12, "mem_gate_frac": 0},
+            _memory_dist=lambda candidate: candidate,
+        )
+        for _ in range(10):
+            self.assertIsNone(env["_choose_cand"](host, [0.3, 0.5]))
+            self.assertEqual(host._last_seen, (1, 2, 0.5))
+        self.assertEqual(env["_choose_cand"](host, [0.3, 0.04]), 0.04)
 
     def test_boxes_validate_and_ignore_swapped_grasp_point(self):
         import json

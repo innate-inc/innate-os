@@ -82,7 +82,11 @@ on the floor, validates normalized boxes, and derives the grasp point from the
 box center to avoid inconsistent point-coordinate ordering. Model correctness
 is still required; box validation cannot prove that the target is a sock.
 
-Run either pickup skill directly without parameters. Marker drop is
+Run either pickup skill with a `prompt` describing one sock, including its color
+(for example, `the blue sock`). The same description is reused during reacquisition.
+Sock pickup keeps a 12 cm position gate and never discards its remembered target
+to accept a distant candidate; a lost target causes failure instead of re-anchoring.
+This cannot guarantee identity for adjacent identical socks or incorrect model detections. Marker drop is
 `drop_in_box_aruco`, also without parameters. Stop both autonomous and manually
 triggered skills before reloading code. The agent decides when to pick and drop;
 there is no combined autonomous pickup-and-delivery skill.

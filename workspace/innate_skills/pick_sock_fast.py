@@ -12,7 +12,7 @@ from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 
 
 class PickSockFast(PickAnyObject):
-    """Pick up a sock from the floor outside the box. Takes no arguments."""
+    """Pick up a sock from the floor outside the box. Describe the target sock, including its color."""
 
     # Sweep through the 15 cm hover to 8 cm; retain the final 5 cm
     # floor descent at the established nominal 0.08 m/s.
@@ -20,6 +20,9 @@ class PickSockFast(PickAnyObject):
     _p = {
         **PARAMS,
         "wrist_steps": 0.0,
+        "lock_target_identity": True,
+        "mem_gate_m": 0.12,
+        "mem_gate_frac": 0.0,
         "descend_z1": 0.15,
         "descend_z2": 0.15,
         "descend_z3": 0.15,
@@ -55,13 +58,16 @@ class PickSockFast(PickAnyObject):
     def _soft_object(self):
         return True
 
-    def execute(self) -> SkillReturn:
-        """Pick the sock from the floor outside the box."""
-        return super().execute("the sock on the floor outside the box")
+    def execute(self, prompt: str) -> SkillReturn:
+        """Pick the described floor sock. Include its color, e.g. 'the blue sock'."""
+        if not prompt.strip():
+            raise SkillFailed("Describe the sock to pick, including its color")
+        self._target_description = prompt.strip()
+        return super().execute(self._target_description)
 
     def _detection_question(self, selection):
         return (
-            "Find a sock lying on the floor OUTSIDE any box, not held by the robot. "
+            f"Find {self._target_description!r} on the floor, outside any box. Match its color and description. "
             f"Return only a JSON list for {selection}: "
             '{"box_2d":[ymin,xmin,ymax,xmax],"grasp_point":[y,x]} in 0-1000 coordinates. '
             "Grasp point is the center of the visible sock. Empty list if absent."
@@ -73,6 +79,8 @@ class PickSockFast(PickAnyObject):
     def _detect_px(self, prompt):
         # Re-detections retain all candidates so the existing identity gate can
         # keep the chosen sock rather than silently switching to a nearby one.
+        self._target_description = prompt
+        self.overlay.readout("looking for " + prompt, busy=True)
         selection = "one best match" if self._last_seen is None else "all matching socks"
         text, img = ask_head(
             self,
@@ -85,6 +93,7 @@ class PickSockFast(PickAnyObject):
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
             self.overlay.clear("target")
+            self.overlay.readout("target sock not in view")
             return None
         u, v, _grip, box = cand
         self._grip_strength = self._p["close_strength"]

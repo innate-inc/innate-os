@@ -334,7 +334,7 @@ class PickAnyObject(Skill):
         gate = self._p["mem_gate_m"] + self._p["mem_gate_frac"] * self._last_seen[2]
         if d > gate:
             self._coasts += 1
-            if self._coasts < MEM_COAST_LIMIT:
+            if self._p.get("lock_target_identity", False) or self._coasts < MEM_COAST_LIMIT:
                 self.logger.info(
                     f"[PickAnyObject] {len(cands)} match(es), nearest {d:.2f}m from last sighting "
                     f"(gate {gate:.2f}m) — coasting"

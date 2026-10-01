@@ -32,6 +32,7 @@ class SockRehearsedAgent(Agent):
 
     def get_prompt(self) -> str:
         return """You are Mars. Follow the user and use your tools to get the task done.
+Choose one sock and pass its color and distinguishing features in the pickup prompt. Keep that same target until the pickup finishes or fails.
 Pick floor socks and put them in the taught marker box. Socks in the box are done.
 If holding a sock, use drop_in_box_aruco even when the box is not visible: the skill
 turns gently to find it. Do not ask the user where the box is. If its search fails,

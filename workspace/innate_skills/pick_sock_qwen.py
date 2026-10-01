@@ -4,7 +4,6 @@ import json
 import math
 import re
 
-from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.pick_sock_fast import PickSockFast
 
 from innate import Llm, SkillReturn, vision
@@ -51,14 +50,16 @@ class PickSockQwen(PickSockFast):
         thinking="minimal",
     )
 
-    def execute(self) -> SkillReturn:
-        """Pick the sock on the floor."""
+    def execute(self, prompt: str) -> SkillReturn:
+        """Pick the described floor sock. Include its color, e.g. 'the blue sock'."""
         self._detection_number = 0
-        return PickAnyObject.execute(self, "the sock on the floor")
+        return super().execute(prompt)
 
     def _detection_question(self, selection):
         return (
-            "Find the sock on the floor. Return " + selection + ". "
+            f"Find {self._target_description!r} on the floor. Match its color and description. Return "
+            + selection
+            + ". "
             'Return {"detections":[{"x_min":...,"y_min":...,"x_max":...,"y_max":...}]}. '
             "Coordinates are integers from 0 to 1000. x is horizontal from the left; "
             "y is vertical from the top. Use tight bounding boxes. "
