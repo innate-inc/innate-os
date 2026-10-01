@@ -7,9 +7,8 @@ back-projects far past the box) and park short of it rather than over it.
 
 import math
 import re
-import time
 
-from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head
+from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, settled_frame
 
 from innate import (
     Head,
@@ -50,6 +49,7 @@ CLIP_MARGIN_PX = 3.0
 
 PARAMS = {
     **APPROACH_PARAMS,
+    "settle_s": 0.6,  # fresh frames after base sway settles, as in pickup
     # -12 sees floor from 0.19 m out, so the 0.23 park sits 40 px above the
     # frame bottom; past it the contact line leaves frame (see _park_if_clipped).
     "tilt_deg": -12.0,
@@ -82,14 +82,14 @@ PARAMS = {
     # rim, at the release bearing.
     "carry_x": 0.24,
     "carry_z": 0.30,
-    "carry_s": 2.0,
+    "carry_s": 1.0,
     # Re-squeeze before driving: move_to carries only the standing grip target,
     # which the object may have worked loose from. GRIPPER_MAX_STRENGTH; above
     # it the real servo overcurrent-trips.
     "carry_grip": 0.60,
     "carry_grip_s": 0.8,
     "lift_after_m": 0.08,  # the fingertips hang below the rim even at hover
-    "hover_s": 2.5,
+    "hover_s": 1.0,
     "arm_pitch": 1.30,
     # Least the gripper may sit past the near face and still be over the
     # interior. Below this the object would land on the rim.
@@ -127,7 +127,7 @@ class DropInBox(Skill):
     _p = PARAMS
 
     # Tuned to Gemini: the box_2d 0-1000 replies and the thresholds below are calibrated to it.
-    llm: Llm = Llm("google:gemini-3.5-flash")
+    llm: Llm = Llm("google:gemini-3.5-flash", thinking="minimal")
 
     # Two scalars, not the box tuple: a subscripted generic in a class-level
     # annotation crashes the feed-annotation machinery at import.
@@ -138,6 +138,8 @@ class DropInBox(Skill):
     _label = "the box"
     _over_rim = False  # the gripper is inside the container's footprint
     _released = False  # the object has left the claw
+    _clearance_z: float | None = None
+    _fold_started = False
 
     def _detect_px(self, prompt: str) -> tuple[float, float] | None:
         """Head frame -> the container's near floor-contact pixel, or None.
@@ -328,6 +330,7 @@ class DropInBox(Skill):
         # still lift the fingers out of the container, and an unlatched flag
         # folded REST straight through the wall.
         self._over_rim = True
+        self._clearance_z = z + p["lift_after_m"]
 
         self.check_cancelled()  # last exit before the object leaves the claw
         self.overlay.readout("opening the gripper")
@@ -342,14 +345,19 @@ class DropInBox(Skill):
         return x, y, z
 
     def _lift_out(self) -> None:
-        """Straight up until the fingers clear the rim. Never raises; clears
-        the over-rim latch only on success, so a failed lift still tells
-        teardown the gripper is in the container."""
-        try:
-            self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
-            self._over_rim = False
-        except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] could not lift clear of the container ({e})")
+        """Require measured clearance before backing up or folding past the rim."""
+        if self._clearance_z is None:
+            raise SkillFailed("No clearance height; refusing to move away from the box")
+        pose = self.manipulation.pose
+        lifted = self.manipulation.move_by(
+            dz=max(0.0, self._clearance_z - pose.z),
+            duration=self._p.get("clearance_s", 1.0),
+            tolerance_xy=None,
+            tolerance_z=None,
+        )
+        if lifted is None or not math.isfinite(lifted.z) or lifted.z < self._clearance_z - 0.01:
+            raise SkillFailed("Arm did not clear the box rim; refusing to back up")
+        self._over_rim = False
 
     def _retract(self) -> None:
         """Best-effort teardown, never raises: straight up off the rim (REST
@@ -358,29 +366,61 @@ class DropInBox(Skill):
         REST's 6th element is a claw command."""
         try:
             if self._over_rim:
-                # Only reached when the normal lift-out never ran (a cancel
-                # mid-release, or a lift that failed). Committed teardown:
-                # time.sleep on purpose.
-                self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
-                time.sleep(0.3)
+                # Committed cleanup after cancellation: no base motion, and a
+                # failed clearance check prevents the fold through the wall.
+                self._lift_out()
+            if self._fold_started:
+                try:
+                    self.manipulation.wait()
+                    return  # already folded during the vision request
+                except (ArmFailed, ArmUnhealthy) as e:
+                    self.logger.warning(f"[DropInBox] overlapping fold failed ({e}); retrying")
+                finally:
+                    self._fold_started = False
             if self._released:
-                self.manipulation.move_joints(self.manipulation.REST, duration=3.0)
+                self.manipulation.move_joints(self.manipulation.REST, duration=1.2)
             else:
-                self.manipulation.rest(duration=3.0)  # keeps the grip on a run that never released
+                self.manipulation.rest(duration=1.2)  # keeps the grip on a run that never released
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[DropInBox] retract failed: {e}")
 
     def _landed(self, prompt: str, approach: FloorApproach) -> bool:
         """Back up, then look for evidence the object did NOT go in."""
+        if self._over_rim:
+            raise SkillFailed("Arm is still over the rim; refusing to back up")
+        self.check_cancelled()
         self.overlay.stage("verify")
-        approach.drive(-VERIFY_BACKUP_M)
-        self.sleep(self._p["settle_s"])
-        main_img, wrist_img = self.main_image, self.wrist_image
+        # Speed override applies only to the post-clearance retreat.
+        retreat_speed = self._p.get("retreat_speed_scale", 1.0)
+        retreat = approach
+        if retreat_speed != 1.0:
+            retreat = FloorApproach(
+                self,
+                {
+                    **self._p,
+                    "drive_kp": self._p["drive_kp"] * retreat_speed,
+                    "drive_v_min": self._p["drive_v_min"] * retreat_speed,
+                    "drive_v_max": self._p["drive_v_max"] * retreat_speed,
+                },
+                self._detect_px,
+            )
+        if retreat.drive(-VERIFY_BACKUP_M) is False:
+            raise SkillFailed("Drop verification retreat did not complete")
+        main_img = settled_frame(self, self._p["settle_s"])
+        wrist_img = self.wrist_image
         images = [img for img in (main_img, wrist_img) if img]
         if not images:
             j6 = self._j6()
             still_held = j6 is not None and HOLDING_J6[0] < j6 < HOLDING_J6[1]
             return not still_held
+        # Freeze both views before moving the wrist camera. The accepted fold
+        # runs under the model call and is joined by teardown, even on cancel.
+        self.check_cancelled()
+        try:
+            self.manipulation.move_joints(self.manipulation.REST, duration=self._p.get("rest_fold_s", 1.2), block=False)
+            self._fold_started = True
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not start overlapping fold ({e})")
         labels = []
         if main_img:
             labels.append(f"Image {len(labels) + 1} is the head camera looking at the floor.")
@@ -415,6 +455,8 @@ class DropInBox(Skill):
         self._rim_z = None
         self._over_rim = False
         self._released = False
+        self._clearance_z = None
+        self._fold_started = False
         self._label = prompt
         released_z = None
         try:
@@ -432,23 +474,18 @@ class DropInBox(Skill):
             self._carry_pose(self._p["travel_joints"])
             approach = FloorApproach(self, self._p, self._detect_px)
             self.overlay.begin(prompt, stages=["search", "approach", "release", "verify"], frame=(IMG_W, IMG_H))
-            self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
             self.overlay.readout("parked at the rim")
-            self.say("Dropping it in.")
             _x, _y, released_z = self._release_at(xy[0], xy[1])
 
             if not self._landed(prompt, approach):
-                self.say("It missed the box.")
                 raise SkillFailed(f"Released, but the object did not land in '{prompt}'")
-            self.say("Done.")
             rim = f"{self._rim_z:.2f}" if self._rim_z is not None else "?"
             return f"Dropped the object into '{prompt}' (rim ~{rim} m, released at z={released_z:.2f})"
         except ArmFailed as e:
             self.fail(str(e))
         except ArmUnhealthy as e:
-            self.say("My arm isn't responding properly, stopping.")
             self.fail(f"Arm servo failure: {e}")
         finally:
             self.mobility.stop()

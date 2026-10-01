@@ -111,7 +111,7 @@ class BrainLifecycle:
         directive = self._state.directives[name]
         self._state.current_directive = directive
         # Before the reset below, so the fresh conversation starts on the agent's own model.
-        ok, detail = self._brain.use_model(directive.model, agent=True)
+        ok, detail = self._brain.use_model(directive.model, agent=True, model_extra_body=directive.model_extra_body)
         if not ok:
             self._chat.emit_system(f"⚠️ {directive.display_name} asks for a model the robot cannot use — {detail}")
         self._state.active_skill_ids = list(directive.initial_skill_ids())

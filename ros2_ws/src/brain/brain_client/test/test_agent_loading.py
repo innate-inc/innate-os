@@ -420,3 +420,18 @@ def test_build_reports_id_conflict_last_wins(workspace):
 
     assert broken == {}
     assert list(agents) == ["same_id"]  # conflict warns, latter wins (documented behavior)
+
+
+@pytest.mark.parametrize("extra", ["'not-json'", "'[]'", "42"])
+def test_invalid_agent_request_extras_are_reported(workspace, extra):
+    write(workspace, "innate_agents/bad_extra.py", agent_src("BadExtra", body=f"model_extra_body = {extra}"))
+    agents, _, broken = initialize_agents(LOGGER)
+    assert "badextra" not in agents
+    assert broken
+
+
+def test_agent_request_extras_load(workspace):
+    write(workspace, "innate_agents/extra.py", agent_src("Extra", body="model_extra_body = '{}'"))
+    agents, _, broken = initialize_agents(LOGGER)
+    assert not broken
+    assert agents["extra"].model_extra_body == "{}"
