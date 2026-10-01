@@ -120,3 +120,4 @@ class StationarySockTests(unittest.TestCase):
         self.assertEqual([s.__name__ for s in cls().get_skills()], names)
         self.assertEqual(cls().get_inputs(), [])
         self.assertEqual(cls.model, "google:gemini-3.6-flash")
+        self.assertEqual(cls.model_extra_body, "{}")

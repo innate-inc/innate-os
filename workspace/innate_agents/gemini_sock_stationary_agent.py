@@ -11,6 +11,8 @@ class GeminiSockStationaryAgent(SockRehearsedAgent):
     """Silent Gemini rehearsal: rotation and arm motion only, no microphone."""
 
     model = "google:gemini-3.6-flash"
+    # Override robot-wide Astra/Qwen options; Gemini rejects service_tier=ultrafast.
+    model_extra_body = "{}"
 
     @property
     def id(self) -> str:
