@@ -3,8 +3,9 @@
 """Robot pose source: TF (map->base_link) with odometry fallback in mapfree mode.
 
 Owns the on-demand ``/odom`` and nav-mode subscriptions (created via
-:meth:`start` when the brain activates, torn down via :meth:`stop`); the
-always-on TF listener keeps the transform buffer warm for on-demand lookups.
+:meth:`start` when the brain activates, torn down via :meth:`stop`). The TF
+listener is created on the first pose request and kept: idle, it costs ~7% of
+a core parsing /tf at 54 Hz in Python while nothing asks for a pose.
 The pure ``(x, y, theta)`` math lives in :mod:`perception.pose`; this module
 is the ROS-facing source of poses.
 """
@@ -33,13 +34,18 @@ class PoseTracker:
         self.cur_nav_mode: str | None = None
 
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, node)
+        self.tf_listener: TransformListener | None = None
 
         self._odom_sub = None
         self._nav_mode_sub = None
 
     # --- on-demand lifecycle (brain active) ---
+    def _ensure_listener(self) -> None:
+        if self.tf_listener is None:
+            self.tf_listener = TransformListener(self.tf_buffer, self._node)
+
     def start(self) -> None:
+        self._ensure_listener()
         if self._odom_sub is not None:
             return
         self._odom_sub = self._node.create_subscription(Odometry, self._odom_topic, self._on_odom, 10)
@@ -80,6 +86,7 @@ class PoseTracker:
 
     def map_pose_xyt(self) -> Pose | None:
         """The map->base_link pose from TF, regardless of nav mode; None if unavailable."""
+        self._ensure_listener()
         try:
             # No timeout: this runs on the agent's loop thread (twice per
             # turn), and tf2's timeout is a sleep-poll — waiting 0.5s here

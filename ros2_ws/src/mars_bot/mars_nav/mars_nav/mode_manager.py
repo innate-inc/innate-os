@@ -25,15 +25,15 @@ from geometry_msgs.msg import TransformStamped
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
-from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+from rclpy.serialization import deserialize_message
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
 from mars_nav.map_straightening import straighten_saved_map, turn_pose
 from mars_nav.service_utils import call_service, get_node_state, transition_node
@@ -240,8 +240,15 @@ class ModeManager(Node):
         # Map persistence file
         self.map_file = os.path.join(state_dir, ".last_map")
 
-        # BasicNavigator for map operations
-        self.navigator = None
+        # Raw and gated on mode, never destroyed: a destroy under this multi-threaded
+        # executor races its take (InvalidHandle), and an ignored raw message skips
+        # Python deserialization. map->base_link needs no /tf_static.
+        self.tf_buffer = tf2_ros.Buffer()
+        self.create_subscription(
+            TFMessage, "/tf", self._on_tf, 100, callback_group=MutuallyExclusiveCallbackGroup(), raw=True
+        )
+        self.create_subscription(Odometry, "/odom", self.odom_callback, 20, raw=True)
+        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
 
         # Discover available maps first (needed for loading last map)
         self.available_maps = self.discover_maps()
@@ -288,27 +295,6 @@ class ModeManager(Node):
             callback_group=self._internal_callbacks_group,
         )
 
-        # One-shot check: the costmaps' camera voxel layer is silently inert
-        # when /mars/main_camera/points never publishes (e.g. missing stereo
-        # calibration). Warn once so lidar-only operation is visible.
-        self._camera_points_seen = False
-        self._camera_points_sub = self.create_subscription(
-            PointCloud2, "/mars/main_camera/points", self._camera_points_cb, qos_profile_sensor_data
-        )
-        self._camera_check_timer = self.create_timer(30.0, self._check_camera_obstacle_source)
-
-        # --- TF2: Mapping pose publisher ---
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
-        # Subscribe to odometry topic (for mapping_pose publishing)
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            20,  # queue size
-        )
-
         self.get_logger().info("Mode Manager starting with map management capabilities.")
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
         self.get_logger().info(
@@ -338,10 +324,17 @@ class ModeManager(Node):
             5.0, self._lifecycle_watchdog, callback_group=self._internal_callbacks_group
         )
 
-    def odom_callback(self, msg):
-        # Only publish mapping_pose in mapping mode
-        if getattr(self, "current_mode", None) != "mapping":
+    def _on_tf(self, raw: bytes) -> None:
+        # /mapping_pose while mapping; the switch into navigation polls map->base_link.
+        if self.current_mode not in ("mapping", "switching"):
             return
+        for transform in deserialize_message(raw, TFMessage).transforms:
+            self.tf_buffer.set_transform(transform, "mode_manager")
+
+    def odom_callback(self, raw: bytes) -> None:
+        if self.current_mode != "mapping":
+            return
+        msg = deserialize_message(raw, Odometry)
         try:
             tf_time = rclpy.time.Time()
             tf: TransformStamped = self.tf_buffer.lookup_transform("map", "base_link", tf_time)
@@ -1081,20 +1074,6 @@ class ModeManager(Node):
                 "Re-localization after map switch failed or timed out; AMCL may still hold the previous map's pose"
             )
 
-    def _camera_points_cb(self, _msg):
-        self._camera_points_seen = True
-        if self._camera_points_sub is not None:
-            self.destroy_subscription(self._camera_points_sub)
-            self._camera_points_sub = None
-
-    def _check_camera_obstacle_source(self):
-        self._camera_check_timer.cancel()
-        if not self._camera_points_seen:
-            self.get_logger().warning(
-                "No camera pointcloud on /mars/main_camera/points 30s after start: the costmaps' camera "
-                "obstacle layer is inert (missing stereo calibration?) — navigating with lidar obstacles only"
-            )
-
     def change_map_callback(self, request, response):
         """
         Service callback to change the map for navigation mode
@@ -1562,13 +1541,6 @@ class ModeManager(Node):
                 response.message = f"Successfully switched to {target_mode} mode"
                 if target_mode == "navigation":
                     response.message += f" with map '{self.current_map}'"
-                    # Initialize BasicNavigator for navigation mode
-                    try:
-                        if self.navigator is None:
-                            self.navigator = BasicNavigator()
-                        self.get_logger().info("BasicNavigator initialized for navigation mode")
-                    except Exception as e:
-                        self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
                 elif target_mode == "mapping":
                     # Every slam_toolbox activation is a new coordinate frame;
                     # stamp it before the mode flips so no subscriber pairs

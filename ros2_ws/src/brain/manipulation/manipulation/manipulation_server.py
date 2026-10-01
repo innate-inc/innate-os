@@ -7,13 +7,13 @@ import math
 import os
 import threading
 import time
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 import cv2
 import h5py
 import numpy as np
 import rclpy
-import torch
 from brain_messages.action import ExecuteBehavior
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
@@ -27,23 +27,16 @@ from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray, Int32, String
 from std_srvs.srv import Trigger
 
-# Import your policy class and trajectory generator
-from manipulation.ACT import ACTPolicy  # noqa: E402
-from manipulation.act_config import (  # noqa: E402
-    create_act_config,
-    infer_chunk_size,
-    load_torch_file,
-    normalize_state_dict,
-    validate_action_dim,
-)
-
 # Pure (ROS-free) auto-stop logic, kept in its own module.
 from manipulation.auto_stop import LearnedStopDetector, StepSignals  # noqa: E402
 
 if TYPE_CHECKING:
     from manipulation.lerobot_bridge import LeRobotBridge
 
-# NOTE: manipulation.act_trt is imported lazily inside _load_policy_for_behavior, not here.
+# NOTE: torch, manipulation.ACT and manipulation.act_config are imported inside
+# _load_policy_for_behavior (see _ensure_torch): `import torch` alone holds ~400 MB
+# resident, and the poses/replay behaviors never touch it.
+# manipulation.act_trt is imported lazily inside _load_policy_for_behavior too, not here.
 # It imports `tensorrt` at module load, which is only installed on hardware units. Importing
 # it at module top would crash the whole behavior server (respawn loop) on a sim/dev box and
 # take down the poses/replay behaviors too -- which don't need TensorRT. TensorRT stays a hard
@@ -61,7 +54,6 @@ from manipulation.config_validation import (  # noqa: E402
 class ManipulationServer(Node):
     def __init__(self):
         super().__init__("manipulation_server")
-        self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Behavior server started.")
 
         # Use environment variable if set, otherwise construct from HOME
@@ -112,18 +104,13 @@ class ManipulationServer(Node):
         # Image size for policy inference (matches checkpoint training)
         self.bridge = CvBridge()
         self.image_size = (224, 224)  # Resize to match checkpoint expectations
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._torch: ModuleType | None = None
+        self.device = None
         # Cache of GPU resampling matrices keyed by source (h, w). INTER_AREA is a
         # separable linear filter, so resize == two matmuls with content-independent
         # weights; precomputing them lets the whole resize run on-GPU, bit-exact to
         # cv2.INTER_AREA (up to uint8 rounding), instead of on the contended CPU.
         self._resize_mats = {}
-
-        if torch.cuda.is_available():
-            props = torch.cuda.get_device_properties(0)
-            self.get_logger().info(f"PyTorch device: {self.device} ({props.name}, {props.total_memory / 1e9:.1f} GB)")
-        else:
-            self.get_logger().info(f"PyTorch device: {self.device} (CUDA unavailable)")
 
         # Current execution state
         self.execution_running = False
@@ -330,6 +317,21 @@ class ManipulationServer(Node):
             self._prev_action_np = None
             self._release_policy()
 
+    def _ensure_torch(self) -> ModuleType:
+        """Import torch and pick the device on first use (the first learned behavior)."""
+        if self._torch is not None:
+            return self._torch
+        import torch  # noqa: PLC0415
+
+        self._torch = torch
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            self.get_logger().info(f"PyTorch device: {self.device} ({props.name}, {props.total_memory / 1e9:.1f} GB)")
+        else:
+            self.get_logger().info(f"PyTorch device: {self.device} (CUDA unavailable)")
+        return torch
+
     def _release_policy(self):
         """Free the loaded policy and reclaim GPU memory."""
         if self.current_policy is None:
@@ -338,8 +340,8 @@ class ManipulationServer(Node):
             del self.current_policy
             self.current_policy = None
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if self._torch is not None and self._torch.cuda.is_available():
+                self._torch.cuda.empty_cache()
             self.get_logger().info("Policy released and GPU memory freed")
         except Exception as e:
             self.get_logger().warn(f"Error releasing policy: {e}")
@@ -662,6 +664,14 @@ class ManipulationServer(Node):
         """
         try:
             load_start = time.time()
+            torch = self._ensure_torch()
+            from manipulation.act_config import (  # noqa: PLC0415
+                create_act_config,
+                infer_chunk_size,
+                load_torch_file,
+                normalize_state_dict,
+                validate_action_dim,
+            )
 
             self._release_policy()
 
@@ -753,6 +763,8 @@ class ManipulationServer(Node):
                 # Build on CPU and adopt the checkpoint tensors directly (assign=True) to avoid
                 # allocating random weights on the GPU and a redundant device transfer. The model
                 # is moved to the device once, after the state dict is loaded.
+                from manipulation.ACT import ACTPolicy  # noqa: PLC0415
+
                 eager_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats)
 
                 # Load state dict with strict=False to handle potential mismatches gracefully
@@ -994,6 +1006,7 @@ class ManipulationServer(Node):
         """Cached (row, col) GPU matrices replicating cv2.INTER_AREA for an (h, w) ->
         image_size resize. INTER_AREA is separable, so its weights recover exactly from
         identity inputs and apply as two matmuls."""
+        torch = self._ensure_torch()
         key = (h, w)
         mats = self._resize_mats.get(key)
         if mats is None:
@@ -1010,6 +1023,7 @@ class ManipulationServer(Node):
     def _resize_normalize_gpu(self, img_bgr):
         """Resize a HWC uint8 BGR frame to (3, image_size) float32 in [0, 1] on the GPU,
         matching the cv2.INTER_AREA + /255 + CHW transpose the model was trained on."""
+        torch = self._ensure_torch()
         h, w = img_bgr.shape[:2]
         row, col = self._resize_matrices(h, w)
         src = torch.from_numpy(np.ascontiguousarray(img_bgr)).to(self.device, non_blocking=True).float()
@@ -1036,6 +1050,7 @@ class ManipulationServer(Node):
             return None
 
         try:
+            torch = self._ensure_torch()
             profiling = self.inference_profile_pub.get_subscription_count() > 0
 
             t0 = time.perf_counter()

@@ -30,6 +30,16 @@ void MarsArmNode::commandHead(double logical_angle_deg) {
 }
 
 void MarsArmNode::publishHeadPosition(int encoder_value) {
+    // On change (two-tick deadband, at most 20 Hz) plus a 1 Hz keepalive: the
+    // value only moves on a head command, and every subscriber parses JSON.
+    const auto now = std::chrono::steady_clock::now();
+    const auto since_last = now - last_head_publish_time_;
+    const bool moved = std::abs(encoder_value - last_published_head_encoder_) >= 2;
+    if (since_last < std::chrono::seconds(1) && (!moved || since_last < std::chrono::milliseconds(50))) {
+        return;
+    }
+    last_published_head_encoder_ = encoder_value;
+    last_head_publish_time_ = now;
     double logical_angle = encoderToLogicalAngle(encoder_value);
 
     const auto& head_config = joint_configs_[6];  // Index 6 = joint 7

@@ -35,7 +35,6 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Int32MultiArray
 
 from .ws_client import Action, ClientState, UninavidWsClient
 
@@ -124,15 +123,13 @@ class UninavidNode(Node):
         self._goal_handle = None
         self._last_rtt_report: float = 0.0
 
-        self._image_sub = self.create_subscription(
-            CompressedImage,
-            "/mars/main_camera/left/image_raw/compressed",
-            self._on_image,
-            QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1),
-            callback_group=MutuallyExclusiveCallbackGroup(),
+        # The camera is subscribed per goal (see _execute): idle, every frame
+        # would be deserialized and dropped.
+        self._image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1
         )
+        self._image_cb_group = MutuallyExclusiveCallbackGroup()
         self._cmd = self.create_publisher(Twist, "/cmd_vel", 10)
-        self._actions_pub = self.create_publisher(Int32MultiArray, "/vln/actions", 10)
 
         self._action_server = ActionServer(
             self,
@@ -167,14 +164,6 @@ class UninavidNode(Node):
         self._goal_handle = goal_handle
         goal_handle.execute()
 
-    # ── Actions publisher ────────────────────────────────────────────────
-
-    def _publish_actions(self, actions: list[int]) -> None:
-        """Publish the latest batch of action codes on /vln/actions for client-side overlay."""
-        msg = Int32MultiArray()
-        msg.data = actions
-        self._actions_pub.publish(msg)
-
     # ── Image forwarding ──────────────────────────────────────────────────
 
     def _on_image(self, msg: CompressedImage) -> None:
@@ -186,7 +175,9 @@ class UninavidNode(Node):
         last = getattr(self, "_last_image_ns", 0)
         cam_dt = (now - last) / 1e9 if last > 0 else -1.0
         self._last_image_ns = now
-        self.get_logger().info(f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes) cam_dt={cam_dt:.3f}s")
+        self.get_logger().debug(
+            f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes) cam_dt={cam_dt:.3f}s"
+        )
         c.push_frame(format=msg.format, stamp_sec=s.sec, stamp_nanosec=s.nanosec, data=bytes(msg.data))
 
     # ── Goal execution ────────────────────────────────────────────────────
@@ -230,6 +221,13 @@ class UninavidNode(Node):
         self._client = client
         client.connect(instruction)
         self._last_rtt_report = 0.0
+        image_sub = self.create_subscription(
+            CompressedImage,
+            "/mars/main_camera/left/image_raw/compressed",
+            self._on_image,
+            self._image_qos,
+            callback_group=self._image_cb_group,
+        )
 
         try:
             while rclpy.ok() and goal_handle.is_active:
@@ -278,10 +276,6 @@ class UninavidNode(Node):
                             time.sleep(dt)
                         self._cmd.publish(_STOP)
 
-                    new_actions = client.pop_action_history()
-                    if new_actions:
-                        self._publish_actions(new_actions)
-
                     code = client.pop_action()
 
                 # RTT
@@ -309,6 +303,7 @@ class UninavidNode(Node):
             return self._result(result, False, "Preempted")
 
         finally:
+            self.destroy_subscription(image_sub)
             client.disconnect()
             if self._client is client:
                 self._client = None
