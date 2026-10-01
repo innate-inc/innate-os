@@ -5,17 +5,33 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
+from innate_skills.learn_skill.filmstrip import Filmstrip
 from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extract_code, refusal, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
 from brain_client.common.script_paths import DRAFT_MARKER, LEARNED_GROUP, get_learned_skills_dir, is_draft
-from innate import MainImage, Skill, SkillOutput, SkillReturn
+from innate import (
+    ArmFailed,
+    ArmUnhealthy,
+    Head,
+    HeadState,
+    MainImage,
+    Manipulation,
+    Mobility,
+    Odometry,
+    Skill,
+    SkillOutput,
+    SkillReturn,
+    WristImage,
+)
 from innate_proxy import ProxyClient
 
 ROUNDS = 3
@@ -25,7 +41,20 @@ ROSTER_TIMEOUT_S = (
 TRIAL_TIMEOUT_S = 60.0
 # The skills server rewrites its contracts cache on every roster rebuild: the "your file is loaded" signal.
 CONTRACTS = Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
+IMPROVEMENTS = CONTRACTS.with_name("innate_learn_improvements.json")  # per boot, like the cache beside it
+LAST_STRIP = CONTRACTS.with_name("innate_learn_last_trial.jpg")
+IMPROVE_CAP = 5  # improvements of one skill before the user, not the loop, decides to go on
+RETURN_TOLERANCE_M = 0.05
+RETURN_TOLERANCE_RAD = math.radians(5)
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class StartLine:
+    """Where the robot was before a trial, for the parts the draft may move."""
+
+    pitch: float | None
+    xyt: tuple[float, float, float] | None
 
 
 class RoundFailed(Exception):
@@ -37,11 +66,19 @@ class LearnSkill(Skill):
     a phrase routine, a head or arm gesture, or a combination of existing skills. Give a precise
     description of what it should do and when to use it. Takes a minute or two; tell the user
     you are learning it first. The new skill appears in your tools when this completes, and the
-    result tells you what its trial did: judge that against what was asked. To fix a skill you
-    learned earlier that failed or did the wrong thing, pass improve=<its tool name> and describe
-    what went wrong: the fixed version replaces it, or the old one stays if no fix passes."""
+    result shows photos of its trial and what it reported: judge those against what was asked.
+    To fix a skill you learned earlier that failed or did the wrong thing, pass improve=<its tool
+    name> and describe what you saw wrong: the fixed version replaces it, or the old one stays if
+    no fix passes. After five improvements of one skill this refuses until the user agrees to go
+    on; then pass keep_going=True."""
 
     image: MainImage | None
+    wrist_image: WristImage | None
+    head: Head | None
+    head_position: HeadState | None
+    mobility: Mobility | None
+    odom: Odometry | None
+    manipulation: Manipulation | None
 
     def guidelines_when_running(self) -> str:
         return (
@@ -50,7 +87,7 @@ class LearnSkill(Skill):
             "says it is trying the skill, watch what the robot does: you judge the result after."
         )
 
-    def execute(self, description: str, improve: str = "") -> SkillReturn:
+    def execute(self, description: str, improve: str = "", keep_going: bool = False) -> SkillReturn:
         client = ProxyClient()
         if not client.is_available():
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
@@ -61,6 +98,8 @@ class LearnSkill(Skill):
         forge = Forge(client, coder, system_prompt())
         _drop_orphan_drafts()
         target = self._improving(improve)
+        if target:
+            self._count_improvement(target, keep_going)
         prompt = _improve_prompt(target, description) if target else f"Write a skill: {description}"
         written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted or put back
         problem = ""
@@ -79,13 +118,13 @@ class LearnSkill(Skill):
                         if target and draft.module != target.stem:
                             raise DraftRejected(f"keep the class name: the skill stays local/{target.stem}")
                         self._install(draft, written)
-                        trial = self._trial(draft)
+                        trial, strip = self._trial(draft)
                     except (DraftRejected, ForgeUnreachable, RoundFailed) as failure:
                         problem = str(failure)
                         self.feedback(f"round {round_number} failed: {problem}")
                         prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
                         continue
-                    return self._keep(draft, written, show, trial, improved=target is not None)
+                    return self._keep(draft, written, show, trial, strip, improved=target is not None)
         finally:
             for path in written:  # every draft of this run that did not pass its trial
                 _restore_or_drop(path)
@@ -138,28 +177,89 @@ class LearnSkill(Skill):
             staging.unlink(missing_ok=True)
         return self.wait_for(lambda: settled() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
 
-    def _trial(self, draft: Draft) -> SkillOutput:
-        """Run the draft once with no inputs: its output when it passes, RoundFailed with its reason otherwise."""
+    def _trial(self, draft: Draft) -> tuple[SkillOutput, bytes | None]:
+        """Run the draft once with no inputs, filming it, then put the robot back on its starting line.
+        Its output and the filmstrip when it passes; RoundFailed with its reason otherwise."""
         if self.skills is None:
             self.fail("skill invoker unavailable")
         self.feedback(f"trying {draft.skill_id}")
-        outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
+        start = self._start_line(draft)
+        strip = Filmstrip(lambda: self.image, lambda: self.wrist_image)
+        with strip.recording():
+            outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
+        self._back_to(start, draft)  # not in a finally: after a Stop the robot must not move again
+        sheet = strip.sheet()
+        if sheet is not None:
+            LAST_STRIP.write_bytes(sheet)
         if not outcome.ok:
             raise RoundFailed(outcome.message)
-        return outcome
+        return outcome, sheet
+
+    def _start_line(self, draft: Draft) -> StartLine:
+        pitch = self.head_position.pitch_degrees if "Head" in draft.declares and self.head_position else None
+        xyt = Mobility.odom_xyt(self.odom) if "Mobility" in draft.declares and self.odom else None
+        return StartLine(pitch, xyt)
+
+    def _back_to(self, start: StartLine, draft: Draft) -> None:
+        """The same starting line for every round: arm folded, head where it was, base where it was."""
+        if "Manipulation" in draft.declares and self.manipulation:
+            try:
+                self.manipulation.rest()
+            except (ArmFailed, ArmUnhealthy) as arm:
+                self.feedback(f"could not fold the arm after the trial: {arm}")
+        if start.pitch is not None and self.head:
+            self.head.set_position(int(round(start.pitch)))
+            self.sleep(0.5)
+        if start.xyt is not None and self.mobility:
+            self._drive_back(self.mobility, start.xyt)
+
+    def _drive_back(self, mobility: Mobility, start: tuple[float, float, float]) -> None:
+        def xyt() -> tuple[float, float, float] | None:
+            return Mobility.odom_xyt(self.odom)
+
+        here = xyt()
+        if here is None:
+            return
+        dx, dy = start[0] - here[0], start[1] - here[1]
+        if math.hypot(dx, dy) > RETURN_TOLERANCE_M:
+            mobility.rotate_by(xyt, _wrap(math.atan2(dy, dx) - here[2]))
+            mobility.drive(xyt, math.hypot(dx, dy))
+            here = xyt() or here
+        if abs(_wrap(start[2] - here[2])) > RETURN_TOLERANCE_RAD:
+            mobility.rotate_by(xyt, _wrap(start[2] - here[2]))
+
+    def _count_improvement(self, target: Path, keep_going: bool) -> None:
+        """Improvements of one skill this boot: past IMPROVE_CAP the user decides to go on, not the loop."""
+        counts = _improvements()
+        done = 0 if keep_going else counts.get(target.stem, 0)
+        if done >= IMPROVE_CAP:
+            self.fail(
+                f"{target.stem} has been improved {done} times already: ask the user whether to keep going, "
+                "and pass keep_going=True if they agree"
+            )
+        counts[target.stem] = done + 1
+        IMPROVEMENTS.write_text(json.dumps(counts))
 
     def _keep(
-        self, draft: Draft, written: set[Path], show: LearningMode, trial: SkillOutput, *, improved: bool
+        self,
+        draft: Draft,
+        written: set[Path],
+        show: LearningMode,
+        trial: SkillOutput,
+        strip: bytes | None,
+        *,
+        improved: bool,
     ) -> SkillReturn:
-        """Acquire the draft that passed and hand the brain what its trial did, so it can judge the result:
-        the trial's own evidence image when it attached one, else what the head camera sees now."""
+        """Acquire the draft that passed and hand the brain its trial to judge: the filmstrip, else the
+        trial's own evidence image, else what the head camera sees now; and what it reported."""
         advertised = self._acquire(draft, written)
         show.celebrate(draft.display_name, improved=improved)
         verb = "Improved" if improved else "Learned"
         listed = "it is now one of your tools" if advertised else "it joins your tools once the catalog reloads"
+        pictures = "The photos are its trial, start to end. " if strip else ""
         return SkillOutput(
-            f"{verb} {draft.skill_id}: {listed}. Its trial just ran and reported: {trial.message or 'nothing'}",
-            image=trial.image or (self.image.jpeg if self.image else None),
+            f"{verb} {draft.skill_id}: {listed}. {pictures}Its trial reported: {trial.message or 'nothing'}",
+            image=strip or trial.image or (self.image.jpeg if self.image else None),
         )
 
     def _improving(self, name: str) -> Path | None:
@@ -176,6 +276,17 @@ class LearnSkill(Skill):
 
 def _learned_path(draft: Draft) -> Path:
     return get_learned_skills_dir() / f"{draft.module}.py"
+
+
+def _wrap(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def _improvements() -> dict[str, int]:
+    try:
+        return json.loads(IMPROVEMENTS.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def _improve_prompt(target: Path, description: str) -> str:
