@@ -61,7 +61,7 @@ Marker docking now calls FollowAruco's actual `_drive_toward`, `_smooth`,
 unchanged. Docking supplies the taught target center/size and a 4% size deadband,
 then finishes on three fresh observations within 8 pixels horizontal, 20 pixels
 vertical and 6% size error. Docking caps forward speed at 0.15 m/s, reverse at 0.08 m/s, and turning at
-0.5 rad/s, with 0.2 m/s² linear and 0.8 rad/s² angular slew limits. The
+0.5 rad/s, with 0.067 m/s² linear and 0.267 rad/s² angular slew limits. The
 post-clearance retreat is capped at 0.10 m/s. Standalone FollowAruco defaults
 remain unchanged. There is no separate
 turn-first phase, derivative controller or additional motion ramp.

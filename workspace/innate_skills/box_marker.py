@@ -174,8 +174,8 @@ class MarkerFollower:
     max_linear = 0.15
     max_reverse = 0.08
     max_angular = 0.5
-    linear_slew = 0.2
-    angular_slew = 0.8
+    linear_slew = 0.2 / 3
+    angular_slew = 0.8 / 3
     _smooth = staticmethod(FollowAruco._smooth)
     _send_cmd = FollowAruco._send_cmd
     _stop = FollowAruco._stop
