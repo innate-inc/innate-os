@@ -555,7 +555,7 @@ def agent_factory(monkeypatch):
             speak=lambda text, replace_pending=False, reply_id=None: spoken.append((text, replace_pending)),
             spoken=spoken,
         )
-        chat.stream_speech = lambda: SpeechStreamer(chat)
+        chat.stream_speech = lambda hold=None: SpeechStreamer(chat, hold)
         agent = BrainAgent(
             node,
             state,

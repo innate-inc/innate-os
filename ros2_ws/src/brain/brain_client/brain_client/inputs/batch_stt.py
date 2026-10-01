@@ -398,6 +398,10 @@ class BatchSttSession:
     def wait_until_connected(self, timeout: float = 10.0) -> bool:
         return True
 
+    @property
+    def in_speech(self) -> bool:
+        return self._endpointer.in_speech
+
     def feed(self, chunk: bytes) -> None:
         utterance = self._endpointer.feed(chunk)
         if utterance is not None:

@@ -100,6 +100,11 @@ SAFETY_COMMIT_SECS = 30.0
 # a robot must keep hearing even when the streaming socket will not come back.
 RECONNECTS_BEFORE_BATCH_FALLBACK = 3
 
+# A bare hesitation is not a turn: answering "Um." talks over the sentence that
+# follows it. It is held and prefixed to the next transcript within this window.
+FILLER_WORDS = frozenset({"um", "umm", "uh", "uhh", "uhm", "erm", "er", "hm", "hmm", "hmmm"})
+FILLER_GLUE_SECS = 5.0
+
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
         "error",
@@ -137,6 +142,14 @@ def strip_leading_punctuation(text: str) -> str:
     if not text.strip(_PUNCTUATION + string.whitespace):
         return ""
     return _LEADING_PUNCTUATION.sub("", text).strip()
+
+
+def is_filler(text: str) -> bool:
+    """Only hesitation words ("Um.", "Uh, hmm") — not a question ("Hm?") or an answer ("Mm-hmm")."""
+    if "?" in text:
+        return False
+    words = re.findall(r"[\w'-]+", text.lower())
+    return bool(words) and all(word in FILLER_WORDS for word in words)
 
 
 class SlowAgc:
@@ -205,6 +218,9 @@ class MicroInput(InputDevice):
         self._scribe_context = ""
         self._scribe_first_chunk = True
         self._last_transcript = ""
+        self._pending_filler: tuple[str, float] | None = None  # (text, monotonic time) awaiting the next transcript
+        self._speaking_lock = threading.Lock()  # one decide-and-send at a time, or an edge could arrive out of order
+        self._speaking_reported = False
         self._stop_evt = threading.Event()  # device shutdown only — never cleared mid-session
         self._audio_stop: threading.Event | None = None  # current audio thread's own stop
         self._audio_thread = None
@@ -260,7 +276,23 @@ class MicroInput(InputDevice):
             if not endpointer.in_speech:
                 return
             endpointer.flush()
+        self._report_speaking()
         self._commit_scribe()
+
+    def _utterance_open(self) -> bool:
+        client, endpointer = self.client, self._endpointer
+        if self._backend in BATCH_BACKENDS:
+            return client is not None and client.in_speech
+        return endpointer is not None and endpointer.in_speech
+
+    def _report_speaking(self) -> None:
+        """Publish each open/close of an utterance, so the brain holds a reply instead of talking over it."""
+        with self._speaking_lock:
+            speaking = self._utterance_open()
+            if speaking == self._speaking_reported:
+                return
+            self._speaking_reported = speaking
+            self.send_data({"speaking": speaking}, data_type="speaking")
 
     def on_open(self):
         """Start the audio source and connect to the STT backend.
@@ -437,7 +469,7 @@ class MicroInput(InputDevice):
 
     def _start_batch_session(self, transcriber: Transcriber, model: str) -> None:
         cfg = self.proxy.config
-        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
+        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.7))
         is_voiced, engine = self._make_vad(cfg)
         self.logger.info(f"📤 Batch STT config: model={model}, vad={engine}, silence={silence_secs}s")
         self.client = BatchSttSession(
@@ -527,7 +559,7 @@ class MicroInput(InputDevice):
 
         cfg = self.proxy.config
         model = cfg.get("elevenlabs_stt_model", "scribe_v2_realtime")
-        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
+        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.7))
         filter_background = bool(cfg.get("stt_filter_background_audio", True))
         keyterms = self._realtime_keyterms()
 
@@ -757,6 +789,7 @@ class MicroInput(InputDevice):
                     ducking_logged = False
 
                     self._send_chunk(chunk if self._agc is None else self._agc(chunk))
+                    self._report_speaking()
                     chunks_sent += 1
 
                     # Log periodically (much less frequently)
@@ -797,6 +830,8 @@ class MicroInput(InputDevice):
         if self.client:
             self.client.stop()
             self.client = None
+        self._endpointer = None
+        self._report_speaking()
 
     def _detect_audio_device(self):
         """Detect and list available audio capture devices."""
@@ -874,6 +909,13 @@ class MicroInput(InputDevice):
         text = strip_leading_punctuation(text)
         if not text:
             return
+        if is_filler(text):
+            self._pending_filler = (text, time.monotonic())
+            self.logger.info(f"🎤 Filler held for the next transcript: {text}")
+            return
+        filler, self._pending_filler = self._pending_filler, None
+        if filler is not None and time.monotonic() - filler[1] < FILLER_GLUE_SECS:
+            text = f"{filler[0]} {text}"
         self.logger.info(f"🎤 Transcript: {text}")
 
         self.send_data(text, data_type="chat_in")
