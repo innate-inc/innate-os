@@ -70,9 +70,12 @@ class DropInBoxFast(DropInBox):
         self._draw_container((x, y, x + w, y + h))
         return self._park_if_clipped((self._box_u, min(float(IMG_H - 1), y + h)), y + h)
 
+    def _release_xy(self, near_x, near_y):
+        return self.manipulation.clamp_reach(near_x + self._p["drop_inset"], near_y)
+
     def _release_at(self, near_x, near_y):
         p = self._p
-        x, y = self.manipulation.clamp_reach(near_x + p["drop_inset"], near_y)
+        x, y = self._release_xy(near_x, near_y)
         if x < near_x + p["drop_inset_min"]:
             raise SkillFailed("Cannot reach inside the box from here")
         self.overlay.stage("release")

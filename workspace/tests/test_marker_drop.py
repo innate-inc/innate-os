@@ -67,6 +67,15 @@ class MarkerDropTests(unittest.TestCase):
         self.assertEqual(self.events, ["dock", "release", "lift-clear", "retreat"])
         self.s.llm.ask.assert_not_called()
 
+    def test_right_offset_is_exact_and_preflighted_without_changing_docking(self):
+        self.s.manipulation.clamp_reach = lambda x, y: (x, max(-0.1, min(0.1, y)))
+        self.assertEqual(self.s._release_xy(0.23, 0), (0.31, -0.15))
+        self.s.execute()
+        self.assertEqual(self.config["near_xy"], [0.23, 0])
+        self.s._release_at.assert_called_once_with(0.23, 0)
+        for call in self.s.manipulation.reachable.call_args_list:
+            self.assertEqual(call.args[1], -0.15)
+
     def test_lost_marker_cannot_release(self):
         self.dock.run.side_effect = RuntimeError("lost marker")
         with self.assertRaises(RuntimeError):

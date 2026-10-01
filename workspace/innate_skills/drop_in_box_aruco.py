@@ -14,6 +14,14 @@ from innate.exceptions import SkillFailed
 class DropInBoxAruco(DropInBoxFast):
     """Drop the sock into the taught marker box; stop if the marker cannot be trusted."""
 
+    DROP_RIGHT_M = 0.15
+
+    def _release_xy(self, near_x, near_y):
+        x, _ = self.manipulation.clamp_reach(near_x + self._p["drop_inset"], near_y)
+        # base_link +y is left. Keep the exact lateral target rather than the
+        # generic grasp-box clamp (+/-10 cm); execute preflights actual IK.
+        return x, near_y - self.DROP_RIGHT_M
+
     def execute(self) -> SkillReturn:
         config = load_config()  # fail before motion when setup is absent/invalid
         if config["head_tilt_deg"] != self._p["tilt_deg"]:
@@ -21,7 +29,7 @@ class DropInBoxAruco(DropInBoxFast):
         near_x, near_y = config["near_xy"]
         # Validate reachability before driving. Measured pose checks also remain
         # inside _release_at; an IK answer alone never authorizes opening.
-        x, y = self.manipulation.clamp_reach(near_x + self._p["drop_inset"], near_y)
+        x, y = self._release_xy(near_x, near_y)
         if x < near_x + self._p["drop_inset_min"]:
             raise SkillFailed("Taught drop inset is unreachable")
         for px, pz in [(self._p["carry_x"], 0.28), (x, self.RELEASE_Z), (x, self.CLEARANCE_Z)]:
