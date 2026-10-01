@@ -313,11 +313,12 @@ class MicroInput(InputDevice):
                 self._pending_commits.popleft()
 
     def _drop_unanswered_locked(self) -> None:
-        # A commit Scribe never answered would otherwise absorb the next answer,
-        # leaving every later commit one behind for the rest of the session.
-        now = time.monotonic()
-        while self._pending_commits and self._pending_commits[0][0] <= now:
-            self._pending_commits.popleft()
+        # Answers match commits strictly in order, so a late answer retires its own
+        # commit, never the next. Only once every commit is past its wait is the queue
+        # cleared: an answer Scribe never sent then costs one over-hold, not a session
+        # of answers matched one commit behind.
+        if self._pending_commits and self._pending_commits[-1][0] <= time.monotonic():
+            self._pending_commits.clear()
 
     def _forget_commits(self) -> None:
         with self._commits_lock:
