@@ -246,6 +246,8 @@ std::string RecorderNode::missing_required_sensors() {
 }
 
 void RecorderNode::unsubscribe_sensors() {
+    // Safe mid-spin only because every entity shares the default mutually exclusive group, so no sensor
+    // callback is in flight here; rclcpp then skips ready handles whose subscription expired.
     image_subs_.clear();
     arm_state_sub_.reset();
     leader_command_sub_.reset();
@@ -783,6 +785,13 @@ void RecorderNode::handle_stop_episode(const std::shared_ptr<std_srvs::srv::Trig
 
 void RecorderNode::handle_end_task(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    if (state_ == State::IDLE) {
+        // A retried end_task (its first reply lost) lands here; TaskManager::end_task throws with no task and
+        // the uncaught throw aborts the whole recorder.
+        response->success = true;
+        response->message = "No active task.";
+        return;
+    }
     if (state_ == State::EPISODE_ACTIVE || state_ == State::EPISODE_STOPPED) {
         RCLCPP_WARN(this->get_logger(), "Ending task during an %s episode; canceling current episode first.",
                     state_to_string(state_).c_str());
