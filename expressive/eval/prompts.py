@@ -46,6 +46,7 @@ PRESET_LABELS: dict[str, tuple[str, ...]] = {
     "affectionate": ("affectionate",),
     "bored": ("bored",),
     "relieved": ("calm",),
+    "listening": ("calm", "curious"),
 }
 
 OOD: tuple[tuple[str, str, tuple[str, ...]], ...] = (

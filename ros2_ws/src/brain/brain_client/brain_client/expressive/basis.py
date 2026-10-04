@@ -7,11 +7,11 @@
 first has its arm channels (approach, expand, rise, askew) scaled toward NEUTRAL by the precomputed
 ``safe`` table, so combinations that would fold the arm into itself or the floor stop short (the
 robot has no collision model; the table is built on the host with ``reach`` against mars.urdf).
-It then becomes NEUTRAL + u * (READY - NEUTRAL) + sum |w| * endpoint(sign w): NEUTRAL is the folded
-arm, and the channels whose positive end unfolds it (``unfold``: approach, expand, rise) store that
-end relative to READY, a raised front pose, with u = 1 - prod(1 - w+) over them. One channel alone
-is plain linear interpolation to its endpoint; several share one unfolding instead of each adding
-its own (tall + reaching is the mast leaning in, not two unfoldings summed into a knot). The
+It then becomes NEUTRAL + u * (READY - NEUTRAL) + sum |w| * endpoint(sign w): the channels whose
+positive end unfolds the arm (``unfold``: approach, expand, rise) store that end relative to READY,
+a raised front pose, with u = 1 - prod(1 - w+) over them. One channel alone is plain linear
+interpolation to its endpoint; several share one bold unfolding instead of each adding its own
+(tall + reaching is the mast leaning in, not two unfoldings summed into a knot). The
 gripper is the grip channel plus the endpoints' j6 deltas, orient/advance are base offsets from
 the anchor, and everything is clamped to the joint limits and the shoulder-clearance rule.
 
@@ -33,6 +33,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from brain_client.expressive.channels import Ch, Frames
+from brain_client.expressive.plan import lowpass
 
 BASIS_PATH = Path(__file__).with_name("basis.json")
 ACTUATOR_KEYS: tuple[str, ...] = ("j1", "j2", "j3", "j4", "j5", "j6", "head_deg", "base_yaw", "base_x")
@@ -88,6 +89,7 @@ class ActuatorPose:
 
 
 GRIP_OPEN_RAD = 0.8727
+RETIME_FC = 4.0
 Projector = Callable[[Vector], Vector]
 
 
@@ -211,9 +213,24 @@ class Basis:
             q[Act.J1] = lo
         return np.clip(self.clamp(q), previous - step, previous + step)
 
+    def retime(self, frames: Frames, dt: float) -> Frames:
+        """(T, 9) actuator frames with every move too fast for ``max_speed`` slowed down until it fits, so a
+        snap keeps its full excursion instead of being cut short. Speeds are judged on the motion
+        low-passed at ``RETIME_FC`` so only real moves stretch time; fine tremble is left to ``limit``."""
+        frames = np.asarray(frames, dtype=np.float64)
+        if len(frames) < 2:
+            return frames.copy()
+        capped = np.isfinite(self.max_speed)
+        smooth = lowpass(frames[:, capped], RETIME_FC, 1.0 / dt)
+        demand = np.abs(np.diff(smooth, axis=0)) / (self.max_speed[capped] * dt)
+        stretch = np.maximum(1.0, demand.max(axis=1))
+        times = np.concatenate([[0.0], np.cumsum(stretch)]) * dt
+        grid = np.arange(math.floor(times[-1] / dt + 0.5) + 1) * dt
+        return np.stack([np.interp(grid, times, frames[:, j]) for j in range(frames.shape[1])], -1)
+
     def limit_frames(self, frames: Frames, dt: float) -> Frames:
-        """(T, 9) actuator frames as the robot can follow them: ``limit`` applied frame to frame."""
-        out = np.array(frames, dtype=np.float64)
+        """(T', 9) actuator frames as the robot plays them: ``retime``, then ``limit`` frame to frame."""
+        out = self.retime(frames, dt)
         for i in range(1, len(out)):
             out[i] = self.limit(out[i - 1], out[i], dt)
         return out

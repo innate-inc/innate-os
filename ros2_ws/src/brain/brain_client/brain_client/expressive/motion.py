@@ -13,7 +13,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -21,17 +21,13 @@ from brain_client.expressive.basis import ACTUATOR_KEYS, Basis, Projector, Vecto
 from brain_client.expressive.channels import FPS, MOTION_CHANNELS, MOTION_KEYS, Frames
 from brain_client.expressive.dsl import expand
 from brain_client.expressive.liveliness import animate
-from brain_client.expressive.plan import frames as plan_frames
-from brain_client.expressive.plan import to_plan
-
-if TYPE_CHECKING:
-    from brain_client.expressive.plan import Plan
 
 Space = Literal["plan", "actuator"]
 MIN_FPS = 1.0
 MAX_FPS = 1000.0
-# 30 s recipes, plus the x1.25 tempo of planner variants and per-segment frame rounding.
-MAX_CLIP_S = 40.0
+# 30 s recipes, plus the x1.25 tempo of planner variants, per-segment frame rounding, and snaps
+# time-stretched to the speed caps (Basis.retime).
+MAX_CLIP_S = 60.0
 
 
 def _is_file(path: Path) -> bool:
@@ -139,10 +135,8 @@ class Clip:
 
     @classmethod
     def from_recipe(cls, recipe: str, name: str = "clip", seed: int = 0, prompt: str = "", idea: str = "") -> Clip:
-        """Recipe -> plan -> procedural liveliness -> plan-space clip (raises ``RecipeError``)."""
-        plan: Plan = to_plan(expand(recipe))
-        motion = animate(plan_frames(plan), seed)
-        return cls.from_plan_frames(motion, name=name, prompt=prompt, idea=idea, recipe=recipe)
+        """Recipe -> procedural liveliness on the expanded recipe -> plan-space clip (raises ``RecipeError``)."""
+        return cls.from_plan_frames(animate(expand(recipe), seed), name=name, prompt=prompt, idea=idea, recipe=recipe)
 
     def resample(self, fps: float) -> Clip:
         """This clip on an ``fps`` grid; box-filtered first when downsampling so detail can't alias."""

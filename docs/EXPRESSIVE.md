@@ -35,10 +35,19 @@ differential base), so the planner never sees joints. It writes in eight body-la
 - **NEUTRAL is the home fold** (j1 1.40, j2 -1.15, j3 1.45, j4 0.50): the at-ease pose the arm can
   hold for hours (gravity torque ~0.17 N·m on the elbow, as at rest) and that the head camera
   cannot see (0 arm pixels in a segmentation render of the `main` camera).
-- Each body channel has a -1 and a +1 endpoint, stored as actuator deltas. The negative ends of
-  approach, expand and rise tighten and droop the fold and dip the head, so they are subtle; the
-  positive ends **unfold** the arm: approach +1 reaches forward toward the person, rise +1 stands
-  a mast beside the head, expand +1 opens the arm out to the robot's left with the gripper open.
+- Each body channel has a -1 and a +1 endpoint, stored as actuator deltas. The negative ends stay
+  compact: approach −1 pulls the arm in tight with the head down 8°, rise −1 is the slump (claw
+  turned down, head down 14°), expand −1 the closed fold. The positive ends **unfold** the arm:
+  approach +1 reaches forward toward the person, rise +1 stands a mast beside the head, expand +1
+  opens the arm out to the robot's left with the gripper open.
+- Why compact, measured (basis v6, the blind eval below): every way of making the negative ends
+  visible by moving the arm (a droop that reaches the floor, a recoil that raises the claw beside or
+  in front of the head) was read by the blind judges as a gesture ("inspecting the floor",
+  "raising its hand", "head scratch") and cost 6-12 points on the held-out prompts, where the
+  planner writes small negative a/x/z all the time. A low, still arm with the head down reads
+  "dejected" instead; the base (backing away, turning away) carries the rest. An "open" at-ease
+  NEUTRAL (claw raised to the chest) read as "inspecting its claw" and was dropped for the same
+  reason.
 - Unfolding is shared: those three positive ends are stored relative to READY (a raised front
   pose) and `offset = u·(READY − NEUTRAL) + Σ|w|·endpoint` with `u = 1 − Π(1 − w⁺)`. One channel
   alone interpolates linearly to its endpoint; tall + reaching becomes the mast leaning in instead
@@ -48,14 +57,25 @@ differential base), so the planner never sees joints. It writes in eight body-la
   combination would fold the arm into itself, the chassis or the floor. `mars-express basis`
   rebuilds it against a robot-only MuJoCo model of mars.urdf (`reach.py`: contacts confirmed with
   GJK distance, base_link–link2 excluded like arm.srdf): every −1/0/+1 combination of the body
-  channels is clear, and 26 of 3000 random rows touch by at most 1.9 mm.
+  channels is clear, and 19 of 3000 random rows touch by at most 4.9 mm.
 - Then joint limits and the shoulder-clearance rule (across the front arc j2 ≥ −0.25, the sim's
-  ramp). `max_speed` (6 rad/s arm, 10 rad/s gripper, 200 °/s head) is enforced per tick by the
-  animator, which also only lets j1 sweep into the front arc as fast as j2 can rise over its floor.
+  ramp). `max_speed` is the hardware's TELEOP speeds (j1 6.0, j2 3.6, j3 4.8, j4 2.4, j5 2.4,
+  j6 1.4 rad/s; head 200 °/s). A clip is first **retimed** to them (`Basis.retime`: a move too
+  fast for a joint is slowed down until it fits, judged on the motion low-passed at 4 Hz, so a
+  snap keeps its full excursion instead of being cut short), then the animator rate-limits every
+  tick as the safety net, letting j1 sweep into the front arc only as fast as j2 can rise over its
+  floor.
 
 Head-camera occlusion at the endpoints (share of the image covered by the arm,
-`out/axis_sheet_maincam.png`): expand +1 32 %, rise +1 25 %, attend −1 16 % (looking down at the
-fold), askew −1 8 %, approach +1 6 %, approach −1 and rise −1 3 %, everything else 0.
+`out/axis_sheet_maincam.png`): expand +1 32 %, rise +1 25 %, attend −1 15 % (looking down at the
+fold), rise −1 10 %, approach +1 6 %, askew −1 6 %, approach −1 2 %, everything else 0.
+
+Blind recognition (`mars-express eval --judge openai --n 3`, basis v6, see
+`expressive/out/eval/ITERATIONS.md` for every iteration): the 16 hand-written presets are named
+in the judge's top 3 labels 62 % of the time and described as the prompt or something related 75 %
+of the time (38 % / 58 % before); the planner's recipes for 30 held-out prompts are described as
+related 72 % of the time. The judge reads any raised arm as a raised hand or a wave and any still,
+low clip as "inspecting", which is what still costs proud, scared, angry, affectionate and bored.
 
 ## Modules (`ros2_ws/src/brain/brain_client/brain_client/expressive/`, pure Python + numpy)
 
@@ -72,13 +92,17 @@ fold), askew −1 8 %, approach +1 6 %, approach −1 and rise −1 3 %, everyth
 | `motion` | `Clip`: the JSON that plays in the browser, the sim and the robot |
 | `animator`, `breathing`, `speech` | idle breathing, crossfaded play/queue/stop, speech sway, masks, gaze, `enter_from` the measured pose |
 | `prompt`, `planner` | the frozen planner prompt; write → check → repair against any chat function |
-| `presets` | built-in recipes (the never-silent fallback) |
+| `presets` | 17 built-in recipes, `listening` the default; `match` scores keyword stems (the never-silent fallback) |
 | `probes` | physical probes: does the sneeze release go down, does "no" shake the base… |
 
 ## The procedural generator
 
-`liveliness.animate(plan_frames, seed)` turns a plan into 25 Hz motion, deterministic for a seed
-(every draw from one documented mulberry32 stream, so the studio's JS port matches to 1e-4):
+`liveliness.animate(frames, seed)` turns conditioning frames into 25 Hz motion, deterministic for a
+seed (every draw from one documented mulberry32 stream, so the studio's JS port matches to 1e-4).
+The procedural path (`Clip.from_recipe`, the studio, the robot's fallback) animates the expanded
+recipe itself: the sparse serving plan's 2 Hz low-pass kept only 9-61 % of an `osc` at 0.3-0.6 s
+periods, which is what nods, bounces and chatter are made of (`osc 2 p .4 .4` now reaches 110 % of
+its amplitude on the head). Learned generators keep the sparse plan they are trained on.
 
 1. timing jitter: the plan is read through a smooth time warp (±50 ms, pinned at both ends);
 2. a second-order tracker per channel, critically damped on the error with the target's velocity
@@ -99,7 +123,7 @@ sim's own world model, `void` environment):
 cd expressive
 uv sync
 uv run mars-express sheet        # out/axis_sheet_{front,3q,maincam}.png: every channel at -1 / 0 / +1
-uv run mars-express presets      # out/presets/<name>.{mp4,png,json} for the 16 built-in presets
+uv run mars-express presets      # out/presets/<name>.{mp4,png,json} for the 17 built-in presets
 uv run mars-express plan "a cat spotting a cucumber" --chat gemini --out out/cat.json   # GEMINI_API_KEY
 uv run mars-express plan "a cat spotting a cucumber"                                    # preset fallback
 uv run mars-express render out/cat.json out/cat.mp4 [--camera three-quarter|front|profile|split]

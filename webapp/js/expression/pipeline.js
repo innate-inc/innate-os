@@ -719,14 +719,47 @@ export function limitSpeed(basis, previous, target, dt) {
   return toPose(clampVector(basis, q).map((v, j) => Math.min(prev[j] + step[j], Math.max(prev[j] - step[j], v))));
 }
 
+/** Low-pass cut-off (Hz) the retimer judges speed on, so only real moves stretch time (the core's RETIME_FC). */
+const RETIME_FC = 4.0;
+
 /**
- * Actuator frames as the robot can follow them: limitSpeed frame to frame
- * (the core's Basis.limit_frames).
+ * Poses with every move too fast for max_speed slowed down until it fits, so a
+ * snap keeps its full excursion instead of being cut short (the core's Basis.retime).
+ * @param {Basis} basis @param {ActuatorPose[]} poses @param {number} dt @returns {ActuatorPose[]}
+ */
+export function retime(basis, poses, dt) {
+  if (poses.length < 2) return poses.map((p) => ({ ...p }));
+  const capped = ACTUATOR_KEYS.filter((k) => Number.isFinite(basis.max_speed?.[k] ?? Infinity));
+  const smooth = lowpass(
+    poses.map((p) => capped.map((k) => p[k])),
+    RETIME_FC,
+    1 / dt,
+  );
+  const times = [0];
+  for (let i = 1; i < poses.length; i++) {
+    let stretch = 1;
+    capped.forEach((k, j) => {
+      const cap = /** @type {number} */ (basis.max_speed?.[k]);
+      stretch = Math.max(stretch, Math.abs(smooth[i][j] - smooth[i - 1][j]) / (cap * dt));
+    });
+    times.push(times[i - 1] + stretch);
+  }
+  const end = times[times.length - 1] * dt;
+  const seconds = times.map((t) => t * dt);
+  const count = Math.floor(end / dt + 0.5) + 1;
+  const columns = ACTUATOR_KEYS.map((k) => poses.map((p) => p[k]));
+  return Array.from({ length: count }, (_, i) => toPose(columns.map((col) => interp(i * dt, seconds, col))));
+}
+
+/**
+ * Actuator frames as the robot plays them: retime, then limitSpeed frame to
+ * frame (the core's Basis.limit_frames).
  * @param {Basis} basis @param {ActuatorPose[]} poses @param {number} dt @returns {ActuatorPose[]}
  */
 export function limitFrames(basis, poses, dt) {
-  const out = poses.slice(0, 1);
-  for (let i = 1; i < poses.length; i++) out.push(limitSpeed(basis, out[i - 1], poses[i], dt));
+  const timed = retime(basis, poses, dt);
+  const out = timed.slice(0, 1);
+  for (let i = 1; i < timed.length; i++) out.push(limitSpeed(basis, out[i - 1], timed[i], dt));
   return out;
 }
 
@@ -738,15 +771,15 @@ export function limitFrames(basis, poses, dt) {
  */
 
 /**
- * The whole offline path: recipe → frames → plan → conditioning → lively
- * motion clip (the core's Clip.from_recipe), with every stage for the plots.
+ * The whole offline path: recipe → frames → lively motion clip (the core's
+ * Clip.from_recipe: procedural liveliness runs on the expanded recipe itself, so
+ * fast osc survives), plus the serving plan for the plots.
  * @param {string} recipe
  * @param {{ name?: string, prompt?: string, idea?: string, seed?: number }} [meta]
  */
 export function recipeToClip(recipe, { name = "clip", prompt = "", idea = "", seed = 0 } = {}) {
   const frames = expandRecipe(recipe);
   const plan = toPlan(frames);
-  const cond = planFrames(plan);
   /** @type {Clip} */
   const clip = {
     name,
@@ -756,7 +789,7 @@ export function recipeToClip(recipe, { name = "clip", prompt = "", idea = "", se
     fps: FPS,
     space: "plan",
     channels: [...MOTION_CHANNELS],
-    frames: liveliness(cond, seed),
+    frames: liveliness(frames, seed),
   };
   return { clip, frames, plan };
 }

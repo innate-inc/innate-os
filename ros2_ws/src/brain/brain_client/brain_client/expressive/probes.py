@@ -10,6 +10,7 @@ per prompt. ``TEACHER`` holds one reference recipe per probe that passes it.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -29,14 +30,19 @@ def frames_for(recipe: str, seed: int | None = None) -> Frames:
 
 
 def _half_cycles(x: Frames, amp: float) -> int:
-    """Swings of at least ``amp`` around the running mean."""
-    k = max(3, len(x) // 10)
-    if len(x) <= k:
+    """Swings of at least ``amp`` around the running mean: crossings of the detrended signal from
+    above ``amp / 2`` to below ``-amp / 2`` or back (the mean is taken over >= 0.5 s)."""
+    window = max(math.ceil(0.5 * FPS), len(x) // 10) | 1
+    if len(x) <= window:
         return 0
-    detrended = x - np.convolve(x, np.ones(k) / k, "same")
-    signs = np.sign(np.where(np.abs(detrended) > amp / 2, detrended, 0))
-    signs = signs[signs != 0]
-    return int((np.diff(signs) != 0).sum()) if len(signs) else 0
+    padded = np.pad(x, window // 2, mode="edge")
+    detrended = x - np.convolve(padded, np.ones(window) / window, "valid")
+    side, swings = 0, 0
+    for value in detrended:
+        if abs(value) > amp / 2 and np.sign(value) != side:
+            swings += side != 0
+            side = int(np.sign(value))
+    return swings
 
 
 def _release_window(f: Frames) -> tuple[Frames, Frames]:

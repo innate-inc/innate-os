@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The procedural generator: plan -> lively 25 Hz motion, deterministic for a seed (the CPU stand-in
-for a learned generator, and its fallback).
+"""The procedural generator: conditioning frames -> lively 25 Hz motion, deterministic for a seed (the
+CPU stand-in for a learned generator, and its fallback).
 
-Three layers on top of the linearly interpolated plan:
+The procedural path animates the expanded recipe itself (``dsl.expand``, 25 Hz): the sparse serving
+plan's 2 Hz low-pass keeps only 9-61 % of an osc at 0.3-0.6 s periods, which is what nods, bounces
+and chatter are made of. Learned generators are conditioned on the sparse plan instead.
+
+Three layers on top of the conditioning:
 
 1. Timing jitter: the plan is read through a smooth time warp ``w(t) = t + J sin(pi t / D) * mean_k
    sin(2 pi g_k t + psi_k)``, so beats never land on a metronome grid (``J`` = 50 ms, 2 terms).
@@ -99,7 +103,7 @@ def _noise(energy: Frames, rng: Mulberry32) -> Frames:
 
 
 def animate(plan_frames: Frames, seed: int = 0) -> Frames:
-    """(T, 9) interpolated plan (``plan.frames``) -> (T, 8) motion at FPS."""
+    """(T, 9) conditioning at FPS (``dsl.expand`` output, or ``plan.frames``) -> (T, 8) motion at FPS."""
     rng = Mulberry32(seed)
     positions = _warp(len(plan_frames), rng)
     grid = np.arange(len(plan_frames))

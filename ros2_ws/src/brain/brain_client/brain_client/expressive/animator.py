@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from brain_client.expressive.basis import Act, ActuatorPose, Basis
@@ -323,7 +323,9 @@ class Animator:
             logger.warning("Could not make a clip to play: %s", error)
 
     def _schedule(self, clip: Clip, queue: bool, generation: int) -> None:
-        prepared = clip.to_actuators(self._basis, self._project).resample(self.fps)
+        actuators = clip.to_actuators(self._basis, self._project)
+        retimed = replace(actuators, frames=self._basis.retime(actuators.frames, 1.0 / actuators.fps))
+        prepared = retimed.resample(self.fps)
         with self._lock:
             if generation != self._generation:
                 logger.info("Dropped %s: superseded while it was being made", clip.name)
