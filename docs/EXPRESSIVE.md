@@ -52,6 +52,11 @@ differential base), so the planner never sees joints. It writes in eight body-la
   pose) and `offset = u·(READY − NEUTRAL) + Σ|w|·endpoint` with `u = 1 − Π(1 − w⁺)`. One channel
   alone interpolates linearly to its endpoint; tall + reaching becomes the mast leaning in instead
   of two unfoldings summed into a knot.
+- A lowered gaze brings the body with it (`couple`, applied to every row before the safe table, so
+  planner clips get it too): as attend goes from −0.3 to −1 the arm slumps by up to rise −0.6 and
+  approach −0.3 (claw turned down), and above attend +0.5 it lifts by up to rise +0.25. Seen from
+  above, a head tilted down shows more of its flat top and alone reads as looking *up*; below the
+  thresholds every channel stays linear.
 - The robot has no collision model, so the basis carries its own: a `safe` table (7⁵ nodes over
   the five body channels, multilinear) that scales the arm channels toward the fold where a
   combination would fold the arm into itself, the chassis or the floor. `mars-express basis`

@@ -4,7 +4,10 @@
 
 ``basis.json`` is data, tuned by rendering: the NEUTRAL actuator pose plus, for each body channel
 (approach, expand, rise, attend, askew), the actuator deltas of its -1 and +1 extremes. A plan row
-first has its arm channels (approach, expand, rise, askew) scaled toward NEUTRAL by the precomputed
+is first ``couple``d: each coupling adds ``depth * add`` to channels, where depth ramps 0 -> 1 as its
+source channel goes from ``start`` to ``end`` (a lowered gaze brings a slight slump of the arm with
+it, because from above a tilted-down head shows more of its flat top and reads as looking up; below
+``start`` every channel stays linear). It then has its arm channels (approach, expand, rise, askew) scaled toward NEUTRAL by the precomputed
 ``safe`` table, so combinations that would fold the arm into itself or the floor stop short (the
 robot has no collision model; the table is built on the host with ``reach`` against mars.urdf).
 It then becomes NEUTRAL + u * (READY - NEUTRAL) + sum |w| * endpoint(sign w): the channels whose
@@ -32,7 +35,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from brain_client.expressive.channels import Ch, Frames
+from brain_client.expressive.channels import CHANNELS, Ch, Frames, clip_to_limits
 from brain_client.expressive.plan import lowpass
 
 BASIS_PATH = Path(__file__).with_name("basis.json")
@@ -109,6 +112,21 @@ def clearance_floor(j1: float, full_min: float, guard_min: float) -> float:
     return guard_min + t * (full_min - guard_min)
 
 
+@dataclass(frozen=True)
+class Coupling:
+    source: int
+    start: float
+    end: float
+    add: Vector
+
+
+def _coupling(spec: Mapping[str, Any]) -> Coupling:
+    add = np.zeros(len(CHANNELS))
+    for key, value in spec["add"].items():
+        add[Ch[key.upper()]] = float(value)
+    return Coupling(Ch[str(spec["from"]).upper()], float(spec["start"]), float(spec["end"]), add)
+
+
 class Basis:
     def __init__(self, data: Mapping[str, Any]) -> None:
         self.version = int(data["version"])
@@ -120,6 +138,7 @@ class Basis:
         )
         unfold = set(data.get("unfold", ()))
         self.unfolds = np.array([channel.name.lower() in unfold for channel in BODY_CHANNELS])
+        self.couplings = [_coupling(spec) for spec in data.get("couple", ())]
         self.low = np.array([float(data["limits"][k][0]) for k in ACTUATOR_KEYS])
         self.high = np.array([float(data["limits"][k][1]) for k in ACTUATOR_KEYS])
         self.guard_min = float(data["clearance"]["j2_min"])
@@ -235,8 +254,22 @@ class Basis:
             out[i] = self.limit(out[i - 1], out[i], dt)
         return out
 
+    def couple(self, row: Frames) -> Frames:
+        """``row`` with the ``couple`` block applied (depths read from the row as given), clipped to range."""
+        source = np.asarray(row, dtype=np.float64)
+        coupled = source.copy()
+        for coupling in self.couplings:
+            depth = min(max((source[coupling.source] - coupling.start) / (coupling.end - coupling.start), 0.0), 1.0)
+            if depth > 0.0:
+                coupled += depth * coupling.add[: len(coupled)]
+        return clip_to_limits(coupled)
+
+    def pose(self, row: Frames) -> Vector:
+        """``row`` through the endpoints and clamps alone: no coupling, no safe table (what ``safe`` is built on)."""
+        return self.clamp(self.raw(row))
+
     def synthesize(self, row: Frames, project: Projector | None = None) -> ActuatorPose:
-        q = self.clamp(self.raw(self.safe_row(row)))
+        q = self.pose(self.safe_row(self.couple(row)))
         return ActuatorPose(project(q) if project is not None else q)
 
     def synthesize_frames(self, frames: Frames, project: Projector | None = None) -> Frames:

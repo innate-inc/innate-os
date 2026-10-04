@@ -554,6 +554,7 @@ export const ACTUATOR_KEYS = /** @type {const} */ ([
  *   neutral: ActuatorDelta,
  *   ready?: ActuatorDelta,
  *   unfold?: string[],
+ *   couple?: { from: string, start: number, end: number, add: Record<string, number> }[],
  *   limits: Record<ActuatorKey, [number, number]>,
  *   grip_rad: number,
  *   clearance: { j2_min: number },
@@ -632,14 +633,38 @@ export function safeRow(basis, row) {
 const withGrip = (q) => ({ ...q, grip: q.j6 / GRIP_OPEN_RAD });
 
 /**
- * One plan/motion row → actuator pose: the arm channels pulled back to the
- * collision-safe region, then NEUTRAL + Σ |w| · endpoint(sign w) over the body
- * channels, the gripper is grip + the endpoints' j6, orient/advance are base
- * offsets from the anchor; then the joint limits and the shoulder-clearance rule.
+ * `row` with the basis's couple block applied (the core's Basis.couple): each
+ * coupling adds depth · add, depth ramping 0 → 1 as its source channel goes from
+ * start to end (read from the row as given), then every channel is clipped to range.
+ * @param {Basis} basis @param {Row} row @returns {Row}
+ */
+export function couple(basis, row) {
+  const out = row.slice();
+  for (const c of basis.couple ?? []) {
+    const source = /** @type {number} */ (row[CHANNELS.indexOf(/** @type {any} */ (c.from))]);
+    const depth = Math.min(1, Math.max(0, (source - c.start) / (c.end - c.start)));
+    if (!(depth > 0)) continue;
+    for (const [channel, gain] of Object.entries(c.add)) {
+      const j = CHANNELS.indexOf(/** @type {any} */ (channel));
+      if (j < out.length) out[j] += depth * gain;
+    }
+  }
+  return out.map((v, j) => {
+    const [lo, hi] = LIMITS[DSL_KEYS[j]];
+    return Math.min(hi, Math.max(lo, v));
+  });
+}
+
+/**
+ * One plan/motion row → actuator pose: coupled (a lowered gaze slumps the arm a
+ * little), the arm channels pulled back to the collision-safe region, then the
+ * basis offsets from NEUTRAL, the gripper is grip + the endpoints' j6,
+ * orient/advance are base offsets from the anchor; then the joint limits and the
+ * shoulder-clearance rule.
  * @param {Basis} basis @param {Row} input @returns {ActuatorPose}
  */
 export function synthesize(basis, input) {
-  const row = safeRow(basis, input);
+  const row = safeRow(basis, couple(basis, input));
   const delta = offset(basis, row);
   const q = ACTUATOR_KEYS.map((key, j) => (basis.neutral[key] ?? 0) + delta[j]);
   q[J6] = basis.grip_rad * row[7] + delta[J6];
