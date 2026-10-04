@@ -348,7 +348,7 @@ class BrainClientNode(Node):
             provider=lambda: self.brain.llm.provider if self.brain.llm is not None else None,
             standing_grip=lambda: self.rest_pose.grip,
         )
-        self.chat.on_emote = driver.express
+        self.chat.on_emote = driver.emote
         self.gaze.head_sink = driver.set_gaze
         self.brain.emotes = True
         if self._tts_handler is not None:

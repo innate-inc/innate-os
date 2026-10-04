@@ -129,11 +129,18 @@ extra ROS node): one `Animator` ticked by a 30 Hz node timer, its poses mapped o
 A robot nobody talks to stays still: with the brain inactive and nothing playing, nothing is
 published. The layer yields the body to whatever else owns it:
 
-- a running skill (any `running` on `/brain/skill_status_update` except `express`, or the brain's
-  own skill slot) or a live Nav2 `/navigate_to_pose` goal masks everything: output stops at once,
-  the stream resumes from wherever the skill left the body, and the end of the skill plays a small
-  reaction. Masking is silence rather than `Animator.set_mask`, whose eased-to-NEUTRAL parts would
-  start the resumed stream at NEUTRAL instead of the measured pose;
+- a running skill (a `running` on `/brain/skill_status_update`, or the brain's own skill slot) or
+  a live Nav2 `/navigate_to_pose` goal masks everything: output stops at once, and the stream
+  resumes from wherever the skill left the body. Masking is silence rather than
+  `Animator.set_mask`, whose eased-to-NEUTRAL parts would start the resumed stream at NEUTRAL
+  instead of the measured pose. Skills that never move the body leave expression running:
+  `LEAVES_BODY` in `driver.py` (`search_memory`, `change_volume`, and `express` itself). It is an
+  allowlist because a skill's declared interfaces cannot prove it body-free —
+  `navigate_to_position` and `navigate_with_vision` drive the base through raw ROS clients without
+  declaring `Mobility` — so an unknown skill masks. Add a shipped skill there when it is body-free;
+- when a body skill ends, a small reaction plays (`expressive.on_skill_completed` /
+  `on_skill_failed`), unless the agent's reply carried an emote in the last 3 s; a reply emote
+  that arrives while the reaction is still being generated supersedes it;
 - a `/mars/arm/commands` or `/mars/head/set_position` command that is not ours (leader arm, UDP
   teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message;
   `/joystick` holds the base off for 2 s;
@@ -173,7 +180,9 @@ Parameters on brain_client_node:
 | `expressive.on_skill_failed` | `deflated` | |
 
 The agent emotes through tags in its replies. The system prompt asks for
-`<emote>2-8 words of body language</emote>` at the start of a reply and on emotional beats; the
+`<emote>a feeling plus one physical cue, 2-8 words</emote>` at the start of a reply and on
+emotional beats, invented fresh each time (its examples span proud, sheepish, startled and subtle,
+and it is told never to reuse one: with a single example the model copied it verbatim); the
 speech streamer cuts them out (never spoken, never shown in the chat) and plays each one when its
 sentence goes to TTS. Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`).
 

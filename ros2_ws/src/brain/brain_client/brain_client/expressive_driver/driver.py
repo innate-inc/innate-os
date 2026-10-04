@@ -71,7 +71,11 @@ NAV_LIVE = {GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING, GoalStatus.
 _ACTION_STATUS_QOS = QoSProfile(
     depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL, reliability=QoSReliabilityPolicy.RELIABLE
 )
-EXPRESS_SKILL = "express"
+# Skills that leave the body to this layer: express drives it through this driver, the rest never
+# move it. Declared interfaces cannot prove a skill body-free (navigate_to_position and
+# navigate_with_vision drive the base through raw ROS clients), so any other skill masks.
+LEAVES_BODY = frozenset({"express", "search_memory", "change_volume"})
+REPLY_EMOTE_S = 3.0  # a reaction would repeat what the agent's own emote just said
 
 PROMPT_TOPIC = "/brain/express/prompt"
 PLAY_TOPIC = "/brain/express/play"
@@ -143,6 +147,7 @@ class ExpressionDriver:
         self._running_skills: set[str] = set()
         self._navigating = False
         self._was_masked = False
+        self._reply_emote_at = -math.inf
         self._unmasked_at = 0.0
         self._gaze = False
         self._streaming = False
@@ -200,6 +205,11 @@ class ExpressionDriver:
             return made.clip
 
         self._animator.play(make)
+
+    def emote(self, prompt: str) -> None:
+        """An emote tag from the agent's reply, played as its sentence goes to TTS."""
+        self._reply_emote_at = time.monotonic()
+        self.express(prompt)
 
     def play(self, clip: Clip, request_id: str | None = None) -> None:
         with self._lock:
@@ -295,7 +305,7 @@ class ExpressionDriver:
 
     def _masked(self) -> bool:
         running = self._state.primitive_running
-        skill = running is not None and not _is_express(running.skill_id)
+        skill = running is not None and not _leaves_body(running.skill_id)
         return skill or self._navigating or bool(self._running_skills)
 
     def _drive_head(self, pose: ActuatorPose, on: bool) -> None:
@@ -388,8 +398,8 @@ class ExpressionDriver:
         self._generated_pub.publish(String(data=json.dumps(reply)))
 
     def _on_skill_status(self, msg: String) -> None:
-        """Mask while any skill but express runs (keyed by skill id: the app's mirror of a run and the
-        skills server's own report carry different run ids), and react when one ends.
+        """Mask while a skill that may move the body runs (keyed by skill id: the app's mirror of a run
+        and the skills server's own report carry different run ids), and react when it ends.
 
         Masking is silence, not ``Animator.set_mask``: the animator's mask scales the pose toward
         NEUTRAL after ``enter_from``, so a released mask would start the stream at NEUTRAL instead of
@@ -399,7 +409,7 @@ class ExpressionDriver:
             status, skill = str(payload["status"]), str(payload.get("skill_id") or payload.get("skill_name") or "")
         except (json.JSONDecodeError, TypeError, KeyError):
             return
-        if not skill or _is_express(skill):
+        if not skill or _leaves_body(skill):
             return
         if status == "running":
             self._running_skills.add(skill)
@@ -409,9 +419,9 @@ class ExpressionDriver:
         self._running_skills.discard(skill)
         if self._running_skills:
             return
-        reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}
-        if reaction.get(status):
-            self.express(reaction[status])
+        reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}.get(status)
+        if reaction and time.monotonic() - self._reply_emote_at > REPLY_EMOTE_S:
+            self.express(reaction)
 
     def _on_odom(self, msg: Odometry) -> None:
         position = msg.pose.pose.position
@@ -445,5 +455,5 @@ class ExpressionDriver:
             self._base_quiet_until = time.monotonic() + JOYSTICK_HOLD_S
 
 
-def _is_express(skill_id: str) -> bool:
-    return skill_id.rsplit("/", 1)[-1] == EXPRESS_SKILL
+def _leaves_body(skill_id: str) -> bool:
+    return skill_id.rsplit("/", 1)[-1] in LEAVES_BODY

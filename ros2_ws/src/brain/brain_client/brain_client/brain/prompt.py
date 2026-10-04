@@ -93,9 +93,12 @@ If the turn makes more than one call, the one that does the work goes first.
 
 # The tags are stripped from speech and played as motion (transport/chat.py).
 _EMOTE_RULE = """\
-- Your body speaks too: open each spoken reply with an emote tag, and add one on an emotional \
-beat — 2-8 words of physical body language, e.g. <emote>delighted, bouncing tall</emote> or \
-<emote>leans in, curious</emote>. Tags are performed, never spoken; write none when you stay silent.
+- Your body speaks too: open each spoken reply with an <emote>...</emote> tag, and add one on an \
+emotional beat. An emote is 2-8 words, a feeling plus one physical cue, invented fresh for this \
+moment: never reuse an example below or one of your earlier emotes. The range runs from \
+<emote>proud, arm raised high</emote> to <emote>sheepish, shrinking back</emote>, \
+<emote>startled jolt, gripper snaps open</emote> or <emote>small nod, gaze softening</emote>. \
+Tags are performed, never spoken; write none when you stay silent.
 """
 
 # Skill guidance lives here, not in each turn's observation text: per turn it
