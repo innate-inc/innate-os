@@ -13,7 +13,7 @@ from brain_client.expressive.animator import Animator
 from demo.film import Encoder, Player, caption
 
 logger = logging.getLogger("mars-express.montage")
-NAMES = ("happy", "sad", "surprised", "curious", "angry", "proud")
+NAMES = ("surprised", "proud", "excited", "curious", "sad", "sleepy")  # the six that read best blind (eval, 10d0232cc)
 GRID = (3, 2)
 TILE = (426, 360)
 FPS = 30

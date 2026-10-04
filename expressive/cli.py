@@ -126,9 +126,10 @@ def _eval(args: argparse.Namespace) -> None:
     arms = dict(ARMS) | dict(load_arm(spec) for spec in args.arm)
     if args.flow:
         arms["flow"] = flow(args.flow)
-    pair = tuple(args.pair.split(","))
-    if len(pair) != 2 or not set(pair) <= set(arms):
-        raise SystemExit(f"--pair wants two of {sorted(arms)}, got {args.pair!r}")
+    pairs = [tuple(spec.split(",")) for spec in args.pair or ["lively,direct"]]
+    for pair in pairs:
+        if len(pair) != 2 or not set(pair) <= set(arms):
+            raise SystemExit(f"--pair wants two of {sorted(arms)}, got {','.join(pair)!r}")
     cfg = Config(
         out=Path(args.out),
         judge=args.judge,
@@ -137,7 +138,7 @@ def _eval(args: argparse.Namespace) -> None:
         planner_model=args.planner_model,
         samples=args.samples,
         arms=arms,
-        pair=(pair[0], pair[1]),
+        pairs=tuple((pair[0], pair[1]) for pair in pairs),
         workers=args.workers,
         probes=not args.no_probes,
     )
@@ -158,7 +159,7 @@ def _show(args: argparse.Namespace) -> None:
 def _demo(args: argparse.Namespace) -> None:
     import logging
 
-    from demo.montage import render_montage
+    from demo.montage import NAMES, render_montage
     from demo.show import Show, Studio, render_show
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -166,7 +167,8 @@ def _demo(args: argparse.Namespace) -> None:
     studio = Studio(out / "cache", None if args.no_planner else args.planner_model)
     print(render_show(Show.load(here / "show.yaml"), out / "mars_explains.mp4", studio))
     print(render_show(Show.load(here / "idle_speech.yaml"), out / "idle_speech.mp4", studio))
-    print(render_montage(out / "presets_montage.mp4"))
+    names = tuple(args.montage.split(",")) if args.montage else NAMES
+    print(render_montage(out / "presets_montage.mp4", names))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -212,7 +214,9 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--samples", type=int, default=8, help="planner samples per physical probe")
     evaluate.add_argument("--arm", action="append", default=[], help="extra arm: name=module:function")
     evaluate.add_argument("--flow", metavar="CKPT", help="add the flow generator arm (uv run --extra flow)")
-    evaluate.add_argument("--pair", default="lively,direct", help="the two arms of the A/B, e.g. flow,lively")
+    evaluate.add_argument(
+        "--pair", action="append", help="two arms to A/B, e.g. flow,lively (repeatable; default lively,direct)"
+    )
     evaluate.add_argument("--out", default=str(OUT / "eval"))
     evaluate.add_argument("--workers", type=int, default=8)
     evaluate.add_argument("--no-probes", action="store_true")
@@ -231,6 +235,7 @@ def main(argv: list[str] | None = None) -> None:
     demo.add_argument("--out", default=str(OUT / "demo"))
     demo.add_argument("--planner-model", default="gpt-6-astra")
     demo.add_argument("--no-planner", action="store_true")
+    demo.add_argument("--montage", help="six comma-separated presets for the montage (default demo.montage.NAMES)")
     demo.set_defaults(run=_demo)
 
     commands.add_parser("basis", help="rebuild the safe table in basis.json").set_defaults(run=_basis)

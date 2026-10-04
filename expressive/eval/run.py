@@ -4,8 +4,8 @@ plan     the planner LLM writes recipes for the held-out and preset prompts (val
 probes   the physical probe suite: each probe prompt planned ``samples`` times and checked
 clips    every recipe through every arm (lively = procedural liveliness, direct = the bare plan, ...)
 media    a key-frame strip (kinematic) and a caption-free mp4 (physical) per clip
-judge    ``n`` blind readings per clip, descriptions graded, and ``n`` A/B rounds per prompt: each pair of
-         arms (lively vs direct by default) judged in both orders
+judge    ``n`` blind readings per clip, descriptions graded, and ``n`` A/B rounds per prompt and pair of
+         arms (``--pair``, lively vs direct by default), each round judged in both orders
 report   metrics.json, confusion.png, REPORT.md
 """
 
@@ -56,7 +56,7 @@ class Config:
     planner_model: str = "gpt-6-astra"
     samples: int = 8
     arms: Mapping[str, Generator] = field(default_factory=lambda: dict(ARMS))
-    pair: tuple[str, str] = ("lively", "direct")
+    pairs: tuple[tuple[str, str], ...] = (("lively", "direct"),)
     workers: int = 8
     render_workers: int = 4
     probes: bool = True
@@ -114,10 +114,14 @@ def write_recipe(prompt: str, chat: Chat, model: str) -> Planned:
     )
 
 
+def _stale(planned: Planned | None, model: str, prompt: str) -> bool:
+    return planned is None or (planned["model"], planned["prompt"]) != (model, prompt)
+
+
 def plan(cfg: Config, todo: list[Item]) -> dict[str, Planned]:
     path = cfg.out / "plans.json"
     plans: dict[str, Planned] = _read(path) or {}
-    missing = [i for i in todo if i.recipe is None and plans.get(i.id, {}).get("model") != cfg.planner_model]
+    missing = [i for i in todo if i.recipe is None and _stale(plans.get(i.id), cfg.planner_model, i.prompt)]
     chat = openai_chat(cfg.planner_model)
     for item, planned in _parallel(
         missing, lambda i: write_recipe(i.prompt, chat, cfg.planner_model), cfg.workers, "plan"
@@ -237,22 +241,28 @@ def judge_all(cfg: Config, playable: list[tuple[Item, str]]) -> None:
             scores.append(judge.grade(item.prompt, reading["description"]))
             _write(path, scores)
 
-    a, b = cfg.pair
-    paired = sorted(
-        {item for item, arm in playable if arm == a} & {item for item, arm in playable if arm == b}, key=lambda i: i.id
-    )
-
-    def pairs(item: Item) -> None:
-        path = ab_path(root, item, cfg.pair)
+    def pairs(job: tuple[Item, tuple[str, str]]) -> None:
+        item, (a, b) = job
+        path = ab_path(root, item, (a, b))
         rounds: list[list[Verdict]] = _read(path) or []
         shown = ((a, media_of(cfg, item, a)), (b, media_of(cfg, item, b)))
         while len(rounds) < cfg.n:
             rounds.append([judge.pair(*shown), judge.pair(*shown[::-1])])
             _write(path, rounds)
 
+    arms_of: dict[str, set[str]] = {}
+    for item, arm in playable:
+        arms_of.setdefault(item.id, set()).add(arm)
+    matches = [
+        (item, pair)
+        for item in {i.id: i for i, _ in playable}.values()
+        for pair in cfg.pairs
+        if set(pair) <= arms_of[item.id]
+    ]
+
     _parallel(playable, readings, cfg.workers, "read")
     _parallel(playable, grades, cfg.workers, "grade")
-    _parallel(paired, pairs, cfg.workers, "pair")
+    _parallel(matches, pairs, cfg.workers, "pair")
 
 
 def core_version() -> str:

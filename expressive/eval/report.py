@@ -406,10 +406,12 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
         "labels (`webapp/js/expression/judge.js`), names the motion in its own words, and rates alive / readable "
         "1-5; a text grader then scores each description against the prompt (2 = same feeling or action, "
         "1 = related, 0 = different). `top-1`/`top-3`/`p(target)` count only prompts that have a fitting label; "
-        "`described`/`named` count every clip. Arms: **lively** = the plan through procedural liveliness "
-        "(what ships), **direct** = the same plan played as-is (control).",
+        "`described`/`named` count every clip. Arms: **lively** = procedural liveliness on the expanded recipe "
+        "(what ships), **direct** = the recipe played as written (control), **flow** = the ml workstream's "
+        "flow-matching generator on the serving plan.",
         "",
-        "Regenerate: `cd expressive && uv run mars-express eval --judge gemini --n 3` (cached under `out/eval/`).",
+        "Regenerate (per judge, cached under `out/eval/`): `cd expressive && uv run --extra flow mars-express eval "
+        "--judge gemini --n 3 --flow out/models/generator.pt --pair flow,lively --pair lively,direct`.",
         "",
     ]
     core = _load(out / "core.json")

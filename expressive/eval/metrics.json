@@ -2,253 +2,415 @@
  "gemini-gemini-3.1-pro-preview": {
   "recognition": {
    "hand-written preset recipes | lively": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.0,
-    "top3": 0.38461538461538464,
-    "p_target": 0.11025641025641028,
-    "described": 0.375,
-    "named": 0.10416666666666666,
-    "alive": 2.625,
-    "readable": 3.833333333333333
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.07142857142857142,
+    "top3": 0.35714285714285715,
+    "p_target": 0.11190476190476192,
+    "described": 0.4509803921568627,
+    "named": 0.11764705882352941,
+    "alive": 2.470588235294118,
+    "readable": 3.7058823529411766
    },
    "hand-written preset recipes | direct": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.15384615384615385,
-    "top3": 0.3076923076923077,
-    "p_target": 0.11794871794871796,
-    "described": 0.47916666666666663,
-    "named": 0.125,
-    "alive": 2.5,
-    "readable": 3.7083333333333335
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.14285714285714285,
+    "top3": 0.35714285714285715,
+    "p_target": 0.10476190476190475,
+    "described": 0.3137254901960784,
+    "named": 0.0392156862745098,
+    "alive": 2.568627450980392,
+    "readable": 3.6470588235294112
+   },
+   "hand-written preset recipes | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.2857142857142857,
+    "top3": 0.5714285714285714,
+    "p_target": 0.17261904761904764,
+    "described": 0.37254901960784315,
+    "named": 0.2156862745098039,
+    "alive": 2.490196078431372,
+    "readable": 4.0588235294117645
    },
    "planner on the preset prompts | lively": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.15384615384615385,
-    "top3": 0.5384615384615384,
-    "p_target": 0.14487179487179486,
-    "described": 0.3333333333333333,
-    "named": 0.14583333333333331,
-    "alive": 2.395833333333333,
-    "readable": 3.9375
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.07142857142857142,
+    "top3": 0.35714285714285715,
+    "p_target": 0.10833333333333335,
+    "described": 0.43137254901960775,
+    "named": 0.058823529411764705,
+    "alive": 2.431372549019608,
+    "readable": 3.7254901960784315
    },
    "planner on the preset prompts | direct": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.07692307692307693,
-    "top3": 0.23076923076923078,
-    "p_target": 0.10512820512820514,
-    "described": 0.41666666666666663,
-    "named": 0.10416666666666666,
-    "alive": 2.3125,
-    "readable": 3.6666666666666665
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.07142857142857142,
+    "top3": 0.14285714285714285,
+    "p_target": 0.07857142857142858,
+    "described": 0.2745098039215686,
+    "named": 0.058823529411764705,
+    "alive": 2.372549019607843,
+    "readable": 3.7647058823529407
+   },
+   "planner on the preset prompts | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.2857142857142857,
+    "top3": 0.5,
+    "p_target": 0.16776520036299372,
+    "described": 0.4509803921568627,
+    "named": 0.17647058823529413,
+    "alive": 2.4117647058823533,
+    "readable": 3.764705882352941
    },
    "planner on 30 held-out prompts | lively": {
     "clips": 30,
     "labelled": 27,
-    "top1": 0.1111111111111111,
-    "top3": 0.25925925925925924,
-    "p_target": 0.11296296296296296,
-    "described": 0.4222222222222223,
-    "named": 0.02222222222222222,
-    "alive": 2.6111111111111116,
-    "readable": 3.9111111111111105
+    "top1": 0.18518518518518517,
+    "top3": 0.4444444444444444,
+    "p_target": 0.1759259259259259,
+    "described": 0.45555555555555555,
+    "named": 0.03333333333333333,
+    "alive": 2.6777777777777776,
+    "readable": 3.9555555555555553
    },
    "planner on 30 held-out prompts | direct": {
     "clips": 30,
     "labelled": 27,
+    "top1": 0.18518518518518517,
+    "top3": 0.4444444444444444,
+    "p_target": 0.1469135802469136,
+    "described": 0.3888888888888888,
+    "named": 0.04444444444444444,
+    "alive": 2.5777777777777775,
+    "readable": 3.8444444444444446
+   },
+   "planner on 30 held-out prompts | flow": {
+    "clips": 30,
+    "labelled": 27,
     "top1": 0.1111111111111111,
-    "top3": 0.4074074074074074,
-    "p_target": 0.15555555555555556,
-    "described": 0.36666666666666675,
-    "named": 0.02222222222222222,
-    "alive": 2.6111111111111116,
-    "readable": 4.0
+    "top3": 0.48148148148148145,
+    "p_target": 0.1654320987654321,
+    "described": 0.43333333333333335,
+    "named": 0.03333333333333333,
+    "alive": 2.6333333333333337,
+    "readable": 3.922222222222222
    }
   },
   "ab": {
-   "hand-written preset recipes": {
-    "verdicts": 48,
-    "win": 0.3125,
-    "clear_win": 0.3125,
-    "clear_loss": 0.6666666666666666,
-    "first_shown_wins": 0.3125
+   "flow-lively": {
+    "hand-written preset recipes": {
+     "rounds": 51,
+     "a_wins": 7,
+     "b_wins": 1,
+     "unanimous": 8,
+     "biased_first": 2,
+     "biased_second": 41,
+     "a_share": 0.875
+    },
+    "planner on the preset prompts": {
+     "rounds": 51,
+     "a_wins": 7,
+     "b_wins": 4,
+     "unanimous": 11,
+     "biased_first": 0,
+     "biased_second": 40,
+     "a_share": 0.6363636363636364
+    },
+    "planner on 30 held-out prompts": {
+     "rounds": 90,
+     "a_wins": 20,
+     "b_wins": 7,
+     "unanimous": 27,
+     "biased_first": 5,
+     "biased_second": 58,
+     "a_share": 0.7407407407407407
+    },
+    "all": {
+     "rounds": 192,
+     "a_wins": 34,
+     "b_wins": 12,
+     "unanimous": 46,
+     "biased_first": 7,
+     "biased_second": 139,
+     "a_share": 0.7391304347826086
+    }
    },
-   "planner on the preset prompts": {
-    "verdicts": 48,
-    "win": 0.4791666666666667,
-    "clear_win": 0.4791666666666667,
-    "clear_loss": 0.5208333333333334,
-    "first_shown_wins": 0.125
-   },
-   "planner on 30 held-out prompts": {
-    "verdicts": 90,
-    "win": 0.5222222222222223,
-    "clear_win": 0.5111111111111111,
-    "clear_loss": 0.4777777777777778,
-    "first_shown_wins": 0.24444444444444444
-   },
-   "all": {
-    "verdicts": 186,
-    "win": 0.45698924731182794,
-    "clear_win": 0.45161290322580644,
-    "clear_loss": 0.5376344086021505,
-    "first_shown_wins": 0.23118279569892472
+   "lively-direct": {
+    "hand-written preset recipes": {
+     "rounds": 51,
+     "a_wins": 12,
+     "b_wins": 2,
+     "unanimous": 14,
+     "biased_first": 1,
+     "biased_second": 36,
+     "a_share": 0.8571428571428571
+    },
+    "planner on the preset prompts": {
+     "rounds": 51,
+     "a_wins": 7,
+     "b_wins": 5,
+     "unanimous": 12,
+     "biased_first": 4,
+     "biased_second": 35,
+     "a_share": 0.5833333333333334
+    },
+    "planner on 30 held-out prompts": {
+     "rounds": 90,
+     "a_wins": 15,
+     "b_wins": 25,
+     "unanimous": 40,
+     "biased_first": 8,
+     "biased_second": 42,
+     "a_share": 0.375
+    },
+    "all": {
+     "rounds": 192,
+     "a_wins": 34,
+     "b_wins": 32,
+     "unanimous": 66,
+     "biased_first": 13,
+     "biased_second": 113,
+     "a_share": 0.5151515151515151
+    }
    }
   }
  },
  "openai-gpt-5.5": {
   "recognition": {
    "hand-written preset recipes | lively": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.23076923076923078,
-    "top3": 0.38461538461538464,
-    "p_target": 0.12000000000000002,
-    "described": 0.5833333333333333,
-    "named": 0.20833333333333334,
-    "alive": 2.895833333333333,
-    "readable": 3.4375
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.42857142857142855,
+    "top3": 0.6428571428571429,
+    "p_target": 0.1871969696969697,
+    "described": 0.7254901960784315,
+    "named": 0.2156862745098039,
+    "alive": 2.9215686274509802,
+    "readable": 3.176470588235294
    },
    "hand-written preset recipes | direct": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.15384615384615385,
-    "top3": 0.23076923076923078,
-    "p_target": 0.10595242944757509,
-    "described": 0.5833333333333333,
-    "named": 0.16666666666666666,
-    "alive": 2.8125,
-    "readable": 3.3541666666666665
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.14285714285714285,
+    "top3": 0.42857142857142855,
+    "p_target": 0.1437812352663838,
+    "described": 0.5686274509803921,
+    "named": 0.1372549019607843,
+    "alive": 2.901960784313726,
+    "readable": 3.1764705882352944
+   },
+   "hand-written preset recipes | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.21428571428571427,
+    "top3": 0.5,
+    "p_target": 0.14371260865016036,
+    "described": 0.588235294117647,
+    "named": 0.1372549019607843,
+    "alive": 2.843137254901961,
+    "readable": 3.2549019607843133
    },
    "planner on the preset prompts | lively": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.15384615384615385,
-    "top3": 0.38461538461538464,
-    "p_target": 0.0972948833344873,
-    "described": 0.49999999999999994,
-    "named": 0.18749999999999997,
-    "alive": 2.9583333333333335,
-    "readable": 3.5416666666666665
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.21428571428571427,
+    "top3": 0.42857142857142855,
+    "p_target": 0.13405844155844157,
+    "described": 0.5490196078431372,
+    "named": 0.17647058823529413,
+    "alive": 2.901960784313726,
+    "readable": 3.5882352941176467
    },
    "planner on the preset prompts | direct": {
-    "clips": 16,
-    "labelled": 13,
-    "top1": 0.07692307692307693,
-    "top3": 0.15384615384615385,
-    "p_target": 0.08662004662004662,
-    "described": 0.5,
-    "named": 0.0625,
-    "alive": 2.9583333333333335,
-    "readable": 3.4583333333333335
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.21428571428571427,
+    "top3": 0.5,
+    "p_target": 0.13209985126874316,
+    "described": 0.5294117647058822,
+    "named": 0.17647058823529413,
+    "alive": 2.9215686274509802,
+    "readable": 3.6274509803921573
+   },
+   "planner on the preset prompts | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.14285714285714285,
+    "top3": 0.35714285714285715,
+    "p_target": 0.10997157071783938,
+    "described": 0.5098039215686274,
+    "named": 0.0784313725490196,
+    "alive": 2.980392156862745,
+    "readable": 3.450980392156863
    },
    "planner on 30 held-out prompts | lively": {
     "clips": 30,
     "labelled": 27,
-    "top1": 0.25925925925925924,
+    "top1": 0.2962962962962963,
     "top3": 0.5185185185185185,
-    "p_target": 0.17393139164662733,
-    "described": 0.7666666666666667,
+    "p_target": 0.17689878987898786,
+    "described": 0.7222222222222222,
     "named": 0.02222222222222222,
-    "alive": 3.0444444444444447,
-    "readable": 3.466666666666667
+    "alive": 3.0777777777777775,
+    "readable": 3.4666666666666663
    },
    "planner on 30 held-out prompts | direct": {
     "clips": 30,
     "labelled": 27,
-    "top1": 0.2962962962962963,
-    "top3": 0.5925925925925926,
-    "p_target": 0.1791181340356258,
-    "described": 0.611111111111111,
-    "named": 0.04444444444444444,
-    "alive": 3.0666666666666673,
-    "readable": 3.4888888888888885
+    "top1": 0.2222222222222222,
+    "top3": 0.48148148148148145,
+    "p_target": 0.17595228658668335,
+    "described": 0.7111111111111111,
+    "named": 0.02222222222222222,
+    "alive": 3.0444444444444443,
+    "readable": 3.4444444444444446
+   },
+   "planner on 30 held-out prompts | flow": {
+    "clips": 30,
+    "labelled": 27,
+    "top1": 0.2222222222222222,
+    "top3": 0.48148148148148145,
+    "p_target": 0.17103814734115305,
+    "described": 0.6777777777777777,
+    "named": 0.05555555555555555,
+    "alive": 3.0,
+    "readable": 3.4444444444444438
    }
   },
   "ab": {
-   "hand-written preset recipes": {
-    "verdicts": 48,
-    "win": 0.625,
-    "clear_win": 0.0,
-    "clear_loss": 0.041666666666666664,
-    "first_shown_wins": 0.4583333333333333
+   "flow-lively": {
+    "hand-written preset recipes": {
+     "rounds": 51,
+     "a_wins": 17,
+     "b_wins": 15,
+     "unanimous": 32,
+     "biased_first": 3,
+     "biased_second": 16,
+     "a_share": 0.53125
+    },
+    "planner on the preset prompts": {
+     "rounds": 51,
+     "a_wins": 26,
+     "b_wins": 4,
+     "unanimous": 30,
+     "biased_first": 5,
+     "biased_second": 16,
+     "a_share": 0.8666666666666667
+    },
+    "planner on 30 held-out prompts": {
+     "rounds": 90,
+     "a_wins": 30,
+     "b_wins": 18,
+     "unanimous": 48,
+     "biased_first": 4,
+     "biased_second": 38,
+     "a_share": 0.625
+    },
+    "all": {
+     "rounds": 192,
+     "a_wins": 73,
+     "b_wins": 37,
+     "unanimous": 110,
+     "biased_first": 12,
+     "biased_second": 70,
+     "a_share": 0.6636363636363637
+    }
    },
-   "planner on the preset prompts": {
-    "verdicts": 48,
-    "win": 0.5,
-    "clear_win": 0.10416666666666667,
-    "clear_loss": 0.0,
-    "first_shown_wins": 0.4791666666666667
-   },
-   "planner on 30 held-out prompts": {
-    "verdicts": 90,
-    "win": 0.5555555555555556,
-    "clear_win": 0.03333333333333333,
-    "clear_loss": 0.08888888888888889,
-    "first_shown_wins": 0.6333333333333333
-   },
-   "all": {
-    "verdicts": 186,
-    "win": 0.5591397849462365,
-    "clear_win": 0.043010752688172046,
-    "clear_loss": 0.053763440860215055,
-    "first_shown_wins": 0.5483870967741935
+   "lively-direct": {
+    "hand-written preset recipes": {
+     "rounds": 51,
+     "a_wins": 15,
+     "b_wins": 18,
+     "unanimous": 33,
+     "biased_first": 4,
+     "biased_second": 14,
+     "a_share": 0.45454545454545453
+    },
+    "planner on the preset prompts": {
+     "rounds": 51,
+     "a_wins": 17,
+     "b_wins": 14,
+     "unanimous": 31,
+     "biased_first": 7,
+     "biased_second": 13,
+     "a_share": 0.5483870967741935
+    },
+    "planner on 30 held-out prompts": {
+     "rounds": 90,
+     "a_wins": 20,
+     "b_wins": 29,
+     "unanimous": 49,
+     "biased_first": 13,
+     "biased_second": 28,
+     "a_share": 0.40816326530612246
+    },
+    "all": {
+     "rounds": 192,
+     "a_wins": 52,
+     "b_wins": 61,
+     "unanimous": 113,
+     "biased_first": 24,
+     "biased_second": 55,
+     "a_share": 0.46017699115044247
+    }
    }
   }
  },
  "body": {
   "gemini-gemini-3.1-pro-preview | stays folded": {
-   "clips": 13,
-   "p_target": 0.06833333333333333,
-   "described": 0.4358974358974359,
-   "alive": 2.6410256410256414,
-   "gesture_words": 0.10256410256410256
+   "clips": 14,
+   "p_target": 0.12575757575757576,
+   "described": 0.5,
+   "alive": 2.5952380952380953,
+   "gesture_words": 0.09523809523809523
   },
   "gemini-gemini-3.1-pro-preview | unfolds": {
-   "clips": 49,
-   "p_target": 0.1321705426356589,
-   "described": 0.37414965986394555,
-   "alive": 2.5374149659863945,
-   "gesture_words": 0.4965986394557823
+   "clips": 50,
+   "p_target": 0.14659090909090908,
+   "described": 0.4333333333333333,
+   "alive": 2.5466666666666664,
+   "gesture_words": 0.5666666666666667
   },
   "openai-gpt-5.5 | stays folded": {
-   "clips": 13,
-   "p_target": 0.09598694869486948,
-   "described": 0.5641025641025641,
-   "alive": 2.7435897435897436,
-   "gesture_words": 0.15384615384615385
+   "clips": 14,
+   "p_target": 0.17058402203856748,
+   "described": 0.7619047619047619,
+   "alive": 2.857142857142857,
+   "gesture_words": 0.09523809523809523
   },
   "openai-gpt-5.5 | unfolds": {
-   "clips": 49,
-   "p_target": 0.15258399001996695,
-   "described": 0.673469387755102,
-   "alive": 3.047619047619048,
-   "gesture_words": 0.9251700680272109
+   "clips": 50,
+   "p_target": 0.1681231554973679,
+   "described": 0.6533333333333334,
+   "alive": 3.0266666666666664,
+   "gesture_words": 0.9266666666666666
   }
  },
  "planner": {
   "model": "gpt-6-astra",
-  "writes": 190,
+  "writes": 191,
   "first_pass_valid": 1.0,
   "repaired_once": 0.0,
   "repaired_twice": 0.0,
   "failed": 0.0,
   "call_s": {
-   "median": 4.928987312479876,
-   "p90": 8.053267237223917,
+   "median": 4.9284459999762475,
+   "p90": 8.043028958025388,
    "max": 11.23644787503872
   },
   "write_s": {
-   "median": 4.928987312479876,
-   "p90": 8.053267237223917
+   "median": 4.9284459999762475,
+   "p90": 8.043028958025388
   },
   "probes": {
-   "overall": 0.9652777777777778,
+   "overall": 0.9861111111111112,
    "ood_core": 1.0,
-   "skill": 0.9375,
+   "skill": 0.975,
    "teacher": 1.0,
    "per": {
     "sneezing. You build up and then release a sudden sharp sneeze.": 1.0,
@@ -256,7 +418,7 @@
     "startled. A sudden loud noise just made you jump.": 1.0,
     "bowing deeply. You thank the audience for coming.": 1.0,
     "nodding yes. You agree with everything enthusiastically.": 1.0,
-    "shaking your head no. You refuse firmly.": 0.625,
+    "shaking your head no. You refuse firmly.": 1.0,
     "looking up at the stars. The night sky is beautiful.": 1.0,
     "cowering in fear. Something huge looms over you.": 1.0,
     "heartbroken. You have just received news that devastated you.": 1.0,
