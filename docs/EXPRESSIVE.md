@@ -232,7 +232,7 @@ and restart the brain:
 brain_client_node:
   ros__parameters:
     expressive:
-      server_url: "http://innate52.local:8000"   # the sim container reaches the host as host.docker.internal
+      server_url: "http://192.168.0.156:8000"   # use the IP: .local names do not resolve inside the sim container
 ```
 
 ### Try it in the sim
@@ -253,8 +253,8 @@ turns.
       voice by the ALSA buffer; set the Animator's `speech_latency_s` if it does
 - [ ] the arm streaming at TELEOP gains for minutes while an agent runs: servo temperature, and
       whether the rest fold should be skipped when expression owns the idle arm
-- [ ] `basis.json` `max_speed` (6 rad/s per joint) against the pass-through's soft gains; the arm
-      SDK's own stream cap is 1.8 rad/s
+- [ ] `basis.json` `max_speed` (the per-joint TELEOP profile speeds: j1 6.0, j2 3.6, j3 4.8, j4 2.4,
+      j5 2.4, j6 1.4 rad/s) against the pass-through's soft gains; the arm SDK's own stream cap is 1.8 rad/s
 - [ ] the head servo at up to 30 commands/s during speech
 - [ ] Mad mode while an agent emotes: the brace fold completes (the arm hold reads `/robot/info`,
       up to 1 s behind the mode switch)
