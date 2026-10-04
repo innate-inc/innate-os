@@ -432,6 +432,8 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
             continue
         tag = root.name
         judge, _, camera = tag.partition("@")
+        lens = "-".join(part for part in camera.split("-") if part and part != "audio")
+        strips = f"strips@{lens}" if lens else "strips"
         all_scored[tag] = scored
         rec_lines, rec = recognition_table(scored, arms)
         ab = {f"{a}-{b}": ab_table(root, catalog, (a, b)) for a, b in pairings(root)}
@@ -439,11 +441,11 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
             scored,
             "lively",
             out / f"confusion.{tag}.png",
-            f"{judge}{', camera ' + camera if camera else ''}: mean probability per label (lively; orange = target)",
+            f"{judge}{', view ' + camera if camera else ''}: mean probability per label (lively; orange = target)",
         )
         metrics[tag] = {"recognition": rec, "ab": {pairing: numbers for pairing, (_, numbers) in ab.items()}}
         lines += [
-            f"## Judge `{judge}`" + (f" · camera `{camera}`" if camera else ""),
+            f"## Judge `{judge}`" + (f" · view `{camera}`" if camera else ""),
             "",
             *rec_lines,
             "",
@@ -466,10 +468,10 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
         ranked = sorted(lively, key=lambda s: (_mean(s.grades) if s.grades else 0.0) + s.p_target)
         lines += ["### Clearest reads", ""]
         for s in ranked[::-1][:3]:
-            lines += _strip_block(s, f"strips{'@' + camera if camera else ''}")
+            lines += _strip_block(s, strips)
         lines += ["### Worst reads", ""]
         for s in ranked[:4]:
-            lines += _strip_block(s, f"strips{'@' + camera if camera else ''}")
+            lines += _strip_block(s, strips)
     if all_scored:
         body_lines, metrics["body"] = body_section(out, catalog, all_scored)
         lines += ["## What the body does", "", *body_lines, ""]

@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import subprocess
+import tempfile
+import wave
 from pathlib import Path
 
 import _core  # noqa: F401
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageDraw, ImageFont
-from render.clip import render_clip
+from render.clip import FFMPEG, render_clip
 from render.stage import VIEWS, Stage, View
 
 from brain_client.expressive.basis import Basis
@@ -23,6 +26,7 @@ COLUMNS, ROWS = 4, 2
 FOVY = 26.0  # the stock three-quarter view widened so a full advance or reach stays in frame
 LOOK_Z = 0.25
 VIDEO_SIZE = (640, 480)
+LEAD_S = 0.5  # the video holds the first pose this long before the clip starts
 DEFAULT_CAMERA = "three-quarter"
 
 
@@ -95,7 +99,28 @@ class Filmstrip:
         return [i / clip.fps for i in picks]
 
 
-def render_blind_video(clip: Clip, mp4: Path, camera: str = DEFAULT_CAMERA) -> Path:
-    """The clip played physically from ``camera``, with no name or recipe in the caption."""
+def render_blind_video(
+    clip: Clip, mp4: Path, camera: str = DEFAULT_CAMERA, sound: NDArray[np.int16] | None = None, rate: int = 16_000
+) -> Path:
+    """The clip played physically from ``camera``, with no name or recipe in the caption; ``sound`` (mono
+    PCM) starts with the clip, as the robot's vocalization starts with the emote."""
     blind = dataclasses.replace(clip, name="", recipe="", prompt="", idea="")
-    return render_clip(blind, mp4, camera=camera, size=VIDEO_SIZE)
+    if sound is None:
+        return render_clip(blind, mp4, camera=camera, size=VIDEO_SIZE, lead_s=LEAD_S)
+    with tempfile.TemporaryDirectory() as scratch:
+        silent, wav = Path(scratch) / "silent.mp4", Path(scratch) / "sound.wav"
+        render_clip(blind, silent, camera=camera, size=VIDEO_SIZE, lead_s=LEAD_S)
+        with wave.open(str(wav), "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(rate)
+            f.writeframes(sound.astype("<i2").tobytes())
+        delay_ms = round(LEAD_S * 1000)
+        mp4.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [FFMPEG, "-y", "-loglevel", "error", "-i", str(silent), "-i", str(wav), "-filter_complex"]
+            + [f"[1]adelay={delay_ms}:all=1,apad[a]", "-map", "0:v", "-map", "[a]", "-c:v", "copy"]
+            + ["-c:a", "aac", "-b:a", "128k", "-shortest", str(mp4)],
+            check=True,
+        )
+    return mp4

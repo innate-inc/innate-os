@@ -8,6 +8,7 @@ uv run mars-express presets [--out out/presets]  # every built-in preset as mp4 
 uv run mars-express basis                        # rebuild basis.json's safe table, report collisions
 uv run mars-express golden                       # rewrite fixtures/golden.json (port checks)
 uv run mars-express eval [--judge gemini|openai] [--n 3]   # blind recognition eval -> out/eval/REPORT.md
+uv run mars-express interaction chat.mp4         # Gemini rates a recorded conversation, reply by reply
 uv run mars-express show demo/show.yaml out.mp4  # MARS speaks and emotes through one offline Animator
 uv run mars-express demo [--out out/demo]        # mars_explains.mp4, idle_speech.mp4, presets_montage.mp4
 """
@@ -148,9 +149,25 @@ def _eval(args: argparse.Namespace) -> None:
         workers=args.workers,
         probes=not args.no_probes,
         camera=args.camera,
+        audio=args.audio,
         only=tuple(args.only),
     )
     print(run(cfg, report_only=args.report_only, snapshot=Path(args.snapshot) if args.snapshot else None))
+
+
+def _interaction(args: argparse.Namespace) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from eval.interaction import rate, summary
+    from eval.llm import Proxy, load_env
+
+    load_env()
+    proxy = Proxy()
+    with ThreadPoolExecutor(args.n) as pool:
+        runs = list(pool.map(lambda _: rate(Path(args.video), args.model, proxy), range(args.n)))
+    out = Path(args.out or Path(args.video).with_suffix(".ratings.json"))
+    out.write_text(json.dumps(runs, indent=1))
+    print(json.dumps(summary(runs)), out)
 
 
 def _show(args: argparse.Namespace) -> None:
@@ -230,12 +247,20 @@ def main(argv: list[str] | None = None) -> None:
         "--camera", choices=("three-quarter", "human"), default="three-quarter", help="human: eye at head height"
     )
     evaluate.add_argument("--only", action="append", default=[], help="item ids to run (fnmatch), e.g. 'preset-*'")
+    evaluate.add_argument("--audio", action="store_true", help="mux the robot's vocalization into the videos (gemini)")
     evaluate.add_argument("--out", default=str(OUT / "eval"))
     evaluate.add_argument("--workers", type=int, default=8)
     evaluate.add_argument("--no-probes", action="store_true")
     evaluate.add_argument("--report-only", action="store_true", help="rebuild REPORT.md from the cache")
     evaluate.add_argument("--snapshot", help="also write a committable REPORT.md + JPEG figures here")
     evaluate.set_defaults(run=_eval)
+
+    interaction = commands.add_parser("interaction", help="rate a recorded conversation (mp4 with the voice)")
+    interaction.add_argument("video")
+    interaction.add_argument("--n", type=int, default=3, help="independent viewings")
+    interaction.add_argument("--model", default="gemini-3.1-pro-preview")
+    interaction.add_argument("--out", help="ratings json (default: next to the video)")
+    interaction.set_defaults(run=_interaction)
 
     show = commands.add_parser("show", help="render a show.yaml: speech, emotes, idle, subtitles")
     show.add_argument("show")

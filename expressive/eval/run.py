@@ -26,8 +26,9 @@ from typing import Any, TypedDict, TypeVar
 import _core  # noqa: F401
 import numpy as np
 
-from brain_client.expressive import planner, probes
+from brain_client.expressive import planner, presets, probes
 from brain_client.expressive.motion import Clip
+from brain_client.expressive_driver import vocal
 from eval.arms import ARMS, Generator, make_clip
 from eval.judge import Judge, JudgeKind, Media, Reading, Verdict
 from eval.llm import Chat, load_env, openai_chat
@@ -63,12 +64,14 @@ class Config:
     render_workers: int = 4
     probes: bool = True
     camera: str = DEFAULT_CAMERA
+    audio: bool = False  # the robot's vocalization (expressive_driver.vocal) muxed into the videos
     only: tuple[str, ...] = ()  # item-id patterns (fnmatch); empty = every item
 
     @property
     def view(self) -> str:
-        """Suffix of the media and judgment directories: the default camera has none, so its cache stands."""
-        return "" if self.camera == DEFAULT_CAMERA else f"@{self.camera}"
+        """Suffix of the media and judgment directories: the default view has none, so its cache stands."""
+        parts = [part for part, on in ((self.camera, self.camera != DEFAULT_CAMERA), ("audio", self.audio)) if on]
+        return f"@{'-'.join(parts)}" if parts else ""
 
 
 def _read(path: Path) -> Any:
@@ -168,13 +171,21 @@ def clip_path(cfg: Config, item: Item, arm: str) -> Path:
 
 
 def media_of(cfg: Config, item: Item, arm: str) -> Media:
-    strips, videos = cfg.out / f"strips{cfg.view}", cfg.out / f"videos{cfg.view}"
+    """Strips depend only on the camera (they carry no sound); videos on the whole view."""
+    camera = "" if cfg.camera == DEFAULT_CAMERA else f"@{cfg.camera}"
+    strips, videos = cfg.out / f"strips{camera}", cfg.out / f"videos{cfg.view}"
     return Media(strips / f"{item.id}.{arm}.png", videos / f"{item.id}.{arm}.mp4")
 
 
-def _render_video(job: tuple[str, str, str]) -> str:
-    clip_json, mp4, camera = job
-    return str(render_blind_video(Clip.load(Path(clip_json)), Path(mp4), camera))
+def sound_of(item: Item) -> vocal.Sound | None:
+    """The sound the driver would play with this prompt's emote (its keywords, else its stand-in preset's)."""
+    return vocal.sound_for(item.prompt, presets.match(item.prompt))
+
+
+def _render_video(job: tuple[str, str, str, str]) -> str:
+    clip_json, mp4, camera, sound = job
+    pcm = vocal.synthesize(vocal.Sound(sound)) if sound else None
+    return str(render_blind_video(Clip.load(Path(clip_json)), Path(mp4), camera, pcm, vocal.RATE))
 
 
 def _changed(path: Path, clip: Clip) -> bool:
@@ -190,7 +201,7 @@ def build_media(cfg: Config, todo: list[Item], plans: Mapping[str, Planned]) -> 
     """Clips, strips and videos for every playable (item, arm); returns the playable pairs."""
     playable: list[tuple[Item, str]] = []
     filmstrip = Filmstrip(cfg.camera)
-    videos: list[tuple[str, str, str]] = []
+    videos: list[tuple[str, str, str, str]] = []
     for item in todo:
         recipe = recipe_of(item, plans)
         if recipe is None:
@@ -206,7 +217,8 @@ def build_media(cfg: Config, todo: list[Item], plans: Mapping[str, Planned]) -> 
             if not media.strip.exists():
                 filmstrip.render(clip, media.strip)
             if not media.video.exists():
-                videos.append((str(path), str(media.video), cfg.camera))
+                sound = sound_of(item) if cfg.audio else None
+                videos.append((str(path), str(media.video), cfg.camera, sound.value if sound else ""))
             playable.append((item, arm))
     logger.info("media: %d strips ready, rendering %d videos", len(playable), len(videos))
     with ProcessPoolExecutor(cfg.render_workers) as pool:
@@ -239,7 +251,7 @@ def judge_tag(judge: Judge) -> str:
 
 
 def judge_all(cfg: Config, playable: list[tuple[Item, str]]) -> None:
-    judge = Judge(cfg.judge, cfg.judge_model)
+    judge = Judge(cfg.judge, cfg.judge_model, audio=cfg.audio)
     root = cfg.out / "judged" / f"{judge_tag(judge)}{cfg.view}"
 
     def readings(job: tuple[Item, str]) -> None:

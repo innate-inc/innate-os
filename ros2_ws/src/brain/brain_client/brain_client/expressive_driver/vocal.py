@@ -58,13 +58,12 @@ PRESET_SOUNDS: dict[str, Sound] = {
     "sad": Sound.SIGH,
     "bored": Sound.SIGH,
     "relieved": Sound.SIGH,
-    "sleepy": Sound.YAWN,
+    "sleepy": Sound.SIGH,  # the yawn tone was heard as a howl by blind judges
     "angry": Sound.GRUMBLE,
     "disagreeing": Sound.GRUMBLE,
     "thinking": Sound.HUM,
     "curious": Sound.HUM,
     "confused": Sound.HUM,
-    "agreeing": Sound.HUM,
     "affectionate": Sound.HUM,
 }
 

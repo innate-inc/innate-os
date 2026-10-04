@@ -301,6 +301,9 @@ uv run --extra flow mars-express eval --judge gemini --n 3 \
     --flow out/models/generator.pt --pair flow,lively --pair lively,direct
 uv run --extra flow mars-express eval --judge gemini --n 3 --camera human --only 'preset-*' \
     --arms lively,flow --flow out/models/generator.pt         # the head-height camera, cached apart
+uv run --extra flow mars-express eval --judge gemini --n 3 --audio --only 'preset-*' \
+    --arms lively,flow --flow out/models/generator.pt         # with the robot's vocalizations, cached apart
+uv run mars-express interaction chat_demo.mp4             # a recorded conversation, rated reply by reply
 uv run mars-express eval --report-only --snapshot eval/   # rebuild REPORT.md + the committed copy
 ```
 
@@ -369,6 +372,19 @@ What the results say (details in the report):
   the arm's shapes flatten into the body. The elevated view stays the default; the gaze needs a face
   on the head, not a lower camera. That run is cached apart (`strips@human/`, `videos@human/`,
   `judged/<judge>@human/`), so the numbers above stand.
+- **Sound.** The same 17 presets were re-judged by Gemini with the robot's vocalization muxed in
+  (`--audio`: `expressive_driver.vocal`'s choice, 12 dB under the voice). Alive rises 2.47 → 2.75
+  (lively) and 2.49 → 2.84 (flow), but recognition stays within noise. Lively top-1 / top-3 / related
+  goes 7 / 36 / 45 % → 7 / 36 / 39 %, flow 29 / 57 / 37 % → 14 / 50 / 41 %. The judge names the sound
+  in 47 of 102 readings' cues but in only 4 descriptions. The gasp and the sigh help (surprised
+  reads "startled" every time; p(sad) 0.15 → 0.37). The yawn hurts: sleepy becomes "howling like a
+  wolf".
+- **Interaction.** Gemini watched the 96 s live chat demo (screen and voice, no transcript) three
+  times (`mars-express interaction chat_demo.mp4`). It rated "emotionally expressive while
+  interacting" 4 / 4 / 4 and "movements fit the words" 4 / 4 / 4. Of 21 reply judgments, 16 fit,
+  2 partly and 3 do not. Congratulations reads as excited, "I'm so sorry" as sad, "Hmm…" as
+  thinking, and the goodbye as a wave. Its flags: a still-looking greeting (2 of 3 viewings), a laugh
+  left in the previous sad pose (1), and the base turning after the conversation (2).
 - **The reach silhouette.** 50 of 64 clips unfold the arm, and 93 % (GPT-5.5) and 57 % (Gemini) of
   their descriptions say reach, point, present or wave. Angry's forward lunge reads as "reaching out
   for a hug", and agreeing's nods with the arm held forward as "presenting something".

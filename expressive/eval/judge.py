@@ -28,9 +28,16 @@ MEDIA = {
     "each is labelled with its number and time.",
     "gemini": "The video is the whole motion in real time.",
 }
-READING_TASK = (
+BODY_ONLY = (
     "Judge ONLY the body language over time: the arm's posture and how it moves, the gripper opening and "
     "closing, the head tilting, the base turning or rolling, and the timing (snaps, pauses, trembling). "
+)
+WITH_SOUND = (
+    "The video has sound: any short sound the robot makes is part of what it expresses. Judge the body "
+    "language over time (the arm's posture and how it moves, the gripper opening and closing, the head "
+    "tilting, the base turning or rolling, the timing) together with that sound. "
+)
+READING_TASK = (
     "Do not assume any particular feeling was intended.\n"
     "- cues: 2-4 short physical observations that drive your reading.\n"
     "- description: the single best short description (2-8 words) of what the robot is feeling or doing, "
@@ -127,7 +134,12 @@ def normalize(raw: object) -> dict[str, float]:
 
 
 class Judge:
-    def __init__(self, kind: JudgeKind, model: str | None = None, grader_model: str = "gpt-5.5") -> None:
+    def __init__(
+        self, kind: JudgeKind, model: str | None = None, grader_model: str = "gpt-5.5", audio: bool = False
+    ) -> None:
+        if audio and kind != "gemini":
+            raise ValueError("only the gemini judge hears the video's sound")
+        self.audio = audio
         self.kind = kind
         self.model = model or {"openai": "gpt-5.5", "gemini": "gemini-3.1-pro-preview"}[kind]
         self.grader_model = grader_model
@@ -164,7 +176,12 @@ class Judge:
 
     def read(self, media: Media) -> Reading:
         raw = self._ask(
-            [("text", f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{READING_TASK}"), self._show(media)], READING_SCHEMA, 0.7
+            [
+                ("text", f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{WITH_SOUND if self.audio else BODY_ONLY}{READING_TASK}"),
+                self._show(media),
+            ],
+            READING_SCHEMA,
+            0.7,
         )
         return {
             "cues": [str(c) for c in raw.get("cues", [])][:6],

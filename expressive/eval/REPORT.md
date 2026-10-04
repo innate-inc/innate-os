@@ -4,7 +4,7 @@ Every clip is judged blind: the judge sees the motion (Gemini: the physically si
 
 Regenerate (per judge, cached under `out/eval/`): `cd expressive && uv run --extra flow mars-express eval --judge gemini --n 3 --flow out/models/generator.pt --pair flow,lively --pair lively,direct`.
 
-Core library at `10d0232cc expressive: basis v6 and presets tuned against the blind judge; osc and snaps reach the body` (clips built 2026-10-04 00:32).
+Core library at `10d0232cc expressive: basis v6 and presets tuned against the blind judge; osc and snaps reach the body` (clips built 2026-10-04 04:07).
 
 ## Judge `gemini-gemini-3.1-pro-preview`
 
@@ -86,7 +86,62 @@ labels: startled 0.40, curious 0.23, neutral 0.17 · expected (none: description
 
 ![llm-agreeing](figures/llm-agreeing.lively.jpg)
 
-## Judge `gemini-gemini-3.1-pro-preview` · camera `human`
+## Judge `gemini-gemini-3.1-pro-preview` · view `audio`
+
+| prompts | arm | clips | top-1 | top-3 | p(target) | described ≥ related | named exactly | alive 1-5 | readable 1-5 |
+|---|---|---|---|---|---|---|---|---|---|
+| hand-written preset recipes | lively | 17 | 7% | 36% | 12% | 39% | 12% | 2.75 | 4.14 |
+| hand-written preset recipes | flow | 17 | 14% | 50% | 19% | 41% | 24% | 2.84 | 4.16 |
+
+![confusion](figures/confusion.gemini-gemini-3.1-pro-preview@audio.jpg)
+
+### Clearest reads
+
+**preset-surprised** (lively) — prompt: *surprised. That came out of nowhere.*  
+judges said: “startled and jumping back”; “startled and pulling back”; “startled and pulling away”  
+labels: startled 0.77, scared 0.15, confused 0.07 · expected startled · grades [2, 2, 2] · alive 4.0 · readable 5.0
+
+![preset-surprised](figures/preset-surprised.lively.jpg)
+
+**preset-curious** (lively) — prompt: *curious. Something new caught your eye.*  
+judges said: “startled and pulling back”; “reaching out and looking around”; “repeatedly striking the ground”  
+labels: angry 0.27, neutral 0.20, startled 0.17 · expected curious · grades [1, 2, 0] · alive 2.3 · readable 3.3
+
+![preset-curious](figures/preset-curious.lively.jpg)
+
+**preset-scared** (lively) — prompt: *scared. Something big is coming at you.*  
+judges said: “feeling sad or disappointed”; “frozen in a reaching pose”; “startled and looking up”  
+labels: sad 0.23, startled 0.22, neutral 0.20 · expected scared · grades [0, 1, 2] · alive 2.0 · readable 3.7
+
+![preset-scared](figures/preset-scared.lively.jpg)
+
+### Worst reads
+
+**preset-agreeing** (lively) — prompt: *nodding yes. You agree.*  
+judges said: “suddenly startled”; “sad or disappointed sigh”; “sad and dejected”  
+labels: sad 0.40, startled 0.23, ashamed 0.13 · expected (none: description only) · grades [0, 0, 0] · alive 3.0 · readable 4.3
+
+![preset-agreeing](figures/preset-agreeing.lively.jpg)
+
+**preset-bored** (lively) — prompt: *bored. Nothing is happening.*  
+judges said: “curiously inspecting the ground”; “curiously turning to inspect something”; “curiously reaching for something”  
+labels: curious 0.78, calm 0.10, neutral 0.05 · expected bored · grades [0, 0, 0] · alive 2.7 · readable 4.0
+
+![preset-bored](figures/preset-bored.lively.jpg)
+
+**preset-sleepy** (lively) — prompt: *sleepy. You keep nodding off.*  
+judges said: “sad and disappointed”; “howling like a wolf”; “startled by a sudden noise”  
+labels: sad 0.30, playful 0.28, startled 0.27 · expected sleepy · grades [0, 0, 0] · alive 3.7 · readable 5.0
+
+![preset-sleepy](figures/preset-sleepy.lively.jpg)
+
+**preset-happy** (lively) — prompt: *happy. Something lovely just happened.*  
+judges said: “startled and surprised”; “startled by something”; “startled and surprised”  
+labels: startled 0.82, scared 0.13, confused 0.03 · expected happy · grades [0, 0, 1] · alive 3.0 · readable 5.0
+
+![preset-happy](figures/preset-happy.lively.jpg)
+
+## Judge `gemini-gemini-3.1-pro-preview` · view `human`
 
 | prompts | arm | clips | top-1 | top-3 | p(target) | described ≥ related | named exactly | alive 1-5 | readable 1-5 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -251,6 +306,8 @@ Every lively clip split by whether the arm leaves the fold (gripper travel ≥ 1
 |---|---|---|---|---|---|---|
 | gemini-gemini-3.1-pro-preview | stays folded | 14 | 13% | 50% | 2.60 | 10% |
 | gemini-gemini-3.1-pro-preview | unfolds | 50 | 15% | 43% | 2.55 | 57% |
+| gemini-gemini-3.1-pro-preview@audio | stays folded | 9 | 19% | 41% | 2.78 | 11% |
+| gemini-gemini-3.1-pro-preview@audio | unfolds | 8 | 6% | 38% | 2.71 | 42% |
 | gemini-gemini-3.1-pro-preview@human | stays folded | 9 | 11% | 41% | 2.07 | 4% |
 | gemini-gemini-3.1-pro-preview@human | unfolds | 8 | 10% | 54% | 2.42 | 58% |
 | openai-gpt-5.5 | stays folded | 14 | 17% | 76% | 2.86 | 10% |
@@ -319,6 +376,23 @@ drops 2.47 → 2.24. From head height the arm's shapes flatten into the body and
 the commonest label. The elevated view stays the default. The gaze needs a face on the head, not
 a different camera.
 
+**1c. Sound makes it more alive, not easier to name (measured).** The 17 presets × lively and flow
+were re-judged by Gemini with the robot's own vocalization muxed in (`--audio`). The sound comes
+from `expressive_driver.vocal`: the driver's keyword-then-preset choice, starting with the clip,
+12 dB under the voice. Listening is the only silent preset.
+
+| arm | top-1 | top-3 | related | alive |
+|---|---|---|---|---|
+| lively | 7 → 7 % | 36 → 36 % | 45 → 39 % | 2.47 → 2.75 |
+| flow | 29 → 14 % | 57 → 50 % | 37 → 41 % | 2.49 → 2.84 |
+
+The judge hears it: 47 of 102 readings name the sound in their cues ("a sigh", "a gasp"), but only 4
+put it in the one-line description. Alive rises by 0.3 on both arms. Recognition moves within noise,
+and per preset it cuts both ways. The gasp makes surprised read "startled" in every reading
+(related 0.83 → 1.00), and the sigh lifts sad (p(sad) 0.15 → 0.37). The yawn, on the other hand,
+turns sleepy into "howling like a wolf" and "startled by a sudden noise" (related 0.50 → 0), and the
+hum under agreeing reads as "a sad or disappointed sigh".
+
 **2. Two silhouettes still dominate.** 50 of 64 lively clips swing the gripper ≥ 10 cm out of the fold,
 and the judges describe the shape. 93 % (GPT-5.5) and 57 % (Gemini) of their descriptions of those
 clips say reach, point, present, raise or wave, against 10 % for clips that stay folded. Angry (a
@@ -354,6 +428,29 @@ against 1.4° breathing, and on the stack it shows as 1-2° steps of the whole-d
   link of the chain), so gestures land mid-sentence. The instant stand-in was `curious` for 8 of 11
   body-language prompts; `presets.match` has since moved to keyword stems with a `listening` default
   (not re-measured on the stack).
+
+## Interaction (the live chat demo, judged as a whole)
+
+Gemini 3.1 Pro watched the 96 s chat demo recorded on the sim stack three times. It got the screen
+and the robot's voice, and no transcript (`mars-express interaction chat_demo.mp4`; ratings in
+`interaction_chat_demo.json`). For each reply it heard, it named the emotion the body conveys and
+whether that fits the words.
+
+- **Overall:** emotionally expressive while interacting 4 / 4 / 4, movements fit the words 4 / 4 / 4.
+- **Per reply:** it heard 7 replies each time (the follow-up question "How are you planning to celebrate?"
+  merged into the one before). Of 21 reply judgments, 16 fit, 2 partly fit and 3 do not.
+- **Consistent across all three:** congratulations reads as "excited, arm raised high", "I'm so sorry"
+  as sad (head and arm droop), "Hmm, I can't read minds" as thinking ("claw brought up to its head"),
+  and the goodbye as a wave.
+- **What it flagged:**
+  - The opening greeting looked still or neutral (2 of 3 viewings). The generated "curious tilt" is
+    small next to an arm-waving greeting.
+  - "I'm yellow!" got no visible reaction in one viewing.
+  - The joke's laugh stayed in the previous sad pose in one viewing ("stuck in the sad animation"):
+    the `head_emotion` skill had just played "sad", and the chuckle clip started 0.8 s after the line.
+  - The base kept turning after the conversation (2 viewings, around 56 s and 80 s). The base was
+    still 34° off its anchor when Stop was pressed at 80 s, after the `turn_in_place` skill.
+- Its timestamps are approximate (one put the goodbye at 109 s in a 96 s video).
 
 ## The planner and the probes
 

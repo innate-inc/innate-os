@@ -180,6 +180,33 @@
    }
   }
  },
+ "gemini-gemini-3.1-pro-preview@audio": {
+  "recognition": {
+   "hand-written preset recipes | lively": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.07142857142857142,
+    "top3": 0.35714285714285715,
+    "p_target": 0.12499999999999999,
+    "described": 0.392156862745098,
+    "named": 0.1176470588235294,
+    "alive": 2.7450980392156863,
+    "readable": 4.137254901960784
+   },
+   "hand-written preset recipes | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.14285714285714285,
+    "top3": 0.5,
+    "p_target": 0.19285714285714284,
+    "described": 0.41176470588235287,
+    "named": 0.23529411764705882,
+    "alive": 2.843137254901961,
+    "readable": 4.1568627450980395
+   }
+  },
+  "ab": {}
+ },
  "gemini-gemini-3.1-pro-preview@human": {
   "recognition": {
    "hand-written preset recipes | lively": {
@@ -402,6 +429,20 @@
    "described": 0.4333333333333333,
    "alive": 2.5466666666666664,
    "gesture_words": 0.5666666666666667
+  },
+  "gemini-gemini-3.1-pro-preview@audio | stays folded": {
+   "clips": 9,
+   "p_target": 0.19047619047619047,
+   "described": 0.4074074074074074,
+   "alive": 2.7777777777777772,
+   "gesture_words": 0.1111111111111111
+  },
+  "gemini-gemini-3.1-pro-preview@audio | unfolds": {
+   "clips": 8,
+   "p_target": 0.05952380952380952,
+   "described": 0.375,
+   "alive": 2.7083333333333335,
+   "gesture_words": 0.4166666666666667
   },
   "gemini-gemini-3.1-pro-preview@human | stays folded": {
    "clips": 9,
