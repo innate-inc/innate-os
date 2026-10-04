@@ -183,7 +183,8 @@ export function createRobotPlanner(ros) {
     /** @param {string} prompt @param {{ timeoutMs?: number, signal?: AbortSignal }} [opts] @returns {Promise<Made>} */
     generate(prompt, { timeoutMs = 20_000, signal } = {}) {
       if (ros.state !== "connected") return Promise.reject(new Error("robot not connected"));
-      const id = crypto.randomUUID();
+      // randomUUID exists only in secure contexts; the robot also serves the app on plain http.
+      const id = crypto.randomUUID?.() ?? `web-${Date.now()}-${Math.random()}`;
       return new Promise((resolve, reject) => {
         const done = () => {
           clearTimeout(timer);

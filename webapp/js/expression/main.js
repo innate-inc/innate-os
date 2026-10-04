@@ -18,7 +18,6 @@ import {
   clipActuators,
   clipJson,
   expandRecipe,
-  limitFrames,
   limitSpeed,
   parseClip,
   recipeToClip,
@@ -41,7 +40,8 @@ import { ros } from "../rosClient.js";
 /**
  * A clip ready to play, with the stages that made it (for the plots).
  * @typedef {import("./player.js").Take & { frames: number[][] | null, plan: Plan | null,
- *            source: string, detail: string, seed: number, placeholder?: boolean }} StudioTake
+ *            source: string, detail: string, seed: number, local?: boolean }} StudioTake
+ * `local` takes stay in the studio even with follow on (the planner's stand-in, the greeting).
  */
 
 const PLAY_TOPIC = "/brain/express/play";
@@ -311,8 +311,7 @@ export async function mount(stage) {
       frames = expandRecipe(clip.recipe);
       plan = toPlan(frames);
     }
-    const poses = limitFrames(basis, clipActuators(basis, clip), 1 / clip.fps);
-    return { clip, poses, frames, plan, source, detail, seed };
+    return { clip, poses: clipActuators(basis, clip), frames, plan, source, detail, seed };
   }
 
   /** @param {string} recipe @param {{ name?: string, prompt?: string, idea?: string, seed?: number, source: string, detail?: string }} meta */
@@ -330,14 +329,13 @@ export async function mount(stage) {
   /** @param {string} name */
   const presetTake = (name) => /** @type {StudioTake} */ (presetTakes.get(name));
 
-  // Following mirrors each take to the robot as it starts here (queued ones too),
-  // but not the placeholder that only fills the wait for a planner.
+  // Following mirrors each take to the robot as it starts here (queued ones too), except local ones.
   /** @type {Player<StudioTake>} */
   const player = new Player(
     (t) => synthesize(basis, breathing(t)),
     (take) => {
       showTake(take);
-      if (take && !take.placeholder && input("follow").checked) applyToRobot(take.clip);
+      if (take && !take.local && input("follow").checked) applyToRobot(take.clip);
     },
   );
   player.loop = prefs.loop;
@@ -347,6 +345,12 @@ export async function mount(stage) {
     if (queue) player.enqueue(take);
     else player.play(take);
     renderNow();
+  }
+
+  /** A take the user picked: it supersedes a pending ask, whose answer must not replace it. @param {StudioTake} take @param {boolean} [queue] */
+  function choose(take, queue = false) {
+    cancelAsk();
+    perform(take, queue);
   }
 
   const timeline = createTimeline(el("timeline"), {
@@ -538,11 +542,11 @@ export async function mount(stage) {
     };
   }
 
-  /** Drop a pending ask, so its answer can't start motion after a Stop. */
+  /** Drop a pending ask, so its answer can't start motion after a Stop or replace a newer choice. */
   function cancelAsk() {
     if (!inflight) return;
     inflight.abort();
-    status("stopped");
+    status("planner request cancelled");
   }
 
   /** @param {string} raw */
@@ -556,9 +560,8 @@ export async function mount(stage) {
     // The placeholder only plays when the planner is slow, so a fast answer
     // doesn't start one motion and crossfade away from it half-way.
     const placeholder = setTimeout(() => {
-      const take = presetTake(preset.name);
-      player.play({ ...take, detail: "nearest preset, while the planner thinks", placeholder: true });
-      renderNow();
+      if (ctrl.signal.aborted) return;
+      perform({ ...presetTake(preset.name), detail: "nearest preset, while the planner thinks", local: true });
     }, PLACEHOLDER_AFTER_MS);
     const started = performance.now();
     /** @type {string[]} */
@@ -579,15 +582,15 @@ export async function mount(stage) {
           return;
         } catch (err) {
           if (ctrl.signal.aborted || destroyed) return;
-          failures.push(`${source.name}: ${message(err)}`);
+          failures.push(`${source.name}: ${timed.signal.aborted ? "no answer in time" : message(err)}`);
         } finally {
           timed.done();
         }
       }
       const current = player.take;
-      if (current?.placeholder && current.clip === presetTake(preset.name).clip) {
+      if (current?.local && current.clip === presetTake(preset.name).clip) {
         // The stand-in becomes the answer: relabel it and let follow send it on.
-        current.placeholder = false;
+        current.local = false;
         current.detail = "no planner answered";
         showTake(current);
         if (input("follow").checked) applyToRobot(current.clip);
@@ -657,7 +660,7 @@ export async function mount(stage) {
       source: "edited",
       detail: "local liveliness",
     });
-    perform(take);
+    choose(take);
   }
   el("expand").addEventListener("click", () => reexpand(player.take?.seed ?? 0));
   el("vary").addEventListener("click", () => reexpand((player.take?.seed ?? 0) + 1));
@@ -697,7 +700,7 @@ export async function mount(stage) {
     if (!file) return;
     try {
       const clip = parseClip(await file.text());
-      perform(makeTake(clip, { source: "file", detail: file.name }));
+      choose(makeTake(clip, { source: "file", detail: file.name }));
       log(`loaded ${file.name} (${clip.space}, ${clip.frames.length} frames)`, "ok");
     } catch (err) {
       log(`import failed: ${message(err)}`, "err");
@@ -708,7 +711,8 @@ export async function mount(stage) {
   const robotPlanner = createRobotPlanner(ros);
   const unadvertise = [
     ros.advertise(PLAY_TOPIC, "std_msgs/msg/String"),
-    ros.advertise(STOP_TOPIC, "std_msgs/msg/Empty"),
+    // String, payload ignored: rws can't serialize std_msgs/Empty.
+    ros.advertise(STOP_TOPIC, "std_msgs/msg/String"),
   ];
 
   /** @param {Clip} clip */
@@ -724,7 +728,9 @@ export async function mount(stage) {
   });
   el("robotStop").addEventListener("click", () => {
     cancelAsk();
-    if (!ros.publish(STOP_TOPIC, {})) log("robot not connected", "err");
+    player.stop();
+    renderNow();
+    if (!ros.publish(STOP_TOPIC, { data: "" })) log("robot not connected", "err");
   });
   input("follow").checked = prefs.follow;
   input("follow").addEventListener("change", () => {
@@ -802,8 +808,7 @@ export async function mount(stage) {
     queue.title = "queue after the current clip";
     card.append(ph, name, queue);
     card.addEventListener("click", (ev) => {
-      const take = presetTake(preset.name);
-      perform(take, ev.target === queue || ev.shiftKey);
+      choose(presetTake(preset.name), ev.target === queue || ev.shiftKey);
     });
     el("gallery").appendChild(card);
   }
@@ -899,6 +904,7 @@ export async function mount(stage) {
       log(`this browser can't record the canvas: ${message(err)}`, "err");
       return;
     }
+    cancelAsk();
     recording = true;
     el("recBtn").classList.add("rec");
     const looping = player.loop;
@@ -949,8 +955,8 @@ export async function mount(stage) {
     },
   );
 
-  // A first-time visitor sees MARS alive at once (studio only — never sent to the robot unasked).
-  player.play(presetTake(DEFAULT_PRESET));
+  // A first-time visitor sees MARS alive at once; local, so a saved follow can't drive the robot unasked.
+  player.play({ ...presetTake(DEFAULT_PRESET), local: true });
   status("ready — type a feeling and press Enter (/ focuses the prompt)");
   input("prompt").focus({ preventScroll: true });
 
