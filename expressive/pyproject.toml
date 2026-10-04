@@ -1,0 +1,40 @@
+[project]
+name = "mars_expressive_tools"
+version = "0.1.0"
+description = "Host tooling for MARS expressive motion: sim renders, contact sheets, the mars-express CLI"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "mujoco==3.10.0",  # the sim's version: compiled-world caches are keyed by it
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+# 5090-side ML (ml/): generator training, Codex-authored dataset, planner distillation, the planner service.
+# vLLM lives in its own env on the 5090 (envs/serve); it is not a dependency here.
+ml = [
+    "torch>=2.6",
+    "transformers>=5.5",
+    "peft>=0.21",
+    "trl>=0.24",
+    "unsloth>=2026.9; sys_platform == 'linux'",
+    "datasets>=4.3",
+    "pyarrow>=20",
+    "huggingface_hub>=0.30",
+    "safetensors>=0.5",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "matplotlib>=3.9",
+]
+
+[project.scripts]
+mars-express = "cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Flat layout: the editable install puts this directory on sys.path, so `cli`, `_core` and `render` import as-is.
+only-include = ["cli.py", "_core.py", "golden.py", "basis_tool.py", "chat.py", "render", "ml"]
