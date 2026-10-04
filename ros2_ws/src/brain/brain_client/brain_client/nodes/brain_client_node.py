@@ -326,6 +326,8 @@ class BrainClientNode(Node):
             stop_robot=self._stop_robot,
             publish_status=self.publish_agent_status,
         )
+        if self.expression is not None:
+            self.lifecycle.on_deactivate = self.expression.stop
         self.reload = ReloadCoordinator(
             self,
             state,

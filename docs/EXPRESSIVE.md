@@ -122,35 +122,42 @@ extra ROS node): one `Animator` ticked by a 30 Hz node timer, its poses mapped o
 
 | output | topic | when |
 |---|---|---|
-| head | `/mars/head/set_position` (Int32, °) | when the rounded degree changes |
-| arm | `/mars/arm/commands` (6 rad, the streaming pass-through) | every tick while a clip plays, the robot speaks, or an agent runs with idle breathing on; each time the stream (re)starts the animator enters from the measured pose over 1.5 s (`Animator.enter_from`), and it rate-limits every joint (`basis.json` `max_speed`) |
-| base | the brain's `cmd_vel_topic` (`/cmd_vel_skills` → the mux on hardware, `/cmd_vel` in the sim) | while a clip's orient/advance is non-zero or the robot is off its anchor: feed-forward P-control on `/odom` (`stance.py` over `expressive.drive`), ≤ 0.6 rad/s and 0.15 m/s, one zero twist on arrival, then silence |
+| head | `/mars/head/set_position` (Int32, °) | when the rounded degree changes; a resume after another owner had the head blends from the measured tilt over 1.5 s |
+| arm | `/mars/arm/commands` (6 rad, the streaming pass-through) | every tick while a clip plays, or an agent runs and speaks or breathes (idle breathing on); each time the stream (re)starts the animator enters from the measured pose over 1.5 s (`Animator.enter_from`), and it rate-limits every joint (`basis.json` `max_speed`) |
+| base | the brain's `cmd_vel_topic` (`/cmd_vel_skills` → the mux on hardware, `/cmd_vel` in the sim) | only while a clip's orient/advance leaves the deadband (1.5°, 1 cm) or the robot is off its anchor: feed-forward P-control on `/odom` (`stance.py` over `expressive.drive`), ≤ 0.6 rad/s and 0.15 m/s, one zero twist on arrival, then silence. Gestures that never turn or step publish nothing |
 
 A robot nobody talks to stays still: with the brain inactive and nothing playing, nothing is
-published. The layer yields the body to whatever else owns it:
+published. Deactivating the agent, or `/brain/express/stop`, stops everything at once: the clip on
+stage and any clip still being generated are dropped, the arm stream ends within the 0.4 s
+crossfade, and a stance in progress gets one zero twist and stops where it is — no trip back to
+its anchor. The layer yields the body to whatever else owns it:
 
 - a running skill (a `running` on `/brain/skill_status_update`, or the brain's own skill slot) or
   a live Nav2 `/navigate_to_pose` goal masks everything: output stops at once, and the stream
   resumes from wherever the skill left the body. Masking is silence rather than
   `Animator.set_mask`, whose eased-to-NEUTRAL parts would start the resumed stream at NEUTRAL
   instead of the measured pose. Skills that never move the body leave expression running:
-  `LEAVES_BODY` in `driver.py` (`search_memory`, `change_volume`, and `express` itself). It is an
+  `LEAVES_BODY` in `expressive_driver/utils.py` (`search_memory`, `change_volume`, and `express` itself). It is an
   allowlist because a skill's declared interfaces cannot prove it body-free —
   `navigate_to_position` and `navigate_with_vision` drive the base through raw ROS clients without
   declaring `Mobility` — so an unknown skill masks. Add a shipped skill there when it is body-free;
-- when a body skill ends, a small reaction plays at once (`expressive.on_skill_completed` /
-  `on_skill_failed`, preset names, so no LLM call), unless the agent's reply carried an emote in
-  the last 3 s;
+- when a body skill ends while an agent runs, a small reaction plays at once
+  (`expressive.on_skill_completed` / `on_skill_failed`, preset names, so no LLM call), unless the
+  agent's reply carried an emote in the last 3 s; a skill run by hand on an idle robot draws none;
 - a `/mars/arm/commands` or `/mars/head/set_position` command that is not ours (leader arm, UDP
-  teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message;
-  `/joystick` holds the base off for 2 s;
+  teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message
+  (each of our own commands is recognized once, by its echo); `/joystick` holds the base off for 2 s;
+- Mad drive mode (read from `/robot/info`, 1 Hz) holds the arm off: mars_app folds it into a
+  bracing pose for Mad's speeds, and a stream would undo the fold. The signal can lag the mode
+  switch by up to a second, so a stream that is running at that moment may cut into the brace goto;
 - the gaze tracker's tilt goes to `Animator.set_gaze` (the expression rides on it), and the base is
   left to the tracker's own panning;
 - the 3 s rest fold on agent activation is not interrupted (the arm waits 3.5 s);
 - a claw that holds something (commanded closed, measured open; hardware only, the sim does not
   report commanded joints) keeps its grip.
 
-Speech sway: the TTS loop hands the robot's own voice (never the sim's simulated residents) to
+Speech sway (only while an agent runs, or on top of a playing clip): the TTS loop hands the
+robot's own voice (never the sim's simulated residents) to
 `Animator.feed_speech` as it reaches the speaker: PCM s16le 16 kHz chunks on hardware, and in the
 sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`.
 
@@ -159,15 +166,17 @@ sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`.
 | topic | type | |
 |---|---|---|
 | `/brain/express/prompt` | String | a prompt, or `{"prompt", "id"}`: generate and play |
-| `/brain/express/play` | String | a Clip JSON to play now |
-| `/brain/express/stop` | Empty | back to idle |
+| `/brain/express/play` | String | a Clip JSON object to play now (never a path; malformed clips are logged and ignored) |
+| `/brain/express/stop` | String (payload ignored) | back to idle. Not `Empty`: rosbridge (rws) serializes `std_msgs/Empty` to 0 bytes, which every ROS subscriber rejects |
 | `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, speaking, source, id}` |
 | `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing |
 
 A prompt moves the robot at once: its keyword preset (`presets.match`) starts playing as a
 stand-in (source `preset-stand-in`) while the real clip is generated, and the generated clip
-crossfades in when it arrives. When the chain only reaches the preset, the stand-in simply plays
-out; a newer prompt, play or stop drops a clip still being generated.
+crossfades in when it arrives. When the chain only reaches the preset, the stand-in is relabelled
+`preset` (final) and plays out; a newer prompt, play or stop drops a clip still being generated.
+Clips are synthesized to actuator frames on a worker thread, never on the ROS executor or under
+the driver's lock, so emotes cost the speech stream and the 30 Hz tick nothing.
 
 `source` says which link of the chain made the clip on stage: `server` (the planner server at
 `expressive.server_url`, probed every 30 s off the prompt path, 1.5 s timeout), `llm` (the brain's
@@ -181,7 +190,7 @@ Parameters on brain_client_node:
 | `expressive.enabled` | `true` | `false` builds nothing; speech, gaze and the prompt behave as before |
 | `expressive.idle_breathing` | `true` | breathe while an agent runs; `false` holds still between clips |
 | `expressive.stand_in` | `true` | play the keyword preset while a prompt's clip is generated |
-| `expressive.server_url` | `http://innate52.local:8000` | the planner server; `""` skips it |
+| `expressive.server_url` | `""` | the planner server (`http://<host>:8000`); empty skips it. Set it per robot in `config/settings.yaml` (stanza below) |
 | `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
 | `expressive.on_skill_failed` | `sad` | |
 
@@ -191,6 +200,16 @@ emotional beats, invented fresh each time (its examples span proud, sheepish, st
 and it is told never to reuse one: with a single example the model copied it verbatim); the
 speech streamer cuts them out (never spoken, never shown in the chat) and plays each one when its
 sentence goes to TTS. Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`).
+
+To point a robot (or the sim) at a planner server, add to the gitignored `config/settings.yaml`
+and restart the brain:
+
+```yaml
+brain_client_node:
+  ros__parameters:
+    expressive:
+      server_url: "http://innate52.local:8000"   # the sim container reaches the host as host.docker.internal
+```
 
 ### Try it in the sim
 
@@ -213,6 +232,8 @@ turns.
 - [ ] `basis.json` `max_speed` (6 rad/s per joint) against the pass-through's soft gains; the arm
       SDK's own stream cap is 1.8 rad/s
 - [ ] the head servo at up to 30 commands/s during speech
+- [ ] Mad mode while an agent emotes: the brace fold completes (the arm hold reads `/robot/info`,
+      up to 1 s behind the mode switch)
 - [ ] the stance through the mux: `/cmd_vel_skills` outranks Nav2, and is published only while
       the base is being corrected
 - [ ] grip guard: pick an object, chat, the object stays held

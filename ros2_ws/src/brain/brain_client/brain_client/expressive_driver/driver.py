@@ -7,13 +7,15 @@ streaming pass-through, and the base through a stance tracker on /odom. Whenever
 (re)starts, the animator enters from the measured pose, so expression never jumps from wherever
 a skill or an operator left the body; the animator also rate-limits every joint. The body is yielded
 whenever something else owns it: a running skill or a Nav2 goal masks everything, a foreign
-/mars/arm/commands stream (teleop, the arm SDK page) the arm, a foreign head command the head,
-the joystick and the gaze tracker the base. Outside a clip or speech the arm streams only while an
-agent is running and idle breathing is on, so a robot nobody talks to keeps its arm wherever skills
-and auto-rest put it.
+/mars/arm/commands stream (teleop, the arm SDK page) or Mad mode's arm brace the arm, a foreign
+head command the head, the joystick and the gaze tracker the base. Outside a clip or speech the arm
+streams only while an agent is running and idle breathing is on, so a robot nobody talks to keeps
+its arm wherever skills and auto-rest put it.
 
 Prompts arrive on topics, from the express skill and from the agent's emote tags, and become clips
-down the fallback chain in ``sources``.
+down the fallback chain in ``sources``. Clips are synthesized to actuator frames on a worker
+thread, never on the executor or under the lock, and a newer request, a stop or a deactivation
+drops a clip still on its way.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import math
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -32,16 +35,17 @@ from geometry_msgs.msg import Twist, Vector3
 from nav_msgs.msg import Odometry
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Empty, Float64MultiArray, Int32, String
+from std_msgs.msg import Float64MultiArray, Int32, String
 
 from brain_client.common.geometry import quaternion_to_yaw
 from brain_client.expressive import presets
 from brain_client.expressive.animator import Animator
-from brain_client.expressive.basis import ActuatorPose
+from brain_client.expressive.basis import ActuatorPose, Basis
 from brain_client.expressive.breathing import Breathing
 from brain_client.expressive.motion import Clip
 from brain_client.expressive_driver.sources import ClipMaker, ClipSource, Made
 from brain_client.expressive_driver.stance import StanceTracker
+from brain_client.expressive_driver.utils import is_mad_mode, leaves_body
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,9 +59,13 @@ if TYPE_CHECKING:
     from brain_client.perception.pose import Pose
 
 FPS = 30.0
+BLEND_S = 0.4
 STATE_EVERY = 6  # ticks: 5 Hz
-ENTER_S = 1.5  # crossfade from the measured pose into the animation when the arm stream starts
-LINGER_S = 0.8  # keep streaming past a clip's end: the animator crossfades back to idle meanwhile
+ENTER_S = 1.5  # crossfade from the measured pose into the animation when output (re)starts
+LINGER_S = BLEND_S  # keep streaming past a clip's end while the animator crossfades back to idle
+LATE_TICK_S = 2.0 / FPS
+ECHO_S = 1.0  # our own head command comes back within this, or it was lost
+MAX_CLIP_JSON = 4_000_000  # bytes: a 40 s actuator clip at 1000 fps fits; nothing legitimate is larger
 ODOM_STALE_S = 0.5
 FOREIGN_HOLD_S = 5.0  # a teleop operator pausing must not have the arm or head yanked back
 JOYSTICK_HOLD_S = 2.0
@@ -72,10 +80,6 @@ NAV_LIVE = {GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING, GoalStatus.
 _ACTION_STATUS_QOS = QoSProfile(
     depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL, reliability=QoSReliabilityPolicy.RELIABLE
 )
-# Skills that leave the body to this layer: express drives it through this driver, the rest never
-# move it. Declared interfaces cannot prove a skill body-free (navigate_to_position and
-# navigate_with_vision drive the base through raw ROS clients), so any other skill masks.
-LEAVES_BODY = frozenset({"express", "search_memory", "change_volume"})
 REPLY_EMOTE_S = 3.0  # a reaction would repeat what the agent's own emote just said
 
 PROMPT_TOPIC = "/brain/express/prompt"
@@ -102,7 +106,7 @@ class ExpressiveConfig:
         config = cls(
             idle_breathing=bool(node.declare_parameter("expressive.idle_breathing", True).value),
             stand_in=bool(node.declare_parameter("expressive.stand_in", True).value),
-            server_url=str(node.declare_parameter("expressive.server_url", "http://innate52.local:8000").value),
+            server_url=str(node.declare_parameter("expressive.server_url", "").value),
             on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
             on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
         )
@@ -136,13 +140,22 @@ class ExpressionDriver:
         self._cmd_vel_pub = cmd_vel_pub
         self._standing_grip = standing_grip
         self._maker = ClipMaker(config.server_url, provider, self._logger)
-        self._animator = Animator(fps=FPS, idle=Breathing() if config.idle_breathing else STILL)
+        self._basis = Basis.load()
+        self._animator = Animator(
+            fps=FPS, idle=Breathing() if config.idle_breathing else STILL, blend_s=BLEND_S, basis=self._basis
+        )
         self._stance = StanceTracker()
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="expressive")
+        # A pool, not a thread per prompt: Thread.start() waits for the new thread to take the GIL, which
+        # a synthesizing worker holds for milliseconds — too long for the speech streamer calling in.
+        self._generators = ThreadPoolExecutor(max_workers=3, thread_name_prefix="expressive-gen")
         self._lock = threading.Lock()  # the request bookkeeping below; hooks arrive on many threads
 
-        self._seq = 0
+        self._seq = 0  # bumped by every request and stop: a clip made for an older one is dropped
+        self._final_seq = 0  # the request whose own clip is on stage: its stand-in comes too late
         self._labels: deque[_Label] = deque(maxlen=4)  # newest last: a stand-in and its replacement overlap
         self._pcm_carry = b""
+        self._abandon_stance = False  # set by stop() on any thread, acted on by the tick
 
         self._odom: Pose | None = None
         self._odom_at = 0.0
@@ -157,9 +170,12 @@ class ExpressionDriver:
         self._grip_lock: float | None = None
         self._pose: ActuatorPose | None = None
         self._head_cmd: int | None = None
+        self._head_on = False
+        self._head_entry: tuple[float, float] | None = None  # (start, measured degrees) of a resume
         self._head_quiet_until = 0.0
         self._ours: deque[tuple[float, ...]] = deque(maxlen=64)  # recent arm commands: our own echoes
-        self._ours_head: deque[int] = deque(maxlen=8)
+        self._head_echoes: deque[tuple[int, float]] = deque(maxlen=64)  # (degrees, sent) not yet echoed
+        self._mad = False
         self._arm_quiet_until = 0.0
         self._base_quiet_until = 0.0
         self._live_until = 0.0
@@ -174,7 +190,8 @@ class ExpressionDriver:
         self._generated_pub = node.create_publisher(String, GENERATE_RES_TOPIC, 10)
         node.create_subscription(String, PROMPT_TOPIC, self._on_prompt, 10)
         node.create_subscription(String, PLAY_TOPIC, self._on_play, 10)
-        node.create_subscription(Empty, STOP_TOPIC, lambda _msg: self.stop(), 10)
+        # String, payload ignored: rosbridge (rws) serializes std_msgs/Empty to 0 bytes, which ROS cannot read.
+        node.create_subscription(String, STOP_TOPIC, lambda _msg: self.stop(), 10)
         node.create_subscription(String, GENERATE_REQ_TOPIC, self._on_generate_request, 10)
         node.create_subscription(String, "/brain/skill_status_update", self._on_skill_status, 10)
         node.create_subscription(Odometry, "/odom", self._on_odom, 10)
@@ -183,6 +200,7 @@ class ExpressionDriver:
         node.create_subscription(Int32, "/mars/head/set_position", self._on_head_command, 10)
         node.create_subscription(Vector3, "/joystick", self._on_joystick, 10)
         node.create_subscription(GoalStatusArray, NAV_STATUS_TOPIC, self._on_nav_status, _ACTION_STATUS_QOS)
+        node.create_subscription(String, "/robot/info", self._on_robot_info, 10)
         node.create_timer(1.0 / FPS, self._tick)
         self._logger.info(
             f"[Expressive] driver up: {FPS:.0f} Hz, planner server {config.server_url or '(none)'}, "
@@ -192,26 +210,15 @@ class ExpressionDriver:
     # ================= hooks (any thread) =================
     def express(self, prompt: str, request_id: str | None = None) -> None:
         """Play ``prompt``'s keyword preset at once (with ``stand_in``), and the generated clip when it
-        arrives; a newer play, prompt or stop supersedes a clip still being generated."""
+        arrives; a newer play, prompt or stop supersedes a clip still being generated. Cheap: safe
+        to call from the speech streamer while it holds its lock."""
         prompt = " ".join(prompt.split())
         if not prompt:
             return
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
+        seq = self._next_seq()
         if self._config.stand_in:
-            self._play(seq, Made(presets.clip(presets.match(prompt), prompt=prompt), ClipSource.STAND_IN), request_id)
-        threading.Thread(target=self._make_and_play, args=(seq, prompt, request_id), daemon=True).start()
-
-    def _make_and_play(self, seq: int, prompt: str, request_id: str | None) -> None:
-        started = time.monotonic()
-        made = self._maker.make(prompt)
-        self._logger.info(
-            f"[Expressive] '{prompt}' -> {made.clip.name} ({made.source}, {time.monotonic() - started:.1f} s)"
-        )
-        if made.source == ClipSource.PRESET and self._config.stand_in:
-            return  # the stand-in already is the preset: let it finish
-        self._play(seq, made, request_id)
+            self._submit(self._play_preset, seq, presets.match(prompt), ClipSource.STAND_IN, request_id, prompt)
+        self._generators.submit(self._make_and_play, seq, prompt, request_id)
 
     def emote(self, prompt: str) -> None:
         """An emote tag from the agent's reply, played as its sentence goes to TTS."""
@@ -219,16 +226,18 @@ class ExpressionDriver:
         self.express(prompt)
 
     def play(self, clip: Clip, request_id: str | None = None) -> None:
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        self._play(seq, Made(clip, ClipSource.PLAYED), request_id)
+        seq = self._next_seq()
+        self._submit(self._prepare_and_play, seq, Made(clip, ClipSource.PLAYED), request_id)
 
     def stop(self) -> None:
+        """Back to idle now: the clip on stage, any clip still being made, the speech sway, and the
+        stance — the base stops where it is instead of driving back to the anchor."""
         with self._lock:
             self._seq += 1
             self._labels.clear()
-        self._animator.stop()
+            self._animator.stop()
+        self._animator.interrupt_speech()
+        self._abandon_stance = True
 
     def set_gaze(self, head_deg: float | None) -> None:
         """The gaze tracker's tilt target; the expression rides on it, and leaves the base to it."""
@@ -251,20 +260,72 @@ class ExpressionDriver:
 
     def close(self) -> None:
         """Leave the base stopped: a stance in flight would otherwise coast until the deadman."""
+        self._worker.shutdown(wait=False, cancel_futures=True)
+        self._generators.shutdown(wait=False, cancel_futures=True)
         if self._stance.release() is not None:
             self._cmd_vel_pub.publish(Twist())
 
-    def _play(self, seq: int, made: Made, request_id: str | None) -> None:
-        """Play ``made`` unless a newer request superseded ``seq`` meanwhile."""
+    def _next_seq(self) -> int:
         with self._lock:
-            if seq != self._seq:
+            self._seq += 1
+            return self._seq
+
+    def _submit(self, job: Callable[..., None], *args: object) -> None:
+        self._worker.submit(self._run_job, job, *args)
+
+    def _run_job(self, job: Callable[..., None], *args: object) -> None:
+        try:
+            job(*args)
+        except Exception as error:  # noqa: BLE001 — one bad clip must not stop the worker, nor vanish in a Future
+            self._logger.error(f"[Expressive] {getattr(job, '__name__', 'job')} failed: {error!r}")
+
+    # ================= clip delivery (worker and generation threads) =================
+    def _make_and_play(self, seq: int, prompt: str, request_id: str | None) -> None:
+        if seq != self._seq:
+            return  # superseded before a generator was free: spare the LLM call
+        try:
+            started = time.monotonic()
+            made = self._maker.make(prompt)
+            self._logger.info(
+                f"[Expressive] '{prompt}' -> {made.clip.name} ({made.source}, {time.monotonic() - started:.1f} s)"
+            )
+            if made.source == ClipSource.PRESET and self._config.stand_in:
+                self._submit(self._settle_on_stand_in, seq, made.clip.name, request_id)  # after the stand-in job
                 return
-            self._labels.append(_Label(made.clip.name, made.source, request_id))
-            self._animator.play(made.clip)
+            self._prepare_and_play(seq, made, request_id)
+        except Exception as error:  # noqa: BLE001 — a thread's crash reporter: generation must not die silently
+            self._logger.error(f"[Expressive] could not make a clip for '{prompt}': {error!r}")
+
+    def _play_preset(self, seq: int, name: str, source: ClipSource, request_id: str | None, prompt: str = "") -> None:
+        self._prepare_and_play(seq, Made(presets.clip(name, prompt=prompt), source), request_id)
+
+    def _prepare_and_play(self, seq: int, made: Made, request_id: str | None) -> None:
+        """Synthesize ``made`` to actuator frames here, off the executor and outside the lock."""
+        if seq != self._seq:
+            return  # superseded while queued: spare the synthesis
+        prepared = made.clip.to_actuators(self._basis).resample(FPS)
+        with self._lock:
+            if seq != self._seq or (made.source == ClipSource.STAND_IN and self._final_seq == seq):
+                return
+            if made.source != ClipSource.STAND_IN:
+                self._final_seq = seq
+            self._labels.append(_Label(prepared.name, made.source, request_id))
+            self._animator.play(prepared)
+
+    def _settle_on_stand_in(self, seq: int, name: str, request_id: str | None) -> None:
+        """The chain only reached the preset the stand-in already is: label it final, let it play out."""
+        with self._lock:
+            if seq == self._seq:
+                self._labels.append(_Label(name, ClipSource.PRESET, request_id))
 
     # ================= the tick (executor thread) =================
     def _tick(self) -> None:
         now = time.monotonic()
+        if self._last_tick and now - self._last_tick > LATE_TICK_S:
+            self._logger.warning(
+                f"[Expressive] tick {1000 * (now - self._last_tick):.0f} ms after the last: the executor was busy",
+                throttle_duration_sec=5.0,
+            )
         try:
             self._step(now)
         except Exception as error:  # noqa: BLE001 — a timer callback must never take the brain node down
@@ -277,19 +338,27 @@ class ExpressionDriver:
         self._last_tick = now
         self._follow_activation(now)
         stage = self._animator.state(now)  # before the tick: a clip enters one tick after it is seen
-        if stage["playing"] or stage["speaking"] or (self._config.idle_breathing and self._state.is_brain_active):
+        # Speech and breathing animate only an agent that runs: a deactivated robot finishing its last
+        # sentence keeps its arm still.
+        agent = self._state.is_brain_active and (stage["speaking"] or self._config.idle_breathing)
+        if stage["playing"] or agent:
             self._live_until = now + LINGER_S
         masked = self._masked()
         if self._was_masked and not masked:
             self._unmasked_at = now
         self._was_masked = masked
         live = now < self._live_until and not masked
-        streaming = live and now >= self._arm_quiet_until
-        if streaming and not self._streaming:
+        streaming = live and now >= self._arm_quiet_until and not self._mad
+        entering = streaming and not self._streaming
+        if entering:
             self._enter_from_measured()
         self._streaming = streaming
+        head_on = (live or (self._gaze and not masked)) and now >= self._head_quiet_until
+        if head_on and not self._head_on and not entering and self._joints is not None:
+            self._head_entry = (now, math.degrees(self._joints[6]))  # the arm's entry blend covers the head
+        self._head_on = head_on
         pose = self._pose = self._animator.tick(now)
-        self._drive_head(pose, (live or (self._gaze and not masked)) and now >= self._head_quiet_until)
+        self._drive_head(pose, head_on, now)
         if streaming:
             self._drive_arm(pose)
         self._drive_base(pose, dt, not masked and not self._gaze and now >= self._base_quiet_until, now)
@@ -314,18 +383,26 @@ class ExpressionDriver:
 
     def _masked(self) -> bool:
         running = self._state.primitive_running
-        skill = running is not None and not _leaves_body(running.skill_id)
+        skill = running is not None and not leaves_body(running.skill_id)
         return skill or self._navigating or bool(self._running_skills)
 
-    def _drive_head(self, pose: ActuatorPose, on: bool) -> None:
+    def _drive_head(self, pose: ActuatorPose, on: bool, now: float) -> None:
         if not on:
             self._head_cmd = None  # whoever had the head moved it: re-send on resume
+            self._head_entry = None
             return
-        degrees = int(round(pose.head_deg))
+        target = pose.head_deg
+        if self._head_entry is not None:
+            start, measured = self._head_entry
+            ramp = min(1.0, (now - start) / ENTER_S)
+            target = measured + ramp * ramp * (3.0 - 2.0 * ramp) * (target - measured)
+            if ramp >= 1.0:
+                self._head_entry = None
+        degrees = int(round(target))
         if degrees == self._head_cmd:
             return
         self._head_cmd = degrees
-        self._ours_head.append(degrees)
+        self._head_echoes.append((degrees, now))
         self._head_pub.publish(Int32(data=degrees))
 
     def _drive_arm(self, pose: ActuatorPose) -> None:
@@ -345,7 +422,10 @@ class ExpressionDriver:
         return held
 
     def _drive_base(self, pose: ActuatorPose, dt: float, free: bool, now: float) -> None:
-        if free:
+        if self._abandon_stance:
+            self._abandon_stance = False
+            twist = self._stance.abandon()
+        elif free:
             fresh = self._odom if now - self._odom_at < ODOM_STALE_S else None
             twist = self._stance.step(pose.base_yaw, pose.base_x, fresh, dt)
         else:
@@ -383,12 +463,23 @@ class ExpressionDriver:
         self.express(prompt, None if request_id is None else str(request_id))
 
     def _on_play(self, msg: String) -> None:
+        """Clip JSON only — never a path: the topic is open to anything on the network. Parsed on the
+        worker: a megabyte of JSON parsed here stalls the tick."""
+        if len(msg.data) > MAX_CLIP_JSON:
+            self._logger.warning(f"[Expressive] ignoring {PLAY_TOPIC}: {len(msg.data)} bytes of clip JSON")
+            return
+        self._submit(self._parse_and_play, self._next_seq(), msg.data)
+
+    def _parse_and_play(self, seq: int, payload: str) -> None:
         try:
-            clip = Clip.load(msg.data)
-        except (ValueError, KeyError, TypeError) as error:
+            data = json.loads(payload)
+            if not isinstance(data, dict):
+                raise ValueError("expected a Clip JSON object")
+            clip = Clip.from_dict(data)
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError) as error:
             self._logger.warning(f"[Expressive] ignoring {PLAY_TOPIC}: {error}")
             return
-        self.play(clip)
+        self._prepare_and_play(seq, Made(clip, ClipSource.PLAYED), None)
 
     def _on_generate_request(self, msg: String) -> None:
         try:
@@ -397,7 +488,7 @@ class ExpressionDriver:
         except (json.JSONDecodeError, TypeError, KeyError):
             self._logger.warning(f"[Expressive] ignoring {GENERATE_REQ_TOPIC}: expected {{id, prompt}}")
             return
-        threading.Thread(target=self._generate, args=(request_id, prompt), daemon=True).start()
+        self._generators.submit(self._generate, request_id, prompt)
 
     def _generate(self, request_id: object, prompt: str) -> None:
         try:
@@ -419,7 +510,7 @@ class ExpressionDriver:
             status, skill = str(payload["status"]), str(payload.get("skill_id") or payload.get("skill_name") or "")
         except (json.JSONDecodeError, TypeError, KeyError):
             return
-        if not skill or _leaves_body(skill):
+        if not skill or leaves_body(skill):
             return
         if status == "running":
             self._running_skills.add(skill)
@@ -430,18 +521,12 @@ class ExpressionDriver:
         if self._running_skills:
             return
         reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}.get(status)
-        if reaction and time.monotonic() - self._reply_emote_at > REPLY_EMOTE_S:
-            self._react(reaction)
-
-    def _react(self, reaction: str) -> None:
-        """A preset name plays at once, for free; anything else is a prompt to generate."""
-        if reaction not in presets.PRESETS:
-            self.express(reaction)
+        if not reaction or not self._state.is_brain_active or time.monotonic() - self._reply_emote_at <= REPLY_EMOTE_S:
             return
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        self._play(seq, Made(presets.clip(reaction), ClipSource.PRESET), None)
+        if reaction not in presets.PRESETS:
+            self.express(reaction)  # free text: a prompt to generate
+            return
+        self._submit(self._play_preset, self._next_seq(), reaction, ClipSource.PRESET, None)
 
     def _on_odom(self, msg: Odometry) -> None:
         position = msg.pose.pose.position
@@ -459,8 +544,16 @@ class ExpressionDriver:
             self._arm_quiet_until = max(self._arm_quiet_until, now + FOREIGN_HOLD_S)
 
     def _on_head_command(self, msg: Int32) -> None:
+        """Our own commands come back once each: consume the echo, so an operator's slider landing
+        on a value we also sent still reads as foreign."""
         now = time.monotonic()
-        if msg.data not in self._ours_head and self._outsider(now):
+        while self._head_echoes and now - self._head_echoes[0][1] > ECHO_S:
+            self._head_echoes.popleft()
+        for index, (degrees, _sent) in enumerate(self._head_echoes):
+            if degrees == msg.data:
+                del self._head_echoes[index]
+                return
+        if self._outsider(now):
             self._head_quiet_until = now + FOREIGN_HOLD_S
 
     def _outsider(self, now: float) -> bool:
@@ -474,6 +567,5 @@ class ExpressionDriver:
         if msg.x or msg.y or msg.z:
             self._base_quiet_until = time.monotonic() + JOYSTICK_HOLD_S
 
-
-def _leaves_body(skill_id: str) -> bool:
-    return skill_id.rsplit("/", 1)[-1] in LEAVES_BODY
+    def _on_robot_info(self, msg: String) -> None:
+        self._mad = is_mad_mode(msg.data)

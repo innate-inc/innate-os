@@ -11,6 +11,7 @@ stopping them and interrupting whatever skill is running.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from std_msgs.msg import String
 
@@ -45,6 +46,8 @@ class BrainLifecycle:
         self._active_inputs_pub = active_inputs_pub
         self._stop_robot = stop_robot
         self._publish_status = publish_status
+        # Bound late by the node: a deactivated robot must not keep emoting (expressive_driver).
+        self.on_deactivate: Callable[[], None] | None = None
 
     # --- activate / deactivate ---
     def activate_brain(self) -> None:
@@ -84,6 +87,8 @@ class BrainLifecycle:
         self._gaze.stop()
         self._active_inputs_pub.publish(String(data=json.dumps({"inputs": []})))
         self._stop_robot()
+        if self.on_deactivate is not None:
+            self.on_deactivate()
         self._publish_status()
         self._chat.emit_system(f"{self._directive_label()} stopped.")
 

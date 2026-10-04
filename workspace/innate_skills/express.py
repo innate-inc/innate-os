@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 
-from std_msgs.msg import Empty, String
+from std_msgs.msg import String
 
 from innate import Skill, SkillReturn
 
@@ -38,7 +38,7 @@ class Express(Skill):
 
         self.node.create_subscription(String, STATE_TOPIC, on_state, 10)
         prompts = self.node.create_publisher(String, PROMPT_TOPIC, 10)
-        stop = self.node.create_publisher(Empty, STOP_TOPIC, 10)
+        stop = self.node.create_publisher(String, STOP_TOPIC, 10)
         # A fresh publisher drops what it sends before the driver has matched it.
         self.wait_for(lambda: True if prompts.get_subscription_count() else None, timeout=1.0)
         request_id = uuid.uuid4().hex[:12]
@@ -46,23 +46,33 @@ class Express(Skill):
         if not wait:
             return f"Expressing '{prompt}'"
 
-        self.on_cancel(lambda: stop.publish(Empty()))
+        self.on_cancel(lambda: stop.publish(String()))
         # Done when a generated clip has played out; a stand-in alone is waited past, in case its
         # replacement is still on the way (none comes when generation fell back to the preset).
         played: dict = {}
+        superseded = False  # a newer expression took the stage: the driver drops ours by itself
         deadline = time.monotonic() + START_TIMEOUT_S
         while time.monotonic() < deadline:
             now = time.monotonic()
             current = dict(state)
             if now - current.get("seen_at", now) > STATE_STALE_S:
                 break
-            if current.get("id") == request_id and current.get("playing"):
+            ours = current.get("id") == request_id
+            if ours and current.get("playing"):
                 played = current
                 remaining = float(current.get("duration") or 0.0) - float(current.get("t") or 0.0)
                 deadline = max(deadline, now + remaining + FINISH_GRACE_S)
-            elif played and played.get("source") != STAND_IN:
+            elif played and (played.get("source") != STAND_IN or current.get("playing")):
+                superseded = not ours and bool(current.get("playing"))
                 break
             self.sleep(0.1)
+        if played.get("source") in (None, STAND_IN) and not superseded:
+            stop.publish(String())  # the clip still being made must not play after this run gave up on it
         if not played:
             self.fail(f"The expression '{prompt}' never started (is expressive.enabled on?)")
+        if played.get("source") == STAND_IN:
+            return (
+                f"Only a quick '{played.get('name')}' gesture played for '{prompt}': the full expression "
+                f"was not ready within {START_TIMEOUT_S:.0f} s and was cancelled"
+            )
         return f"Expressed '{prompt}' ({played.get('name')}, from the {played.get('source')})"
