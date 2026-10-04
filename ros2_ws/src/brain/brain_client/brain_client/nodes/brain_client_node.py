@@ -47,6 +47,7 @@ from brain_client.agents.studio import (
     studio_fields,
 )
 from brain_client.brain.agent import BrainAgent
+from brain_client.brain.context import split_emotes
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
 from brain_client.brain.utils import EventKind
@@ -515,9 +516,13 @@ class BrainClientNode(Node):
 
     def _on_tts(self, msg: String) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the
-        robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
-        text = msg.data
-        if text and text.strip():
+        robot says aloud belongs in the transcript, or Skill.say goes unrecorded.
+        Emote tags are played, never spoken, exactly as on the agent-reply path."""
+        text, emotes = split_emotes(msg.data)
+        for prompt in emotes:
+            if self.chat.on_emote is not None:
+                self.chat.on_emote(prompt)
+        if text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self.chat.emit(Sender.ROBOT, text)
 
