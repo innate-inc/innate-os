@@ -128,8 +128,7 @@ class ExpressiveConfig:
             enabled_parts=_parts(node.declare_parameter("expressive.enabled_parts", sorted(ALL_PARTS)).value),
             speech_latency_s=float(node.declare_parameter("expressive.speech_latency_s", 0.0).value or 0.0),
             camera_clear=bool(node.declare_parameter("expressive.camera_clear", False).value),
-            hold_joints=held_joints(node.declare_parameter("expressive.hold_joints", Parameter.Type.STRING_ARRAY).value)
-            or frozenset(),
+            hold_joints=held_joints(node.declare_parameter("expressive.hold_joints", [""]).value) or frozenset(),
             server_url=str(node.declare_parameter("expressive.server_url", "").value),
             on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
             on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
