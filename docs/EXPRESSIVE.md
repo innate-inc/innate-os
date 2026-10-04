@@ -276,6 +276,8 @@ cd expressive
 # per judge: gemini (Gemini 3.1 Pro watches each video, via the Innate proxy) or openai (GPT-5.5 reads each strip)
 uv run --extra flow mars-express eval --judge gemini --n 3 \
     --flow out/models/generator.pt --pair flow,lively --pair lively,direct
+uv run --extra flow mars-express eval --judge gemini --n 3 --camera human --only 'preset-*' \
+    --arms lively,flow --flow out/models/generator.pt         # the head-height camera, cached apart
 uv run mars-express eval --report-only --snapshot eval/   # rebuild REPORT.md + the committed copy
 ```
 
@@ -337,6 +339,13 @@ What the results say (details in the report):
   clips the head "jerks up"; GPT-5.5, reading stills, says down 17 times out of 18 head mentions. Every
   slump becomes a startle on video, so the negative presets fail there. The head needs a visible face,
   and the judge video wants a camera nearer the head's height.
+- **Camera height.** Re-judging the 17 presets (lively and flow) with Gemini from a head-height
+  camera (`--camera human`: eye 0.41 m, 1.5 m away, looking down 8°, 30° off heading) doubles "head
+  down" for the gaze-down presets, from 8 to 15 of 30 readings, while 16 still say up. Recognition
+  drops, though: lively top-3 36 → 14 %, flow 57 → 21 %, and "neutral" becomes the commonest label as
+  the arm's shapes flatten into the body. The elevated view stays the default; the gaze needs a face
+  on the head, not a lower camera. That run is cached apart (`strips@human/`, `videos@human/`,
+  `judged/<judge>@human/`), so the numbers above stand.
 - **The reach silhouette.** 50 of 64 clips unfold the arm, and 93 % (GPT-5.5) and 57 % (Gemini) of
   their descriptions say reach, point, present or wave. Angry's forward lunge reads as "reaching out
   for a hug", and agreeing's nods with the arm held forward as "presenting something".

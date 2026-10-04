@@ -209,9 +209,15 @@ def _ab_line(name: str, row: dict[str, float]) -> str:
 def confusion_png(scored: list[Scored], arm: str, png: Path, title: str) -> Path:
     """Mean judge probability per (preset, label): hand-written recipes beside the planner's."""
     names = list(presets.PRESETS)
-    panels = [("hand-written recipe", "preset"), ("planner (LLM) recipe", "llm")]
-    fig, axes = plt.subplots(1, 2, figsize=(17, 7.6), sharey=True, layout="constrained")
-    for ax, (panel, source) in zip(axes, panels, strict=True):
+    panels = [
+        (panel, source)
+        for panel, source in (("hand-written recipe", "preset"), ("planner (LLM) recipe", "llm"))
+        if any(s.arm == arm and s.item.group == "preset" and s.item.source == source for s in scored)
+    ]
+    fig, axes = plt.subplots(
+        1, len(panels), figsize=(8.5 * len(panels), 7.6), sharey=True, layout="constrained", squeeze=False
+    )
+    for ax, (panel, source) in zip(axes[0], panels, strict=True):
         by_name = {
             s.item.id.split("-", 1)[1]: s
             for s in scored
@@ -381,7 +387,7 @@ def body_section(
     return lines, numbers
 
 
-def _strip_block(out: Path, s: Scored) -> list[str]:
+def _strip_block(s: Scored, strips: str) -> list[str]:
     top = ", ".join(f"{label} {s.mean[LABELS.index(label)]:.2f}" for label in s.ranked[:3])
     said = "; ".join(f"“{d}”" for d in s.descriptions)
     return [
@@ -390,7 +396,7 @@ def _strip_block(out: Path, s: Scored) -> list[str]:
         f"labels: {top} · expected {', '.join(s.item.expects) or '(none: description only)'} · "
         f"grades {s.grades} · alive {s.alive:.1f} · readable {s.readable:.1f}",
         "",
-        f"![{s.item.id}](strips/{s.item.id}.{s.arm}.png)",
+        f"![{s.item.id}]({strips}/{s.item.id}.{s.arm}.png)",
         "",
     ]
 
@@ -425,6 +431,7 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
         if not scored:
             continue
         tag = root.name
+        judge, _, camera = tag.partition("@")
         all_scored[tag] = scored
         rec_lines, rec = recognition_table(scored, arms)
         ab = {f"{a}-{b}": ab_table(root, catalog, (a, b)) for a, b in pairings(root)}
@@ -432,11 +439,11 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
             scored,
             "lively",
             out / f"confusion.{tag}.png",
-            f"Blind judge {tag}: mean probability per label (lively arm; orange box = target label)",
+            f"{judge}{', camera ' + camera if camera else ''}: mean probability per label (lively; orange = target)",
         )
         metrics[tag] = {"recognition": rec, "ab": {pairing: numbers for pairing, (_, numbers) in ab.items()}}
         lines += [
-            f"## Judge `{tag}`",
+            f"## Judge `{judge}`" + (f" · camera `{camera}`" if camera else ""),
             "",
             *rec_lines,
             "",
@@ -459,10 +466,10 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
         ranked = sorted(lively, key=lambda s: (_mean(s.grades) if s.grades else 0.0) + s.p_target)
         lines += ["### Clearest reads", ""]
         for s in ranked[::-1][:3]:
-            lines += _strip_block(out, s)
+            lines += _strip_block(s, f"strips{'@' + camera if camera else ''}")
         lines += ["### Worst reads", ""]
         for s in ranked[:4]:
-            lines += _strip_block(out, s)
+            lines += _strip_block(s, f"strips{'@' + camera if camera else ''}")
     if all_scored:
         body_lines, metrics["body"] = body_section(out, catalog, all_scored)
         lines += ["## What the body does", "", *body_lines, ""]
@@ -488,7 +495,8 @@ def _snapshot(out: Path, report: Path, dest: Path) -> None:
         source = out / name
         if not source.exists():
             continue
-        target = figures / (Path(name).stem + ".jpg")
+        camera = Path(name).parent.name.partition("@")[2]
+        target = figures / f"{camera + '.' if camera else ''}{Path(name).stem}.jpg"
         image = Image.open(source).convert("RGB")
         image.thumbnail((1100, 1100))
         image.save(target, quality=70, optimize=True)

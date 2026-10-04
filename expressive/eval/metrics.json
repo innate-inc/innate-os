@@ -180,6 +180,33 @@
    }
   }
  },
+ "gemini-gemini-3.1-pro-preview@human": {
+  "recognition": {
+   "hand-written preset recipes | lively": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.14285714285714285,
+    "top3": 0.14285714285714285,
+    "p_target": 0.10595238095238094,
+    "described": 0.47058823529411764,
+    "named": 0.11764705882352941,
+    "alive": 2.235294117647059,
+    "readable": 3.4313725490196076
+   },
+   "hand-written preset recipes | flow": {
+    "clips": 17,
+    "labelled": 14,
+    "top1": 0.07142857142857142,
+    "top3": 0.21428571428571427,
+    "p_target": 0.08452380952380953,
+    "described": 0.4313725490196078,
+    "named": 0.0784313725490196,
+    "alive": 2.215686274509804,
+    "readable": 3.4313725490196076
+   }
+  },
+  "ab": {}
+ },
  "openai-gpt-5.5": {
   "recognition": {
    "hand-written preset recipes | lively": {
@@ -375,6 +402,20 @@
    "described": 0.4333333333333333,
    "alive": 2.5466666666666664,
    "gesture_words": 0.5666666666666667
+  },
+  "gemini-gemini-3.1-pro-preview@human | stays folded": {
+   "clips": 9,
+   "p_target": 0.11190476190476191,
+   "described": 0.4074074074074074,
+   "alive": 2.0740740740740744,
+   "gesture_words": 0.037037037037037035
+  },
+  "gemini-gemini-3.1-pro-preview@human | unfolds": {
+   "clips": 8,
+   "p_target": 0.1,
+   "described": 0.5416666666666666,
+   "alive": 2.416666666666667,
+   "gesture_words": 0.5833333333333334
   },
   "openai-gpt-5.5 | stays folded": {
    "clips": 14,

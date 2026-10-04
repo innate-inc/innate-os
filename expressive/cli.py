@@ -126,7 +126,13 @@ def _eval(args: argparse.Namespace) -> None:
     arms = dict(ARMS) | dict(load_arm(spec) for spec in args.arm)
     if args.flow:
         arms["flow"] = flow(args.flow)
-    pairs = [tuple(spec.split(",")) for spec in args.pair or ["lively,direct"]]
+    if args.arms:
+        chosen = args.arms.split(",")
+        if not set(chosen) <= set(arms):
+            raise SystemExit(f"--arms wants some of {sorted(arms)}, got {args.arms!r}")
+        arms = {name: arms[name] for name in chosen}
+    default_pairs = ["lively,direct"] if {"lively", "direct"} <= set(arms) else []
+    pairs = [tuple(spec.split(",")) for spec in args.pair or default_pairs]
     for pair in pairs:
         if len(pair) != 2 or not set(pair) <= set(arms):
             raise SystemExit(f"--pair wants two of {sorted(arms)}, got {','.join(pair)!r}")
@@ -141,6 +147,8 @@ def _eval(args: argparse.Namespace) -> None:
         pairs=tuple((pair[0], pair[1]) for pair in pairs),
         workers=args.workers,
         probes=not args.no_probes,
+        camera=args.camera,
+        only=tuple(args.only),
     )
     print(run(cfg, report_only=args.report_only, snapshot=Path(args.snapshot) if args.snapshot else None))
 
@@ -217,6 +225,11 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument(
         "--pair", action="append", help="two arms to A/B, e.g. flow,lively (repeatable; default lively,direct)"
     )
+    evaluate.add_argument("--arms", help="comma-separated subset of the arms to build and judge, e.g. lively,flow")
+    evaluate.add_argument(
+        "--camera", choices=("three-quarter", "human"), default="three-quarter", help="human: eye at head height"
+    )
+    evaluate.add_argument("--only", action="append", default=[], help="item ids to run (fnmatch), e.g. 'preset-*'")
     evaluate.add_argument("--out", default=str(OUT / "eval"))
     evaluate.add_argument("--workers", type=int, default=8)
     evaluate.add_argument("--no-probes", action="store_true")

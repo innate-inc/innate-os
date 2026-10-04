@@ -4,7 +4,7 @@ Every clip is judged blind: the judge sees the motion (Gemini: the physically si
 
 Regenerate (per judge, cached under `out/eval/`): `cd expressive && uv run --extra flow mars-express eval --judge gemini --n 3 --flow out/models/generator.pt --pair flow,lively --pair lively,direct`.
 
-Core library at `10d0232cc expressive: basis v6 and presets tuned against the blind judge; osc and snaps reach the body` (clips built 2026-10-04 00:12).
+Core library at `10d0232cc expressive: basis v6 and presets tuned against the blind judge; osc and snaps reach the body` (clips built 2026-10-04 00:32).
 
 ## Judge `gemini-gemini-3.1-pro-preview`
 
@@ -85,6 +85,61 @@ judges said: “pointing at something”; “startled and frozen”; “noticing
 labels: startled 0.40, curious 0.23, neutral 0.17 · expected (none: description only) · grades [0, 0, 0] · alive 1.7 · readable 4.0
 
 ![llm-agreeing](figures/llm-agreeing.lively.jpg)
+
+## Judge `gemini-gemini-3.1-pro-preview` · camera `human`
+
+| prompts | arm | clips | top-1 | top-3 | p(target) | described ≥ related | named exactly | alive 1-5 | readable 1-5 |
+|---|---|---|---|---|---|---|---|---|---|
+| hand-written preset recipes | lively | 17 | 14% | 14% | 11% | 47% | 12% | 2.24 | 3.43 |
+| hand-written preset recipes | flow | 17 | 7% | 21% | 8% | 43% | 8% | 2.22 | 3.43 |
+
+![confusion](figures/confusion.gemini-gemini-3.1-pro-preview@human.jpg)
+
+### Clearest reads
+
+**preset-excited** (lively) — prompt: *excited. You can hardly wait.*  
+judges said: “excitedly barking or snapping”; “cheering and clapping excitedly”; “excitedly waving to get attention”  
+labels: excited 0.43, happy 0.23, playful 0.17 · expected excited · grades [2, 2, 2] · alive 3.3 · readable 4.0
+
+![preset-excited](figures/human.preset-excited.lively.jpg)
+
+**preset-sleepy** (lively) — prompt: *sleepy. You keep nodding off.*  
+judges said: “falling asleep”; “waking up slowly”; “startled and scared”  
+labels: sleepy 0.42, startled 0.23, calm 0.10 · expected sleepy · grades [2, 1, 0] · alive 3.0 · readable 4.3
+
+![preset-sleepy](figures/human.preset-sleepy.lively.jpg)
+
+**preset-affectionate** (lively) — prompt: *affectionate. You are happy to see a friend.*  
+judges said: “reaching up calmly”; “proudly presenting or reaching up”; “friendly greeting or wave”  
+labels: proud 0.18, neutral 0.17, happy 0.17 · expected affectionate · grades [1, 1, 2] · alive 2.0 · readable 3.0
+
+![preset-affectionate](figures/human.preset-affectionate.lively.jpg)
+
+### Worst reads
+
+**preset-bored** (lively) — prompt: *bored. Nothing is happening.*  
+judges said: “suddenly noticing something”; “turning to face a new direction”; “simple mechanical turn”  
+labels: neutral 0.33, curious 0.30, calm 0.13 · expected bored · grades [0, 0, 0] · alive 1.7 · readable 3.0
+
+![preset-bored](figures/human.preset-bored.lively.jpg)
+
+**preset-listening** (lively) — prompt: *listening. Someone is talking to you.*  
+judges said: “idly opening and closing claw”; “slowly extending arm and holding”; “feeling sad and drooping”  
+labels: sad 0.28, bored 0.22, neutral 0.18 · expected calm, curious · grades [0, 0, 0] · alive 2.0 · readable 3.0
+
+![preset-listening](figures/human.preset-listening.lively.jpg)
+
+**preset-surprised** (lively) — prompt: *surprised. That came out of nowhere.*  
+judges said: “looking up slowly”; “slowly raising head to look”; “calmly looking up or waking”  
+labels: curious 0.37, calm 0.33, neutral 0.27 · expected startled · grades [0, 1, 0] · alive 1.7 · readable 3.0
+
+![preset-surprised](figures/human.preset-surprised.lively.jpg)
+
+**preset-angry** (lively) — prompt: *angry. You have had enough.*  
+judges said: “startled then sad”; “looking around curiously”; “startled then relaxing”  
+labels: startled 0.37, curious 0.23, confused 0.13 · expected angry · grades [1, 0, 0] · alive 3.7 · readable 4.0
+
+![preset-angry](figures/human.preset-angry.lively.jpg)
 
 ## Judge `openai-gpt-5.5`
 
@@ -196,6 +251,8 @@ Every lively clip split by whether the arm leaves the fold (gripper travel ≥ 1
 |---|---|---|---|---|---|---|
 | gemini-gemini-3.1-pro-preview | stays folded | 14 | 13% | 50% | 2.60 | 10% |
 | gemini-gemini-3.1-pro-preview | unfolds | 50 | 15% | 43% | 2.55 | 57% |
+| gemini-gemini-3.1-pro-preview@human | stays folded | 9 | 11% | 41% | 2.07 | 4% |
+| gemini-gemini-3.1-pro-preview@human | unfolds | 8 | 10% | 54% | 2.42 | 58% |
 | openai-gpt-5.5 | stays folded | 14 | 17% | 76% | 2.86 | 10% |
 | openai-gpt-5.5 | unfolds | 50 | 17% | 65% | 3.03 | 93% |
 
@@ -252,6 +309,16 @@ kinematic head angles agree to 0.5°). This is how a standing person sees MARS t
 looks down on it. The head needs a visible face (eyes or a light on its front) so "down" reads as
 hiding the face, and the judge video wants a camera nearer the head's height.
 
+**1b. A head-height camera does not rescue it (measured).** Re-judged with Gemini from a `human`
+camera (`--camera human`: eye 0.41 m, 1.5 m away, looking down 8°, 30° off the robot's heading; the
+robot fills 46 % folded to 75 % as a mast of the frame height), the 17 presets × lively and flow.
+"Head down" for the gaze-down presets rises from 8 to 15 of 30 readings, and "up" falls from 19 to 16:
+better, but still a coin toss. Recognition gets worse. Lively top-1 / top-3 / related is
+14 / 14 / 47 % (elevated: 7 / 36 / 45 %), flow 7 / 21 / 43 % (elevated: 29 / 57 / 37 %), and alive
+drops 2.47 → 2.24. From head height the arm's shapes flatten into the body and "neutral" becomes
+the commonest label. The elevated view stays the default. The gaze needs a face on the head, not
+a different camera.
+
 **2. Two silhouettes still dominate.** 50 of 64 lively clips swing the gripper ≥ 10 cm out of the fold,
 and the judges describe the shape. 93 % (GPT-5.5) and 57 % (Gemini) of their descriptions of those
 clips say reach, point, present, raise or wave, against 10 % for clips that stay folded. Angry (a
@@ -302,5 +369,5 @@ against 1.4° breathing, and on the stack it shows as 1-2° steps of the whole-d
    forward (angry as a raised, cocked claw rather than a lunge; agreeing with the arm folded).
 3. **Ship the flow generator** for the planner path. It read as more alive in both judges' agreed
    rounds, and at least as recognisable.
-4. **Judge camera:** add a view at the head's height (or the person's-eye `front` view) to the video
-   judge, and count only agreed A/B rounds.
+4. **Judge camera:** keep the elevated three-quarter view (the head-height `human` camera reads worse,
+   point 1b), and count only agreed A/B rounds.

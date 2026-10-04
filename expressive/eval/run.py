@@ -11,6 +11,7 @@ report   metrics.json, confusion.png, REPORT.md
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import subprocess
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, TypedDict, TypeVar
 
 import _core  # noqa: F401
+import numpy as np
 
 from brain_client.expressive import planner, probes
 from brain_client.expressive.motion import Clip
@@ -30,7 +32,7 @@ from eval.arms import ARMS, Generator, make_clip
 from eval.judge import Judge, JudgeKind, Media, Reading, Verdict
 from eval.llm import Chat, load_env, openai_chat
 from eval.prompts import Item, items
-from eval.strips import Filmstrip, render_blind_video
+from eval.strips import DEFAULT_CAMERA, Filmstrip, render_blind_video
 
 logger = logging.getLogger("mars-express.eval")
 T = TypeVar("T")
@@ -60,6 +62,13 @@ class Config:
     workers: int = 8
     render_workers: int = 4
     probes: bool = True
+    camera: str = DEFAULT_CAMERA
+    only: tuple[str, ...] = ()  # item-id patterns (fnmatch); empty = every item
+
+    @property
+    def view(self) -> str:
+        """Suffix of the media and judgment directories: the default camera has none, so its cache stands."""
+        return "" if self.camera == DEFAULT_CAMERA else f"@{self.camera}"
 
 
 def _read(path: Path) -> Any:
@@ -159,19 +168,29 @@ def clip_path(cfg: Config, item: Item, arm: str) -> Path:
 
 
 def media_of(cfg: Config, item: Item, arm: str) -> Media:
-    return Media(cfg.out / "strips" / f"{item.id}.{arm}.png", cfg.out / "videos" / f"{item.id}.{arm}.mp4")
+    strips, videos = cfg.out / f"strips{cfg.view}", cfg.out / f"videos{cfg.view}"
+    return Media(strips / f"{item.id}.{arm}.png", videos / f"{item.id}.{arm}.mp4")
 
 
-def _render_video(job: tuple[str, str]) -> str:
-    clip_json, mp4 = job
-    return str(render_blind_video(Clip.load(Path(clip_json)), Path(mp4)))
+def _render_video(job: tuple[str, str, str]) -> str:
+    clip_json, mp4, camera = job
+    return str(render_blind_video(Clip.load(Path(clip_json)), Path(mp4), camera))
+
+
+def _changed(path: Path, clip: Clip) -> bool:
+    """Whether ``clip`` differs from the one saved at ``path`` beyond the JSON's rounding."""
+    if not path.exists():
+        return False
+    saved = Clip.load(path)
+    same = saved.recipe == clip.recipe and saved.frames.shape == clip.frames.shape
+    return not (same and np.allclose(saved.frames, clip.frames, atol=2e-4))
 
 
 def build_media(cfg: Config, todo: list[Item], plans: Mapping[str, Planned]) -> list[tuple[Item, str]]:
     """Clips, strips and videos for every playable (item, arm); returns the playable pairs."""
     playable: list[tuple[Item, str]] = []
-    filmstrip = Filmstrip()
-    videos: list[tuple[str, str]] = []
+    filmstrip = Filmstrip(cfg.camera)
+    videos: list[tuple[str, str, str]] = []
     for item in todo:
         recipe = recipe_of(item, plans)
         if recipe is None:
@@ -180,14 +199,14 @@ def build_media(cfg: Config, todo: list[Item], plans: Mapping[str, Planned]) -> 
         for arm, generator in cfg.arms.items():
             clip = make_clip(recipe, generator, seed_of(item), name=item.id, prompt=item.prompt, idea=idea)
             path = clip_path(cfg, item, arm)
-            if path.exists() and path.read_text() != json.dumps(clip.to_dict()):
+            if _changed(path, clip):
                 _forget(cfg, item, arm)
             clip.save(path)
             media = media_of(cfg, item, arm)
             if not media.strip.exists():
                 filmstrip.render(clip, media.strip)
             if not media.video.exists():
-                videos.append((str(clip_path(cfg, item, arm)), str(media.video)))
+                videos.append((str(path), str(media.video), cfg.camera))
             playable.append((item, arm))
     logger.info("media: %d strips ready, rendering %d videos", len(playable), len(videos))
     with ProcessPoolExecutor(cfg.render_workers) as pool:
@@ -199,8 +218,7 @@ def build_media(cfg: Config, todo: list[Item], plans: Mapping[str, Planned]) -> 
 
 def _forget(cfg: Config, item: Item, arm: str) -> None:
     """A clip that changed (a new plan, a retuned generator) takes its media and every judgment with it."""
-    media = media_of(cfg, item, arm)
-    stale = [media.strip, media.video]
+    stale = [*cfg.out.glob(f"strips*/{item.id}.{arm}.png"), *cfg.out.glob(f"videos*/{item.id}.{arm}.mp4")]
     stale += list((cfg.out / "judged").glob(f"*/*/{item.id}.{arm}.json"))
     stale += [
         path
@@ -222,7 +240,7 @@ def judge_tag(judge: Judge) -> str:
 
 def judge_all(cfg: Config, playable: list[tuple[Item, str]]) -> None:
     judge = Judge(cfg.judge, cfg.judge_model)
-    root = cfg.out / "judged" / judge_tag(judge)
+    root = cfg.out / "judged" / f"{judge_tag(judge)}{cfg.view}"
 
     def readings(job: tuple[Item, str]) -> None:
         item, arm = job
@@ -281,7 +299,7 @@ def run(cfg: Config, report_only: bool = False, snapshot: Path | None = None) ->
     from eval.report import write_report
 
     load_env()
-    todo = items()
+    todo = [i for i in items() if not cfg.only or any(fnmatch.fnmatch(i.id, pattern) for pattern in cfg.only)]
     if not report_only:
         plans = plan(cfg, todo)
         if cfg.probes:
