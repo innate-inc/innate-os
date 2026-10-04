@@ -6,7 +6,8 @@ A recipe is segments separated by ``|``, starting from NEUTRAL::
 
     go D k=v ...              cosine-ease to the targets over D s (0.15-0.3 s = a snap)
     hold D [E=v]              stay in the pose (optionally easing the energy)
-    osc D ch amp per [E=v]    sinusoid on channel ch (amplitude amp, period per >= 0.3 s) around the pose
+    osc D ch amp per [E=v]    sinusoid on channel ch (amplitude amp, period per >= 0.3 s) around the pose;
+                              ch is a letter or its gesture word (nod bob sway lean turn chatter)
 
 Keys are the DSL letters of ``channels.CHANNELS`` (a x z p k b d g E). Each segment lasts 0.05-10 s
 and the written total at most 30 s.
@@ -31,6 +32,8 @@ MAX_SEGMENT_S = 10.0
 MAX_TOTAL_S = 30.0
 MIN_OSC_PERIOD_S = 0.3
 OSC_RAMP_S = 0.3
+# The prompt names each osc channel by its gesture ("nod (p)"); planners often write the word.
+OSC_ALIASES = {"nod": "p", "bob": "z", "sway": "k", "lean": "a", "turn": "b", "chatter": "g"}
 _SCALED = {Ch.APPROACH, Ch.EXPAND, Ch.RISE, Ch.ATTEND, Ch.ASKEW, Ch.ORIENT, Ch.ADVANCE}
 _KEYS = " ".join(c.dsl for c in CHANNELS)
 
@@ -71,9 +74,9 @@ def _cosine_ease(start: Frames, target: Frames, count: int) -> Frames:
 def _osc(tokens: list[str], current: Frames, count: int, amp: float, rng: Mulberry32 | None, segment: str) -> Frames:
     if len(tokens) < 5:
         raise RecipeError(f"osc needs: osc D ch amp period, got {segment!r}")
-    channel = tokens[2]
+    channel = OSC_ALIASES.get(tokens[2], tokens[2])
     if channel not in DSL_INDEX or channel == "E":
-        raise RecipeError(f"osc on unknown channel {channel!r} (use {_KEYS[:-2]})")
+        raise RecipeError(f"osc on unknown channel {channel!r} (use {_KEYS[:-2]} or {' '.join(OSC_ALIASES)})")
     index = DSL_INDEX[channel]
     amplitude, period = _number(tokens[3], segment), _number(tokens[4], segment)
     if period < MIN_OSC_PERIOD_S:

@@ -96,20 +96,6 @@ class _Idle:
 
 
 @dataclass(frozen=True)
-class _Still:
-    vector: Vector
-
-    def sample(self, t: float) -> Vector:
-        return self.vector.copy()
-
-    def moving(self, t: float) -> float:
-        return 0.0
-
-    def settle(self, t: float) -> _Source:
-        return self
-
-
-@dataclass(frozen=True)
 class _Playing:
     clip: Clip
     start: float
@@ -175,7 +161,8 @@ class Animator:
         self._current: _Playing | None = None
         self._queue: deque[Clip] = deque()
         self._interrupt = False
-        self._enter_from: tuple[Vector, float] | None = None
+        self._entry_request: tuple[Vector, float] | None = None
+        self._entry: tuple[Vector, float, float] | None = None  # (measured pose, start, seconds)
         self._last: tuple[float, Vector] | None = None
         self._generation = 0
         self._sway = _Ramp(speech_sway)
@@ -201,10 +188,10 @@ class Animator:
         self._schedule(clip, queue, generation)
 
     def enter_from(self, pose: ActuatorPose, seconds: float = 1.5) -> None:
-        """Crossfade from ``pose`` (where the robot is now) into the animation over ``seconds`` on the next tick."""
+        """Crossfade from ``pose`` (where the robot is now) into the animation over ``seconds``, starting on the
+        next tick; call it on start and whenever a masked part is handed back."""
         with self._lock:
-            self._enter_from = (pose.vector.copy(), seconds)
-            self._last = None
+            self._entry_request = (pose.vector.copy(), seconds)
 
     def stop(self) -> None:
         with self._lock:
@@ -272,10 +259,11 @@ class Animator:
             if self._interrupt or finished or (self._current is None and self._queue):
                 self._interrupt = False
                 self._enter(self._queue.popleft() if self._queue else None, t)
-            if self._enter_from is not None:
-                vector, seconds = self._enter_from
-                self._enter_from = None
-                self._source = _Crossfade(_Still(vector), self._source.settle(t), t, seconds)
+            if self._entry_request is not None:
+                measured, seconds = self._entry_request
+                self._entry_request = None
+                self._entry = (measured, t, seconds)
+                self._last = (t - 1.0 / self.fps, measured)
             self._source = self._source.settle(t)
             moving = self._source.moving(t)
             gain = self._sway.at(t) * (1.0 - moving + moving * self._sway_in_motion.at(t))
@@ -284,11 +272,23 @@ class Animator:
             vector[Act.HEAD_DEG] += self._gaze_weight.at(t) * (self._gaze_value.at(t) - neutral[Act.HEAD_DEG])
             for part, indices in _PARTS.items():
                 vector[indices] = neutral[indices] + self._masks[part].at(t) * (vector[indices] - neutral[indices])
+            vector = self._blend_entry(vector, t)
             vector = self._basis.clamp(vector)
             if self._last is not None and t > self._last[0]:
                 vector = self._basis.limit(self._last[1], vector, t - self._last[0])
             self._last = (t, vector)
             return ActuatorPose(vector.copy())
+
+    def _blend_entry(self, vector: Vector, t: float) -> Vector:
+        """Last layer, so an entry starts exactly at the measured pose whatever the masks are doing."""
+        if self._entry is None:
+            return vector
+        measured, start, seconds = self._entry
+        weight = _smoothstep(t, start, seconds)
+        if weight >= 1.0:
+            self._entry = None
+            return vector
+        return (1.0 - weight) * measured + weight * vector
 
     def on_pose(self, callback: PoseCallback) -> PoseCallback:
         """Register a tick-thread callback; each callback receives its own pose vector."""

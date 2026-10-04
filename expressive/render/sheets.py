@@ -64,7 +64,7 @@ def contact_sheet(
     """``columns x rows`` evenly spaced kinematic stills of a clip, timestamped."""
     basis = basis or Basis.load()
     stage = stage or Stage(size=(320, 320))
-    actuators = clip.actuator_frames(basis)
+    actuators = basis.limit_frames(clip.actuator_frames(basis), 1.0 / clip.fps)
     count = columns * rows
     picks = np.linspace(0, len(actuators) - 1, count).round().astype(int)
     tiles = []

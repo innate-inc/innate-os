@@ -193,19 +193,30 @@ class Basis:
         return clearance_floor(j1, self.low[Act.J2], self.guard_min)
 
     def limit(self, previous: Vector, target: Vector, dt: float) -> Vector:
-        """Step from ``previous`` toward ``target`` within ``max_speed``; j1 may only sweep into the front
-        arc as fast as j2 can rise over the clearance floor (else the floor would yank j2 up)."""
+        """Step from ``previous`` toward ``target`` within ``max_speed``, keeping the shoulder clearance.
+
+        j1 may only sweep into the front arc as fast as j2 can rise over the clearance floor, and the
+        rate limit is re-applied after the clamp, so no step ever exceeds ``max_speed * dt`` (a
+        ``previous`` that already violates the floor climbs out at j2's top speed).
+        """
         step = self.max_speed * dt
-        q = self.clamp(previous + np.clip(target - previous, -step, step))
-        allowed_j2 = previous[Act.J2] + step[Act.J2]
-        if self._floor(q[Act.J1]) <= allowed_j2:
-            return q
-        lo, hi = float(previous[Act.J1]), float(q[Act.J1])
-        for _ in range(20):
-            mid = 0.5 * (lo + hi)
-            lo, hi = (mid, hi) if self._floor(mid) <= allowed_j2 else (lo, mid)
-        q[Act.J1] = lo
-        return self.clamp(q)
+        q = np.clip(previous + np.clip(target - previous, -step, step), self.low, self.high)
+        bound = max(previous[Act.J2] + step[Act.J2], self._floor(float(previous[Act.J1])))
+        if self._floor(float(q[Act.J1])) > bound:
+            # Within one step j1 cannot cross the front arc's plateau, so the floor is monotonic here.
+            lo, hi = float(previous[Act.J1]), float(q[Act.J1])
+            for _ in range(20):
+                mid = 0.5 * (lo + hi)
+                lo, hi = (mid, hi) if self._floor(mid) <= bound else (lo, mid)
+            q[Act.J1] = lo
+        return np.clip(self.clamp(q), previous - step, previous + step)
+
+    def limit_frames(self, frames: Frames, dt: float) -> Frames:
+        """(T, 9) actuator frames as the robot can follow them: ``limit`` applied frame to frame."""
+        out = np.array(frames, dtype=np.float64)
+        for i in range(1, len(out)):
+            out[i] = self.limit(out[i - 1], out[i], dt)
+        return out
 
     def synthesize(self, row: Frames, project: Projector | None = None) -> ActuatorPose:
         q = self.clamp(self.raw(self.safe_row(row)))

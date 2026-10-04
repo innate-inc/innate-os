@@ -45,10 +45,10 @@ def render_clip(
     lead_s: float = 0.5,
     tail_s: float = 1.0,
 ) -> Path:
-    """Film ``clip`` played physically (servos + odometry-tracked base); ``camera="split"`` films front
-    and three-quarter side by side."""
+    """Film ``clip`` played physically at the robot's speed caps (servos + odometry-tracked base);
+    ``camera="split"`` films front and three-quarter side by side."""
     basis = basis or Basis.load()
-    actuators = clip.resample(VIDEO_FPS).actuator_frames(basis)
+    actuators = basis.limit_frames(clip.resample(VIDEO_FPS).actuator_frames(basis), 1.0 / VIDEO_FPS)
     stage = Stage(env, size)
     _settle(stage, actuators[0])
     tracker = BaseTracker()
