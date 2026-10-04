@@ -46,6 +46,7 @@ from brain_client.common.geometry import quaternion_to_yaw
 from brain_client.expressive import presets
 from brain_client.expressive.basis import Basis
 from brain_client.expressive_driver import vocal
+from brain_client.expressive_driver.utils import held_joints
 
 LOG_DIR = Path("/tmp/expressive_bringup")
 BRAIN = "brain_client_node"
@@ -308,6 +309,8 @@ def check_stage(bench: Bench) -> None:
             "expressive.server_url",
             "expressive.on_skill_completed",
             "expressive.on_skill_failed",
+            "expressive.camera_clear",
+            "expressive.hold_joints",
             "simulator_mode",
             "cmd_vel_topic",
         ]
@@ -573,15 +576,21 @@ def _arm_checks(bench: Bench, start: float, end: float) -> None:
     bad = [s for _, s in probe.window("arm_status", start, end) if not s[0]]
     bench.check("/mars/arm/status during the stage", "ok" if not bad else bad[0][1], not bad)
     commands = probe.window("arm_cmd", start, end)
+    held = held_joints(probe.get_params(["expressive.hold_joints"])["expressive.hold_joints"]) or frozenset()
+    free = [j for j in range(6) if j not in held]
     cap = Basis.load().max_speed[:6] / 30.0
-    ratios = [
-        np.abs(np.subtract(b, a)) / (cap * max((tb - ta) * 30, 1.0))
-        for (ta, a), (tb, b) in pairwise(commands)
-        if tb - ta < 0.1
-    ]
+    steps = [(np.abs(np.subtract(b, a)), tb - ta) for (ta, a), (tb, b) in pairwise(commands) if tb - ta < 0.1]
+    ratios = [(step / (cap * max(dt * 30, 1.0)))[free] for step, dt in steps]
+    for joint in sorted(held):
+        moved = max((float(step[joint]) for step, _ in steps), default=0.0)
+        measured = [q[joint] for _, (q, _) in states]
+        drift = float(np.ptp(measured)) if measured else 0.0
+        bench.check(
+            f"held j{joint + 1}: command steps / measured range", f"{moved:.4f} rad / {drift:.3f} rad", moved < 1e-6
+        )
     worst = float(np.max(ratios)) if ratios else 0.0
     bench.check(
-        "arm step / (max_speed x ticks), worst joint",
+        f"arm step / (max_speed x ticks), worst of {' '.join(f'j{j + 1}' for j in free)}",
         f"{worst:.2f} over {len(commands)} commands",
         worst <= STEP_RATIO_MAX,
     )

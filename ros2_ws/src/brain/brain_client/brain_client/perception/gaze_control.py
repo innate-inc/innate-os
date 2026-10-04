@@ -28,6 +28,7 @@ class GazeController:
         self._tracker = None
         # Where the tracker sends its tilt target; None drives the head servo directly.
         self.head_sink: Callable[[float | None], None] | None = None
+        self.face_sink: Callable[[], None] | None = None
         # pause() runs on the agent's loop thread; everything else on the ROS
         # executor. RLock because update() calls stop().
         self._lock = threading.RLock()
@@ -40,7 +41,7 @@ class GazeController:
                 directive = None
             if directive is not None and self._tracker is None:
                 try:
-                    self._tracker = _tracker_class()(self._node, head_sink=self.head_sink)
+                    self._tracker = _tracker_class()(self._node, head_sink=self.head_sink, face_sink=self.face_sink)
                     self._tracker.start()
                     self._logger.info(f"👁️ Gaze tracker started for directive '{directive.id}'")
                 except Exception as e:

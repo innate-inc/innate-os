@@ -174,13 +174,16 @@ class ROSPersonTracker:
         node,
         camera_topic: str = "/mars/main_camera/left/image_raw",
         head_sink: Callable[[float | None], None] | None = None,
+        face_sink: Callable[[], None] | None = None,
     ):
         """``head_sink`` takes the tilt target instead of the head servo (the expression driver
-        rides on it); it gets ``None`` when tracking stops."""
+        rides on it); it gets ``None`` when tracking stops. ``face_sink`` is called on every frame
+        with a face in it."""
         self._node = node
         self._frame = None
         self._frame_lock = threading.Lock()
         self._head_sink = head_sink
+        self._face_sink = face_sink
 
         # Hardware interfaces
         self._mobility = Mobility(node, node.get_logger(), "/cmd_vel")
@@ -275,6 +278,8 @@ class ROSPersonTracker:
                     best = max(faces, key=lambda f: f["width"] * f["height"])
                     self._gaze.track_face(best, shape)
                     self._last_face_time = time.time()
+                    if self._face_sink is not None:
+                        self._face_sink()
                 elif time.time() - self._last_face_time > self._face_timeout:
                     # Return to neutral after timeout
                     with self._gaze._lock:

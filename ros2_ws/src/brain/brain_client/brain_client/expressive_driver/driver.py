@@ -35,6 +35,7 @@ from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import Twist, Vector3
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, Int32, String
@@ -48,14 +49,21 @@ from brain_client.expressive.motion import Clip
 from brain_client.expressive_driver import vocal
 from brain_client.expressive_driver.sources import ClipMaker, ClipSource, Made
 from brain_client.expressive_driver.stance import StanceTracker
-from brain_client.expressive_driver.utils import ALL_PARTS, Parts, is_mad_mode, leaves_body, parts_of
+from brain_client.expressive_driver.utils import (
+    ALL_PARTS,
+    Parts,
+    clear_camera,
+    held_joints,
+    is_mad_mode,
+    leaves_body,
+    parts_of,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from innate_llm import Provider
     from rclpy.node import Node
-    from rclpy.parameter import Parameter
     from rclpy.publisher import Publisher
 
     from brain_client.core.state import BrainState
@@ -85,6 +93,7 @@ _ACTION_STATUS_QOS = QoSProfile(
     depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL, reliability=QoSReliabilityPolicy.RELIABLE
 )
 REPLY_EMOTE_S = 3.0  # a reaction would repeat what the agent's own emote just said
+PERSON_RECENT_S = 5.0  # a face this recent still counts as someone watching
 
 PROMPT_TOPIC = "/brain/express/prompt"
 PLAY_TOPIC = "/brain/express/play"
@@ -102,6 +111,8 @@ class ExpressiveConfig:
     vocalize: bool  # a short non-verbal sound with an emote nobody is speaking over
     enabled_parts: Parts  # the rest of the body never moves (scripts/expressive_bringup.sh stages it)
     speech_latency_s: float  # how far the speaker trails the speech-sway tap
+    camera_clear: bool  # keep the arm out of the head camera's view while someone is watched
+    hold_joints: frozenset[int]  # arm joints held where they are (a faulty servo on one unit)
     server_url: str
     on_skill_completed: str  # a preset name, or a prompt to generate; "" = no reaction
     on_skill_failed: str
@@ -116,6 +127,9 @@ class ExpressiveConfig:
             vocalize=bool(node.declare_parameter("expressive.vocalize", True).value),
             enabled_parts=_parts(node.declare_parameter("expressive.enabled_parts", sorted(ALL_PARTS)).value),
             speech_latency_s=float(node.declare_parameter("expressive.speech_latency_s", 0.0).value or 0.0),
+            camera_clear=bool(node.declare_parameter("expressive.camera_clear", False).value),
+            hold_joints=held_joints(node.declare_parameter("expressive.hold_joints", Parameter.Type.STRING_ARRAY).value)
+            or frozenset(),
             server_url=str(node.declare_parameter("expressive.server_url", "").value),
             on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
             on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
@@ -195,7 +209,10 @@ class ExpressionDriver:
         self._reply_emote_at = -math.inf
         self._gaze = False
         self._streaming = False
-        self._grip_lock: float | None = None
+        self._hold = config.hold_joints
+        self._pins: dict[int, float] = {}  # arm joint -> the angle every streamed command keeps it at
+        self._reenter = False
+        self._person_at = -math.inf
         self._pose: ActuatorPose | None = None
         self._head_cmd: int | None = None
         self._head_on = False
@@ -278,6 +295,10 @@ class ExpressionDriver:
         self._animator.interrupt_speech()
         self._abandon_stance = True
 
+    def saw_person(self) -> None:
+        """The gaze tracker found a face in the head camera's frame (its thread)."""
+        self._person_at = time.monotonic()
+
     def set_gaze(self, head_deg: float | None) -> None:
         """The gaze tracker's tilt target; the expression rides on it, and leaves the base to it."""
         self._gaze = head_deg is not None
@@ -350,7 +371,10 @@ class ExpressionDriver:
         """Synthesize ``made`` to actuator frames here, off the executor and outside the lock."""
         if seq != self._seq:
             return  # superseded while queued: spare the synthesis
-        prepared = made.clip.to_actuators(self._basis).resample(FPS)
+        clip = made.clip
+        if made.source != ClipSource.PLAYED and clip.space == "plan" and self._watched():
+            clip = clear_camera(clip)  # eye contact over full excursions; a clip played as authored stays so
+        prepared = clip.to_actuators(self._basis).resample(FPS)
         with self._lock:
             if seq != self._seq or (made.source == ClipSource.STAND_IN and self._final_seq == seq):
                 return
@@ -397,8 +421,10 @@ class ExpressionDriver:
         held = masked | (ALL_PARTS - self._enabled)
         live = now < self._live_until
         streaming = live and "arm" not in held and now >= self._arm_quiet_until and not self._mad
-        entering = streaming and not self._streaming
+        streaming = streaming and (self._joints is not None or not self._hold)  # a held joint needs its angle
+        entering = streaming and (not self._streaming or self._reenter)
         if entering:
+            self._reenter = False
             self._enter_from_measured()
         self._streaming = streaming
         head_on = (live or self._gaze) and "head" not in held and now >= self._head_quiet_until
@@ -415,10 +441,13 @@ class ExpressionDriver:
             self._publish_state(stage, masked)
 
     def _enter_from_measured(self) -> None:
-        """Start the stream where the body is: the measured arm and head, the base where it was aimed."""
-        self._grip_lock = self._held_grip()
+        """Start the stream where the body is: the measured arm and head, the base where it was aimed.
+        Held joints stay at the measured angle, and a claw holding something at its commanded grip."""
+        grip = self._held_grip()
+        self._pins = {5: grip} if grip is not None else {}
         if self._joints is None:
             return
+        self._pins.update({joint: self._joints[joint] for joint in self._hold})
         base = self._pose.vector[7:] if self._pose is not None else (0.0, 0.0)
         measured = [*self._joints[:6], math.degrees(self._joints[6]), *base]
         self._animator.enter_from(ActuatorPose(np.array(measured, dtype=np.float64)), ENTER_S)
@@ -461,8 +490,8 @@ class ExpressionDriver:
 
     def _drive_arm(self, pose: ActuatorPose) -> None:
         command = pose.arm
-        if self._grip_lock is not None:
-            command[5] = self._grip_lock
+        for joint, angle in self._pins.items():
+            command[joint] = angle
         self._ours.append(tuple(command))
         self._arm_pub.publish(Float64MultiArray(data=command))
 
@@ -500,6 +529,7 @@ class ExpressionDriver:
             "duration": round(stage["duration"], 2),
             "masked": bool(masked),
             "masked_parts": sorted(masked),
+            "camera_clear": self._watched(),
             "source": label.source if label is not None else None,
             "id": label.request_id if label is not None else None,
         }
@@ -640,9 +670,12 @@ class ExpressionDriver:
     def _on_robot_info(self, msg: String) -> None:
         self._mad = is_mad_mode(msg.data)
 
+    def _watched(self) -> bool:
+        return self._config.camera_clear and (self._gaze or time.monotonic() - self._person_at < PERSON_RECENT_S)
+
     def _on_parameters(self, params: list[Parameter]) -> SetParametersResult:
-        """``expressive.enabled_parts`` and ``expressive.vocalize`` apply at once; every other expressive
-        parameter is read at startup."""
+        """``enabled_parts``, ``vocalize``, ``camera_clear`` and ``hold_joints`` apply at once; every other
+        expressive parameter is read at startup."""
         for param in params:
             if param.name == "expressive.enabled_parts":
                 parts = _parts(param.value)
@@ -653,6 +686,14 @@ class ExpressionDriver:
                 self._config = replace(self._config, vocalize=bool(param.value))
                 if param.value:
                     self._submit(_warm_sounds)
+            elif param.name == "expressive.camera_clear":
+                self._config = replace(self._config, camera_clear=bool(param.value))
+            elif param.name == "expressive.hold_joints":
+                hold = held_joints(param.value)
+                if hold is None:
+                    return SetParametersResult(successful=False, reason="joints are j1..j6")
+                self._hold = hold
+                self._reenter = True  # a released joint must blend from where it was held, not jump
         return SetParametersResult(successful=True)
 
 

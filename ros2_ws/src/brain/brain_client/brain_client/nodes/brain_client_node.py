@@ -354,6 +354,7 @@ class BrainClientNode(Node):
         )
         self.chat.on_emote = driver.emote
         self.gaze.head_sink = driver.set_gaze
+        self.gaze.face_sink = driver.saw_person
         self.brain.emotes = True
         if self._tts_handler is not None:
             self._tts_handler.on_audio = driver.feed_audio

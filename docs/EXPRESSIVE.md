@@ -188,7 +188,26 @@ its anchor. The layer yields the body to whatever else owns it:
   left to the tracker's own panning;
 - the 3 s rest fold on agent activation is not interrupted (the arm waits 3.5 s);
 - a claw that holds something (commanded closed, measured open; hardware only, the sim does not
-  report commanded joints) keeps its grip.
+  report commanded joints) keeps its grip;
+- joints in `expressive.hold_joints` (a faulty servo on one unit, e.g. `["j4"]`) stay at the angle
+  measured when the stream starts, in every command, while the rest of the arm plays. j1 and j2 are
+  held together, since the shoulder clearance couples them. Changing the list restarts the stream
+  from the measured pose, so a released joint blends back instead of jumping.
+
+Eye contact (`expressive.camera_clear`): while the gaze tracker runs, or a face was seen in the last
+5 s, the clips the layer makes (prompts, presets, emotes, reactions; not a clip sent to
+`/brain/express/play`) are capped where the arm would cross the middle of the head camera's image,
+where the tracked face sits: approach ≤ 0.3, expand ≤ 0.1, rise ≤ 0.15, attend ≤ 0.3
+(`CAMERA_CLEAR_CAPS` in `expressive_driver/utils.py`). The decision is made per clip, when it is
+prepared; the next clip after nobody is watched gets its full excursions. Rise is capped, not
+scaled: rendered from the camera, the arm covers 40 % of the middle box at rise 0.3-0.4 (half-way
+up, in front of the lens) and only 5 % at rise 1, so scaling rise by 0.6 parks the arm right in
+front of the face (the presets' mean coverage of the middle went up, 25 → 32 % for `excited`).
+Over every preset, frames covering more than 10 % of the middle drop from 27 % to 2 %. In the sim,
+with the gaze tracker on, `happy`, `proud` and `excited` covered 3.5 % of the middle on average
+(at most 11 %, no pose above 10 %), against 25 % (at most 43 %, 92 % of poses above 10 %) with
+`camera_clear` off. The price: the arm stays low while someone is watched (no raised-arm joy or
+pride); head, base and grip still play.
 
 Speech sway (only while an agent runs, or on top of a playing clip): the TTS loop hands the
 robot's own voice (never the sim's simulated residents) to
@@ -220,7 +239,7 @@ a reply are never voiced: their sentence is about to be spoken.
 | `/brain/express/prompt` | String | a prompt, `{"prompt", "id"}` to generate and play, or `{"preset", "id"}` to play a built-in preset at once |
 | `/brain/express/play` | String | a Clip JSON object to play now (never a path; malformed clips are logged and ignored) |
 | `/brain/express/stop` | String (payload ignored) | back to idle. Not `Empty`: rosbridge (rws) serializes `std_msgs/Empty` to 0 bytes, which every ROS subscriber rejects |
-| `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, masked_parts, speaking, source, id}`; `masked_parts` lists the parts a skill or Nav2 holds |
+| `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, masked_parts, camera_clear, speaking, source, id}`; `masked_parts` lists the parts a skill or Nav2 holds; `camera_clear` is true while someone is watched and clips are capped |
 | `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing |
 
 A prompt moves the robot at once: its keyword preset (`presets.match`) starts playing as a
@@ -245,6 +264,8 @@ Parameters on brain_client_node:
 | `expressive.vocalize` | `true` | a prompt or preset played while the robot is silent makes a short non-verbal sound; applies at once |
 | `expressive.enabled_parts` | `[arm, base, head]` | the parts the layer may move; the rest stays still. Applies at once (`ros2 param set /brain_client_node expressive.enabled_parts "[head]"`): the bring-up stages it |
 | `expressive.speech_latency_s` | `0.0` | how far the speaker trails the speech sway's audio; positive delays the motion |
+| `expressive.camera_clear` | `false` | opt in to cap the arm out of the head camera's view while someone is watched (above); off by default because it removes raised-arm gestures exactly when a person is present; applies at once |
+| `expressive.hold_joints` | unset (none) | arm joints held at their measured angle, e.g. `["j4"]` for a faulty servo; applies at once (`ros2 param set /brain_client_node expressive.hold_joints "[j4]"`; `"['']"` clears it, since the CLI cannot send an empty list) |
 | `expressive.server_url` | `""` | the planner server (`http://<host>:8000`); empty skips it. Set it per robot in `config/settings.yaml` (stanza below) |
 | `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
 | `expressive.on_skill_failed` | `sad` | |
@@ -313,7 +334,10 @@ Run them in this order and stop at the first FAIL.
 
 In `arm` and `full`, a j1-j5 load over 70 % for 0.1 s, or any not-ok `/mars/arm/status`, stops the
 expression at once and fails the stage after reporting the arm checks and the torque state. The
-claw (j6) reports current, not load, so its peak is only noted. Also noted without a threshold:
+claw (j6) reports current, not load, so its peak is only noted. `--ignore-load j4` leaves a joint
+whose load reading is broken out of the load abort; a joint in `expressive.hold_joints` is left out
+of the step check and instead must not move at all in the commands (its measured range is noted).
+Also noted without a threshold:
 the head servo's lag, how long after `/tts/is_playing` the sway starts (synthesis plus `aplay`'s
 start buffer), the arm stream's rate, and its tracking error per joint at +150 ms.
 
