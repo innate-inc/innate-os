@@ -35,6 +35,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Empty, Float64MultiArray, Int32, String
 
 from brain_client.common.geometry import quaternion_to_yaw
+from brain_client.expressive import presets
 from brain_client.expressive.animator import Animator
 from brain_client.expressive.basis import ActuatorPose
 from brain_client.expressive.breathing import Breathing
@@ -89,8 +90,9 @@ STILL = Breathing(rise_amplitude=0.0, approach_amplitude=0.0, attend_amplitudes=
 @dataclass(frozen=True)
 class ExpressiveConfig:
     idle_breathing: bool
+    stand_in: bool  # play the keyword preset at once while a prompt's clip is generated
     server_url: str
-    on_skill_completed: str  # prompt played when a skill completes; "" = none
+    on_skill_completed: str  # a preset name, or a prompt to generate; "" = no reaction
     on_skill_failed: str
 
     @classmethod
@@ -99,9 +101,10 @@ class ExpressiveConfig:
         enabled = node.declare_parameter("expressive.enabled", True).value
         config = cls(
             idle_breathing=bool(node.declare_parameter("expressive.idle_breathing", True).value),
+            stand_in=bool(node.declare_parameter("expressive.stand_in", True).value),
             server_url=str(node.declare_parameter("expressive.server_url", "http://innate52.local:8000").value),
-            on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "pleased, small nod").value),
-            on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "deflated").value),
+            on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
+            on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
         )
         return config if enabled else None
 
@@ -138,7 +141,7 @@ class ExpressionDriver:
         self._lock = threading.Lock()  # the request bookkeeping below; hooks arrive on many threads
 
         self._seq = 0
-        self._label: _Label | None = None
+        self._labels: deque[_Label] = deque(maxlen=4)  # newest last: a stand-in and its replacement overlap
         self._pcm_carry = b""
 
         self._odom: Pose | None = None
@@ -188,23 +191,27 @@ class ExpressionDriver:
 
     # ================= hooks (any thread) =================
     def express(self, prompt: str, request_id: str | None = None) -> None:
-        """Generate a clip for ``prompt`` in the background and play it; motion keeps flowing meanwhile."""
+        """Play ``prompt``'s keyword preset at once (with ``stand_in``), and the generated clip when it
+        arrives; a newer play, prompt or stop supersedes a clip still being generated."""
         prompt = " ".join(prompt.split())
         if not prompt:
             return
         with self._lock:
             self._seq += 1
             seq = self._seq
+        if self._config.stand_in:
+            self._play(seq, Made(presets.clip(presets.match(prompt), prompt=prompt), ClipSource.STAND_IN), request_id)
+        threading.Thread(target=self._make_and_play, args=(seq, prompt, request_id), daemon=True).start()
 
-        def make() -> Clip:
-            made = self._maker.make(prompt)
-            self._logger.info(
-                f"[Expressive] '{prompt}' -> {made.clip.name} ({made.source}, {made.clip.duration:.1f} s)"
-            )
-            self._stage(seq, made, request_id)
-            return made.clip
-
-        self._animator.play(make)
+    def _make_and_play(self, seq: int, prompt: str, request_id: str | None) -> None:
+        started = time.monotonic()
+        made = self._maker.make(prompt)
+        self._logger.info(
+            f"[Expressive] '{prompt}' -> {made.clip.name} ({made.source}, {time.monotonic() - started:.1f} s)"
+        )
+        if made.source == ClipSource.PRESET and self._config.stand_in:
+            return  # the stand-in already is the preset: let it finish
+        self._play(seq, made, request_id)
 
     def emote(self, prompt: str) -> None:
         """An emote tag from the agent's reply, played as its sentence goes to TTS."""
@@ -215,13 +222,12 @@ class ExpressionDriver:
         with self._lock:
             self._seq += 1
             seq = self._seq
-        self._stage(seq, Made(clip, ClipSource.PLAYED), request_id)
-        self._animator.play(clip)
+        self._play(seq, Made(clip, ClipSource.PLAYED), request_id)
 
     def stop(self) -> None:
         with self._lock:
             self._seq += 1
-            self._label = None
+            self._labels.clear()
         self._animator.stop()
 
     def set_gaze(self, head_deg: float | None) -> None:
@@ -248,10 +254,13 @@ class ExpressionDriver:
         if self._stance.release() is not None:
             self._cmd_vel_pub.publish(Twist())
 
-    def _stage(self, seq: int, made: Made, request_id: str | None) -> None:
+    def _play(self, seq: int, made: Made, request_id: str | None) -> None:
+        """Play ``made`` unless a newer request superseded ``seq`` meanwhile."""
         with self._lock:
-            if seq == self._seq:
-                self._label = _Label(made.clip.name, made.source, request_id)
+            if seq != self._seq:
+                return
+            self._labels.append(_Label(made.clip.name, made.source, request_id))
+            self._animator.play(made.clip)
 
     # ================= the tick (executor thread) =================
     def _tick(self) -> None:
@@ -349,7 +358,8 @@ class ExpressionDriver:
 
     def _publish_state(self, stage: AnimatorState, masked: bool) -> None:
         with self._lock:
-            label = self._label if stage["playing"] and self._label and self._label.name == stage["name"] else None
+            on_stage = [label for label in self._labels if stage["playing"] and label.name == stage["name"]]
+        label = on_stage[-1] if on_stage else None
         payload = {
             **stage,
             "t": round(stage["t"], 2),
@@ -421,7 +431,17 @@ class ExpressionDriver:
             return
         reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}.get(status)
         if reaction and time.monotonic() - self._reply_emote_at > REPLY_EMOTE_S:
+            self._react(reaction)
+
+    def _react(self, reaction: str) -> None:
+        """A preset name plays at once, for free; anything else is a prompt to generate."""
+        if reaction not in presets.PRESETS:
             self.express(reaction)
+            return
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        self._play(seq, Made(presets.clip(reaction), ClipSource.PRESET), None)
 
     def _on_odom(self, msg: Odometry) -> None:
         position = msg.pose.pose.position

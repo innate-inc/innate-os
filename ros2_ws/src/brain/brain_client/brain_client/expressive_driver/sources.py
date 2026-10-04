@@ -40,6 +40,7 @@ class ClipSource(StrEnum):
     SERVER = "server"
     LLM = "llm"
     PRESET = "preset"
+    STAND_IN = "preset-stand-in"  # the keyword preset playing while the generated clip is on its way
     PLAYED = "played"  # handed over whole on /brain/express/play
 
 

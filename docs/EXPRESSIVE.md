@@ -138,9 +138,9 @@ published. The layer yields the body to whatever else owns it:
   allowlist because a skill's declared interfaces cannot prove it body-free —
   `navigate_to_position` and `navigate_with_vision` drive the base through raw ROS clients without
   declaring `Mobility` — so an unknown skill masks. Add a shipped skill there when it is body-free;
-- when a body skill ends, a small reaction plays (`expressive.on_skill_completed` /
-  `on_skill_failed`), unless the agent's reply carried an emote in the last 3 s; a reply emote
-  that arrives while the reaction is still being generated supersedes it;
+- when a body skill ends, a small reaction plays at once (`expressive.on_skill_completed` /
+  `on_skill_failed`, preset names, so no LLM call), unless the agent's reply carried an emote in
+  the last 3 s;
 - a `/mars/arm/commands` or `/mars/head/set_position` command that is not ours (leader arm, UDP
   teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message;
   `/joystick` holds the base off for 2 s;
@@ -164,10 +164,15 @@ sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`.
 | `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, speaking, source, id}` |
 | `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing |
 
-`source` says which link of the chain made the clip: `server` (the planner server at
+A prompt moves the robot at once: its keyword preset (`presets.match`) starts playing as a
+stand-in (source `preset-stand-in`) while the real clip is generated, and the generated clip
+crossfades in when it arrives. When the chain only reaches the preset, the stand-in simply plays
+out; a newer prompt, play or stop drops a clip still being generated.
+
+`source` says which link of the chain made the clip on stage: `server` (the planner server at
 `expressive.server_url`, probed every 30 s off the prompt path, 1.5 s timeout), `llm` (the brain's
-own model writing a recipe for the procedural generator, ~2 s with Gemini Flash at minimal
-thinking), `preset` (the best keyword match), or `played`.
+own model writing a recipe for the procedural generator, 2-7 s with Gemini Flash at minimal
+thinking), `preset` (the best keyword match, or a preset reaction), `preset-stand-in`, or `played`.
 
 Parameters on brain_client_node:
 
@@ -175,9 +180,10 @@ Parameters on brain_client_node:
 |---|---|---|
 | `expressive.enabled` | `true` | `false` builds nothing; speech, gaze and the prompt behave as before |
 | `expressive.idle_breathing` | `true` | breathe while an agent runs; `false` holds still between clips |
+| `expressive.stand_in` | `true` | play the keyword preset while a prompt's clip is generated |
 | `expressive.server_url` | `http://innate52.local:8000` | the planner server; `""` skips it |
-| `expressive.on_skill_completed` | `pleased, small nod` | reaction prompt; `""` for none |
-| `expressive.on_skill_failed` | `deflated` | |
+| `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
+| `expressive.on_skill_failed` | `sad` | |
 
 The agent emotes through tags in its replies. The system prompt asks for
 `<emote>a feeling plus one physical cue, 2-8 words</emote>` at the start of a reply and on

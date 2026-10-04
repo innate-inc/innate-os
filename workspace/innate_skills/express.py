@@ -11,8 +11,10 @@ from innate import Skill, SkillReturn
 PROMPT_TOPIC = "/brain/express/prompt"
 STATE_TOPIC = "/brain/express/state"
 STOP_TOPIC = "/brain/express/stop"
-START_TIMEOUT_S = 12.0  # the prompt may fall back to the brain's own LLM before a clip exists
+START_TIMEOUT_S = 12.0  # the generated clip may come from the brain's own LLM, seconds after the stand-in
 FINISH_GRACE_S = 3.0
+STATE_STALE_S = 1.0  # the state topic runs at 5 Hz: older than this, the driver is gone
+STAND_IN = "preset-stand-in"
 
 
 class Express(Skill):
@@ -32,7 +34,7 @@ class Express(Skill):
         state: dict = {}
 
         def on_state(msg: String) -> None:
-            state.update(json.loads(msg.data))
+            state.update(json.loads(msg.data), seen_at=time.monotonic())
 
         self.node.create_subscription(String, STATE_TOPIC, on_state, 10)
         prompts = self.node.create_publisher(String, PROMPT_TOPIC, 10)
@@ -45,13 +47,22 @@ class Express(Skill):
             return f"Expressing '{prompt}'"
 
         self.on_cancel(lambda: stop.publish(Empty()))
-        started = self.wait_for(
-            lambda: dict(state) if state.get("id") == request_id and state.get("playing") else None,
-            timeout=START_TIMEOUT_S,
-        )
-        if started is None:
-            self.fail(f"The expression '{prompt}' never started (is expressive.enabled on?)")
-        deadline = time.monotonic() + float(started.get("duration") or 0.0) + FINISH_GRACE_S
-        while state.get("id") == request_id and state.get("playing") and time.monotonic() < deadline:
+        # Done when a generated clip has played out; a stand-in alone is waited past, in case its
+        # replacement is still on the way (none comes when generation fell back to the preset).
+        played: dict = {}
+        deadline = time.monotonic() + START_TIMEOUT_S
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            current = dict(state)
+            if now - current.get("seen_at", now) > STATE_STALE_S:
+                break
+            if current.get("id") == request_id and current.get("playing"):
+                played = current
+                remaining = float(current.get("duration") or 0.0) - float(current.get("t") or 0.0)
+                deadline = max(deadline, now + remaining + FINISH_GRACE_S)
+            elif played and played.get("source") != STAND_IN:
+                break
             self.sleep(0.1)
-        return f"Expressed '{prompt}' ({started.get('name')}, from the {started.get('source')})"
+        if not played:
+            self.fail(f"The expression '{prompt}' never started (is expressive.enabled on?)")
+        return f"Expressed '{prompt}' ({played.get('name')}, from the {played.get('source')})"
