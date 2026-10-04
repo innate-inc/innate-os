@@ -7,6 +7,9 @@ uv run mars-express sheet [--out out/]           # axis sheets: person's eyes, t
 uv run mars-express presets [--out out/presets]  # every built-in preset as mp4 + contact sheet
 uv run mars-express basis                        # rebuild basis.json's safe table, report collisions
 uv run mars-express golden                       # rewrite fixtures/golden.json (port checks)
+uv run mars-express eval [--judge gemini|openai] [--n 3]   # blind recognition eval -> out/eval/REPORT.md
+uv run mars-express show demo/show.yaml out.mp4  # MARS speaks and emotes through one offline Animator
+uv run mars-express demo [--out out/demo]        # mars_explains.mp4, idle_speech.mp4, presets_montage.mp4
 """
 
 from __future__ import annotations
@@ -113,6 +116,53 @@ def _golden(_: argparse.Namespace) -> None:
     print(golden.write())
 
 
+def _eval(args: argparse.Namespace) -> None:
+    import logging
+
+    from eval.arms import ARMS, load_arm
+    from eval.run import Config, run
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    arms = dict(ARMS) | dict(load_arm(spec) for spec in args.arm)
+    cfg = Config(
+        out=Path(args.out),
+        judge=args.judge,
+        judge_model=args.judge_model,
+        n=args.n,
+        planner_model=args.planner_model,
+        samples=args.samples,
+        arms=arms,
+        workers=args.workers,
+        probes=not args.no_probes,
+    )
+    print(run(cfg, report_only=args.report_only, snapshot=Path(args.snapshot) if args.snapshot else None))
+
+
+def _show(args: argparse.Namespace) -> None:
+    import logging
+
+    from demo.show import Show, Studio, render_show
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    out = Path(args.out)
+    studio = Studio(out.parent / "cache", None if args.no_planner else args.planner_model)
+    print(render_show(Show.load(Path(args.show)), out, studio))
+
+
+def _demo(args: argparse.Namespace) -> None:
+    import logging
+
+    from demo.montage import render_montage
+    from demo.show import Show, Studio, render_show
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    out, here = Path(args.out), Path(__file__).with_name("demo")
+    studio = Studio(out / "cache", None if args.no_planner else args.planner_model)
+    print(render_show(Show.load(here / "show.yaml"), out / "mars_explains.mp4", studio))
+    print(render_show(Show.load(here / "idle_speech.yaml"), out / "idle_speech.mp4", studio))
+    print(render_montage(out / "presets_montage.mp4"))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="mars-express", description=(__doc__ or "").splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -147,6 +197,33 @@ def main(argv: list[str] | None = None) -> None:
     preset_cmd.add_argument("--out", default=str(OUT / "presets"))
     preset_cmd.add_argument("--camera", choices=("front", "three-quarter", "profile", "split"), default="three-quarter")
     preset_cmd.set_defaults(run=_presets)
+
+    evaluate = commands.add_parser("eval", help="blind recognition eval: plan, film, judge, report")
+    evaluate.add_argument("--judge", choices=("gemini", "openai"), default="gemini", help="gemini watches the video")
+    evaluate.add_argument("--judge-model", help="default gemini-3.1-pro-preview / gpt-5.5")
+    evaluate.add_argument("--n", type=int, default=3, help="independent judge calls per clip and per A/B pair")
+    evaluate.add_argument("--planner-model", default="gpt-6-astra")
+    evaluate.add_argument("--samples", type=int, default=8, help="planner samples per physical probe")
+    evaluate.add_argument("--arm", action="append", default=[], help="extra arm: name=module:function")
+    evaluate.add_argument("--out", default=str(OUT / "eval"))
+    evaluate.add_argument("--workers", type=int, default=8)
+    evaluate.add_argument("--no-probes", action="store_true")
+    evaluate.add_argument("--report-only", action="store_true", help="rebuild REPORT.md from the cache")
+    evaluate.add_argument("--snapshot", help="also write a committable REPORT.md + JPEG figures here")
+    evaluate.set_defaults(run=_eval)
+
+    show = commands.add_parser("show", help="render a show.yaml: speech, emotes, idle, subtitles")
+    show.add_argument("show")
+    show.add_argument("out")
+    show.add_argument("--planner-model", default="gpt-6-astra")
+    show.add_argument("--no-planner", action="store_true", help="emotes fall back to the closest preset")
+    show.set_defaults(run=_show)
+
+    demo = commands.add_parser("demo", help="the three demo videos for the docs")
+    demo.add_argument("--out", default=str(OUT / "demo"))
+    demo.add_argument("--planner-model", default="gpt-6-astra")
+    demo.add_argument("--no-planner", action="store_true")
+    demo.set_defaults(run=_demo)
 
     commands.add_parser("basis", help="rebuild the safe table in basis.json").set_defaults(run=_basis)
     commands.add_parser("golden", help="rewrite fixtures/golden.json").set_defaults(run=_golden)

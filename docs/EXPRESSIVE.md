@@ -239,3 +239,81 @@ turns.
 - [ ] grip guard: pick an object, chat, the object stays held
 - [ ] an agent with gaze on (inspireface is missing in the sim): tilt rides the expression, wheels
       pan with no stance fighting them
+
+## Evaluation
+
+`expressive/eval/` judges the motion blind, as Binh's "judge with videos" and PR #679's panel did:
+a vision model watches a clip, is never told the prompt, and says what it sees. Full results, strips
+of the best and worst reads, and the analysis: `expressive/eval/REPORT.md` (regenerated into
+`expressive/out/eval/REPORT.md`).
+
+```bash
+cd expressive
+uv run mars-express eval --judge gemini --n 3    # Gemini 3.1 Pro watches each video (via the Innate proxy)
+uv run mars-express eval --judge openai --n 3    # GPT-5.5 reads each 2x4 key-frame strip
+uv run mars-express eval --report-only --snapshot eval/   # rebuild REPORT.md + the committed copy
+```
+
+- **Prompts.** The 16 presets twice (the hand-written recipe and one the planner writes for the same
+  prompt), and 30 held-out prompts no preset covers (embarrassed, disgusted, a snake rearing up, a
+  grumpy neighbour, a cat hunting a mouse, tipsy, winning the lottery, crossing a street, the cookie
+  jar…). The planner is `gpt-6-astra` through `planner.write`.
+- **Arms.** Each recipe is played two ways: **lively** (the plan through `liveliness`, what ships) and
+  **direct** (the same plan, no liveliness, the control). An arm is any `(plan_frames, seed) ->
+  motion` function, so the flow generator joins as `--arm flow=module:function`.
+- **Media.** A 2x4 key-frame strip (farthest-point sampled, so a 0.2 s snap makes the strip) and a
+  caption-free mp4 played physically in the sim, both from the three-quarter view.
+- **Judges.** Three independent calls per clip. Each spreads probability over the studio's 17 labels
+  (read from `webapp/js/expression/judge.js`, so the two judges cannot drift), gives one free-text
+  description, and rates alive and readable 1-5. A text grader then scores each description against
+  the prompt (2 same, 1 related, 0 different). A pairwise judge picks the more alive of lively and
+  direct, with the order coin-flipped.
+- **Planner.** First-pass validity, repairs and latency of every write, and the 18 physical probes ×
+  8 samples.
+- Everything is cached under `out/eval/`. A clip that changes (a new core, a retuned basis) drops its
+  media and judgments, and the core commit is recorded with the run.
+
+Results on core `c877d92f6` (lively = what ships; chance with 17 labels is 6 % top-1 / 18 % top-3):
+
+| | Gemini 3.1 Pro, video | GPT-5.5, strip |
+|---|---|---|
+| hand-written presets: top-1 / top-3 / p(target) | 0 % / 38 % / 11 % | 23 % / 38 % / 12 % |
+| hand-written presets: description at least related | 38 % | 58 % |
+| planner on the preset prompts: top-3 / related | 54 % / 33 % | 38 % / 50 % |
+| planner on 30 held-out prompts: top-3 / related | 26 % / 42 % | 52 % / 77 % |
+| alive 1-5, lively / direct (presets) | 2.62 / 2.50 | 2.90 / 2.81 |
+| A/B lively wins (186 verdicts) | 46 % (the second-shown video wins 77 %) | 56 % (91 % "slight") |
+
+Planner (`gpt-6-astra`, 190 writes): 100 % valid on the first pass, no repairs, 4.9 s median per call
+(p90 8.1 s). Physical probes, 18 × 8 samples: 97 % (out-of-distribution core 100 %).
+
+What the failures say (details in the report):
+
+- **Two silhouettes.** Every positive preset swings the gripper 25-40 cm out of the fold; every
+  negative one keeps it within 5 cm. The judges name the shape: half (Gemini) to nearly all (GPT-5.5)
+  descriptions of unfolding clips are "reaching / pointing / waving / raising a hand", so happy reads
+  as a startle, angry as presenting or waving, and scared and sleepy as a slump or "powered down". The
+  biggest lever is the basis: visible negative ends (a dropped elbow, a downturned claw, the arm
+  pulled back) and distinct positive ones (a mast, out to the side, low toward the person).
+- **Fast detail never reaches the body.** The 2 Hz serving low-pass with 0.25 s keys keeps 9 / 23 /
+  61 % of an `osc` at a 0.3 / 0.4 / 0.6 s period; 55 of the planner's 81 `osc` are faster than
+  0.7 s. The speed limits halve 0.15 s snaps (a sneeze release commands 12.8 rad/s; it plays at 6).
+- **Liveliness is not measurably more alive** to these judges; their A/B is dominated by order.
+- **Live stack (sim):** a reply emote's generated clip starts ~2 s after the line (1.8-2.5 s),
+  and the instant stand-in preset is `curious` for 8 of 11 body-language prompts. `/brain/tts` now
+  plays emote tags (fixed during this eval, 3251ea373).
+- **Probe bug:** `probes._half_cycles` misses two-shake head shakes (a window that grows with the
+  clip, and L-R-L-R gives 3 sign changes where the check needs 4).
+
+### Demo videos
+
+`expressive/demo/`: MARS explains the harness in its own voice, as Binh's reachy-explain did. A
+`show.yaml` of beats (`say`, `emote` or `recipe`, `pause`, `sync: release`) is spoken with macOS `say`.
+Its emotes are planned (cached) or scripted, and the whole show plays through ONE offline `Animator`
+ticked at 30 fps (`feed_speech` at each line, `play` for each gesture, idle breathing between). It is
+filmed physically in the sim with subtitles, and the speech is muxed in.
+
+```bash
+uv run mars-express show demo/show.yaml out/demo/mars_explains.mp4   # 62 s, 13 beats
+uv run mars-express demo        # + out/demo/idle_speech.mp4 (20 s) and out/demo/presets_montage.mp4 (15 s)
+```

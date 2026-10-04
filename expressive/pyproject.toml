@@ -8,6 +8,10 @@ dependencies = [
     "scipy>=1.11",
     "mujoco==3.10.0",  # the sim's version: compiled-world caches are keyed by it
     "pillow>=10",
+    # eval/ and demo/: the blind judge reaches Gemini through the Innate proxy, the show is YAML, the report plots
+    "innate-auth-client[httpx]",
+    "matplotlib>=3.9",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
@@ -37,4 +41,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 # Flat layout: the editable install puts this directory on sys.path, so `cli`, `_core` and `render` import as-is.
-only-include = ["cli.py", "_core.py", "golden.py", "basis_tool.py", "chat.py", "render", "ml"]
+only-include = ["cli.py", "_core.py", "golden.py", "basis_tool.py", "chat.py", "render", "ml", "eval", "demo"]
+
+[tool.uv.sources]
+innate-auth-client = { path = "../ros2_ws/src/cloud/clients/auth-client", editable = true }

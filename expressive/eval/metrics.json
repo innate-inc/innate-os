@@ -1,0 +1,275 @@
+{
+ "gemini-gemini-3.1-pro-preview": {
+  "recognition": {
+   "hand-written preset recipes | lively": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.0,
+    "top3": 0.38461538461538464,
+    "p_target": 0.11025641025641028,
+    "described": 0.375,
+    "named": 0.10416666666666666,
+    "alive": 2.625,
+    "readable": 3.833333333333333
+   },
+   "hand-written preset recipes | direct": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.15384615384615385,
+    "top3": 0.3076923076923077,
+    "p_target": 0.11794871794871796,
+    "described": 0.47916666666666663,
+    "named": 0.125,
+    "alive": 2.5,
+    "readable": 3.7083333333333335
+   },
+   "planner on the preset prompts | lively": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.15384615384615385,
+    "top3": 0.5384615384615384,
+    "p_target": 0.14487179487179486,
+    "described": 0.3333333333333333,
+    "named": 0.14583333333333331,
+    "alive": 2.395833333333333,
+    "readable": 3.9375
+   },
+   "planner on the preset prompts | direct": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.07692307692307693,
+    "top3": 0.23076923076923078,
+    "p_target": 0.10512820512820514,
+    "described": 0.41666666666666663,
+    "named": 0.10416666666666666,
+    "alive": 2.3125,
+    "readable": 3.6666666666666665
+   },
+   "planner on 30 held-out prompts | lively": {
+    "clips": 30,
+    "labelled": 27,
+    "top1": 0.1111111111111111,
+    "top3": 0.25925925925925924,
+    "p_target": 0.11296296296296296,
+    "described": 0.4222222222222223,
+    "named": 0.02222222222222222,
+    "alive": 2.6111111111111116,
+    "readable": 3.9111111111111105
+   },
+   "planner on 30 held-out prompts | direct": {
+    "clips": 30,
+    "labelled": 27,
+    "top1": 0.1111111111111111,
+    "top3": 0.4074074074074074,
+    "p_target": 0.15555555555555556,
+    "described": 0.36666666666666675,
+    "named": 0.02222222222222222,
+    "alive": 2.6111111111111116,
+    "readable": 4.0
+   }
+  },
+  "ab": {
+   "hand-written preset recipes": {
+    "verdicts": 48,
+    "win": 0.3125,
+    "clear_win": 0.3125,
+    "clear_loss": 0.6666666666666666,
+    "first_shown_wins": 0.3125
+   },
+   "planner on the preset prompts": {
+    "verdicts": 48,
+    "win": 0.4791666666666667,
+    "clear_win": 0.4791666666666667,
+    "clear_loss": 0.5208333333333334,
+    "first_shown_wins": 0.125
+   },
+   "planner on 30 held-out prompts": {
+    "verdicts": 90,
+    "win": 0.5222222222222223,
+    "clear_win": 0.5111111111111111,
+    "clear_loss": 0.4777777777777778,
+    "first_shown_wins": 0.24444444444444444
+   },
+   "all": {
+    "verdicts": 186,
+    "win": 0.45698924731182794,
+    "clear_win": 0.45161290322580644,
+    "clear_loss": 0.5376344086021505,
+    "first_shown_wins": 0.23118279569892472
+   }
+  }
+ },
+ "openai-gpt-5.5": {
+  "recognition": {
+   "hand-written preset recipes | lively": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.23076923076923078,
+    "top3": 0.38461538461538464,
+    "p_target": 0.12000000000000002,
+    "described": 0.5833333333333333,
+    "named": 0.20833333333333334,
+    "alive": 2.895833333333333,
+    "readable": 3.4375
+   },
+   "hand-written preset recipes | direct": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.15384615384615385,
+    "top3": 0.23076923076923078,
+    "p_target": 0.10595242944757509,
+    "described": 0.5833333333333333,
+    "named": 0.16666666666666666,
+    "alive": 2.8125,
+    "readable": 3.3541666666666665
+   },
+   "planner on the preset prompts | lively": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.15384615384615385,
+    "top3": 0.38461538461538464,
+    "p_target": 0.0972948833344873,
+    "described": 0.49999999999999994,
+    "named": 0.18749999999999997,
+    "alive": 2.9583333333333335,
+    "readable": 3.5416666666666665
+   },
+   "planner on the preset prompts | direct": {
+    "clips": 16,
+    "labelled": 13,
+    "top1": 0.07692307692307693,
+    "top3": 0.15384615384615385,
+    "p_target": 0.08662004662004662,
+    "described": 0.5,
+    "named": 0.0625,
+    "alive": 2.9583333333333335,
+    "readable": 3.4583333333333335
+   },
+   "planner on 30 held-out prompts | lively": {
+    "clips": 30,
+    "labelled": 27,
+    "top1": 0.25925925925925924,
+    "top3": 0.5185185185185185,
+    "p_target": 0.17393139164662733,
+    "described": 0.7666666666666667,
+    "named": 0.02222222222222222,
+    "alive": 3.0444444444444447,
+    "readable": 3.466666666666667
+   },
+   "planner on 30 held-out prompts | direct": {
+    "clips": 30,
+    "labelled": 27,
+    "top1": 0.2962962962962963,
+    "top3": 0.5925925925925926,
+    "p_target": 0.1791181340356258,
+    "described": 0.611111111111111,
+    "named": 0.04444444444444444,
+    "alive": 3.0666666666666673,
+    "readable": 3.4888888888888885
+   }
+  },
+  "ab": {
+   "hand-written preset recipes": {
+    "verdicts": 48,
+    "win": 0.625,
+    "clear_win": 0.0,
+    "clear_loss": 0.041666666666666664,
+    "first_shown_wins": 0.4583333333333333
+   },
+   "planner on the preset prompts": {
+    "verdicts": 48,
+    "win": 0.5,
+    "clear_win": 0.10416666666666667,
+    "clear_loss": 0.0,
+    "first_shown_wins": 0.4791666666666667
+   },
+   "planner on 30 held-out prompts": {
+    "verdicts": 90,
+    "win": 0.5555555555555556,
+    "clear_win": 0.03333333333333333,
+    "clear_loss": 0.08888888888888889,
+    "first_shown_wins": 0.6333333333333333
+   },
+   "all": {
+    "verdicts": 186,
+    "win": 0.5591397849462365,
+    "clear_win": 0.043010752688172046,
+    "clear_loss": 0.053763440860215055,
+    "first_shown_wins": 0.5483870967741935
+   }
+  }
+ },
+ "body": {
+  "gemini-gemini-3.1-pro-preview | stays folded": {
+   "clips": 13,
+   "p_target": 0.06833333333333333,
+   "described": 0.4358974358974359,
+   "alive": 2.6410256410256414,
+   "gesture_words": 0.10256410256410256
+  },
+  "gemini-gemini-3.1-pro-preview | unfolds": {
+   "clips": 49,
+   "p_target": 0.1321705426356589,
+   "described": 0.37414965986394555,
+   "alive": 2.5374149659863945,
+   "gesture_words": 0.4965986394557823
+  },
+  "openai-gpt-5.5 | stays folded": {
+   "clips": 13,
+   "p_target": 0.09598694869486948,
+   "described": 0.5641025641025641,
+   "alive": 2.7435897435897436,
+   "gesture_words": 0.15384615384615385
+  },
+  "openai-gpt-5.5 | unfolds": {
+   "clips": 49,
+   "p_target": 0.15258399001996695,
+   "described": 0.673469387755102,
+   "alive": 3.047619047619048,
+   "gesture_words": 0.9251700680272109
+  }
+ },
+ "planner": {
+  "model": "gpt-6-astra",
+  "writes": 190,
+  "first_pass_valid": 1.0,
+  "repaired_once": 0.0,
+  "repaired_twice": 0.0,
+  "failed": 0.0,
+  "call_s": {
+   "median": 4.928987312479876,
+   "p90": 8.053267237223917,
+   "max": 11.23644787503872
+  },
+  "write_s": {
+   "median": 4.928987312479876,
+   "p90": 8.053267237223917
+  },
+  "probes": {
+   "overall": 0.9652777777777778,
+   "ood_core": 1.0,
+   "skill": 0.9375,
+   "teacher": 1.0,
+   "per": {
+    "sneezing. You build up and then release a sudden sharp sneeze.": 1.0,
+    "a big sneeze is coming. Ah... ah... choo!": 1.0,
+    "startled. A sudden loud noise just made you jump.": 1.0,
+    "bowing deeply. You thank the audience for coming.": 1.0,
+    "nodding yes. You agree with everything enthusiastically.": 1.0,
+    "shaking your head no. You refuse firmly.": 0.625,
+    "looking up at the stars. The night sky is beautiful.": 1.0,
+    "cowering in fear. Something huge looms over you.": 1.0,
+    "heartbroken. You have just received news that devastated you.": 1.0,
+    "ecstatic. You are overjoyed and can barely contain yourself.": 1.0,
+    "sleepy toddler. You are fighting to stay awake and keep nodding off.": 1.0,
+    "drunk. You are unsteady and your movements are loose and uncoordinated.": 1.0,
+    "a cat stalking prey. You crouch low, freeze, and creep forward slowly.": 1.0,
+    "jumping for joy. You just got the best news ever.": 0.875,
+    "yawning widely. You are so sleepy.": 0.875,
+    "checking both ways. You look left and right before crossing.": 1.0,
+    "look at the person. Someone just walked up to you.": 1.0,
+    "step back in fear. Something startled you.": 1.0
+   }
+  }
+ }
+}
