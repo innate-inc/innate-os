@@ -801,6 +801,15 @@ class MicroInput(InputDevice):
         if self._safety_commit_due() and (self._endpointer is None or not self._endpointer.in_speech):
             self._commit_scribe()
 
+    def _respawn_mic(self):
+        mic = self.mic
+        if mic is None or not hasattr(mic, "restart"):
+            return
+        try:
+            mic.restart()
+        except Exception as e:  # noqa: BLE001 — a dead capture must not take the input device down
+            self.logger.error(f"microphone respawn failed: {e}")
+
     def _start_audio_thread(self):
         """Start the audio streaming thread.
 
@@ -828,8 +837,12 @@ class MicroInput(InputDevice):
                     empty_count = 0  # Reset on successful get
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count == 50:
-                        self.logger.warning("⚠️ No audio chunks received (queue empty for 5s)")
+                    if empty_count >= 50:
+                        # The wrist camera's USB audio dies on a link reset while arecord
+                        # stays alive and blocked, so Scribe would idle out forever.
+                        self.logger.warning("⚠️ No audio chunks for 5 s: respawning the microphone capture")
+                        self._respawn_mic()
+                        empty_count = 0
                     continue
 
                 try:
@@ -1044,6 +1057,8 @@ class ArecordStreamer:
     def start(self, device: str = "default", sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
+        self._device = str(device)
+        self._stop.clear()
         # arecord raw PCM 16-bit, stdout
         cmd = [
             "arecord",
@@ -1119,3 +1134,14 @@ class ArecordStreamer:
                     self._proc.kill()
         except Exception:
             pass
+
+    def restart(self):
+        """Kill a capture that stopped delivering (a USB audio reset leaves arecord blocked) and reopen it."""
+        self.stop()
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
+        self.start(device=self._device, sample_rate=self.sample_rate, channels=self.channels)
+        self.logger.info(f"🎙️ arecord respawned on {self._device} (pid: {self._proc.pid if self._proc else '?'})")
