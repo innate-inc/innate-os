@@ -126,6 +126,7 @@ class SpeechStreamer:
     def __init__(self, chat: ChatManager, on_emote: Callable[[str], None] | None = None):
         self._chat = chat
         self._on_emote = on_emote
+        self._emotes: list[str] = []  # held until the reply speaks: a silent turn performs nothing
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -140,6 +141,10 @@ class SpeechStreamer:
     def flush(self) -> None:
         self._say(self._buffer)
         self._buffer = ""
+        with self._lock:
+            if self.spoke and not self._muted:
+                self._perform()  # a tag after the last sentence still belongs to the reply
+            self._emotes.clear()
 
     def mute(self) -> None:
         """Drop everything not yet spoken — the reply went stale mid-stream."""
@@ -169,9 +174,7 @@ class SpeechStreamer:
         if self._muted:
             return
         sentence, emotes = split_emotes(sentence)
-        if self._on_emote is not None:
-            for prompt in emotes:
-                self._on_emote(prompt)
+        self._emotes.extend(emotes)
         # Leaked tool narration, never speech — cut mid-sentence too (the model
         # appends it without a boundary) and mute the rest of the reply. Shared
         # with context._clean_speech so the audio never carries text the chat
@@ -181,11 +184,21 @@ class SpeechStreamer:
             self._muted = True
         if not re.search(r"[a-zA-Z0-9]", sentence):
             return
+        self._perform()
         # The first sentence supersedes stale queued utterances (a reply
         # mid-playback keeps its rest, see _survives_flush in tts.py); the
         # rest of this reply queues in order behind it.
         self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
         self.spoke = True
+
+    def _perform(self) -> None:
+        """Play the held emote tags as their sentence goes to TTS. Held, not played on sight: a
+        model told to stay quiet still writes tag-only replies on idle turns, and those would
+        keep the robot fidgeting (and the planner busy) every few seconds."""
+        if self._on_emote is not None:
+            for prompt in self._emotes:
+                self._on_emote(prompt)
+        self._emotes.clear()
 
 
 def _split_sentences(text: str) -> tuple[list[str], str]:

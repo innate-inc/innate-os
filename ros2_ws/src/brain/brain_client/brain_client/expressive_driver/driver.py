@@ -523,6 +523,8 @@ class ExpressionDriver:
         reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}.get(status)
         if not reaction or not self._state.is_brain_active or time.monotonic() - self._reply_emote_at <= REPLY_EMOTE_S:
             return
+        if self._animator.playing is not None:
+            return  # an emote still on stage says more than a generic nod would; cutting it short says less
         if reaction not in presets.PRESETS:
             self.express(reaction)  # free text: a prompt to generate
             return
