@@ -67,6 +67,7 @@ SPEAKING_MIN = 0.8
 SOUND_START_MAX_S = 0.5
 SOUND_LENGTH_TOL_S = 0.3
 LOAD_ABORT_PCT = 70.0
+IGNORED_LOADS: set[int] = set()  # joint indices whose load reading is known bad (--ignore-load)
 LOAD_ABORT_HOLD_S = 0.1  # a single acceleration spike is not a stall
 J6_LIMIT_MA = 1300.0  # mars_arm config/arm_config.yaml: the claw reports current, not load
 STEP_RATIO_MAX = 1.15  # measured against arrival intervals, which jitter a few ms around the 33 ms tick
@@ -156,12 +157,13 @@ class Probe(Node):
         loads = [abs(e) for e in effort[:5]] + [abs(effort[5]) / J6_LIMIT_MA * 100.0]
         if self.watch_arm:
             now = time.monotonic()
-            if max(loads[:5]) <= LOAD_ABORT_PCT:
+            watched = [load for j, load in enumerate(loads[:5]) if j not in IGNORED_LOADS]
+            if max(watched, default=0.0) <= LOAD_ABORT_PCT:
                 self._loaded_since = None
             elif self._loaded_since is None:
                 self._loaded_since = now
             elif now - self._loaded_since >= LOAD_ABORT_HOLD_S:
-                self.trip(f"servo load {max(loads[:5]):.0f} % over {LOAD_ABORT_PCT:.0f} % for {LOAD_ABORT_HOLD_S} s")
+                self.trip(f"servo load {max(watched):.0f} % over {LOAD_ABORT_PCT:.0f} % for {LOAD_ABORT_HOLD_S} s")
         return list(msg.position[:6]), loads
 
     def _on_arm_status(self, msg: ArmStatus) -> tuple[bool, str, bool]:
@@ -561,7 +563,10 @@ def _arm_checks(bench: Bench, start: float, end: float) -> None:
     states = probe.window("arm_state", start, end)
     loads = np.array([load for _, (_, load) in states]) if states else np.zeros((1, 6))
     peak = loads.max(axis=0)
-    bench.check("peak load j1..j5", " ".join(f"{p:.0f}%" for p in peak[:5]), bool(peak[:5].max() <= LOAD_ABORT_PCT))
+    watched = [p for j, p in enumerate(peak[:5]) if j not in IGNORED_LOADS]
+    bench.check(
+        "peak load j1..j5", " ".join(f"{p:.0f}%" for p in peak[:5]), bool(max(watched, default=0.0) <= LOAD_ABORT_PCT)
+    )
     bench.check(
         "peak claw current", f"{peak[5] * J6_LIMIT_MA / 100:.0f} mA ({peak[5]:.0f}% of {J6_LIMIT_MA:.0f})", None
     )
@@ -692,7 +697,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("stage", choices=("check", "head", "voice", "arm", "full"))
     parser.add_argument("--rounds", type=int, default=1, help="arm stage: rounds of presets (6 is about three minutes)")
+    parser.add_argument("--ignore-load", default="", help="joints whose load reading is broken, e.g. j4 or j4,j5")
     args = parser.parse_args()
+    IGNORED_LOADS.update(int(j.strip()[1:]) - 1 for j in args.ignore_load.split(",") if j.strip())
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)  # Ctrl-C must leave the context up to restore
     probe = Probe()
     executor = MultiThreadedExecutor(num_threads=2)
