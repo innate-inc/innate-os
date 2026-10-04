@@ -6,6 +6,7 @@
   python -m ml.author val2     --work W     # a second, independent teacher label for the 40 val prompts
   python -m ml.author probes   --work W     # the teacher's own answers to the probe prompts (12 takes each)
   python -m ml.author real     --work W     # the teacher's recipes for the 12 held-out real emotions
+  python -m ml.author boost    --work W     # ~300 targeted conversational rows (refuse, agree, listen, wave, ...)
   python -m ml.author build    --work W     # -> distill_data/{dataset,val}.jsonl + report.json
 
 Every call is resumable: finished batches are cached under W, keyed by their prompts only, so delete W/recipes (or
@@ -33,6 +34,12 @@ PROMPTS_PER_FAMILY = 7
 
 # Concepts of the out-of-distribution probes: never in training data (Binh's OOD-core list, keyword form).
 OOD_BLOCK = re.compile(r"sneez|startl|drunk|tipsy|dizz|toddler|stalk|pounc|heartbr|ecstat", re.I)
+# Near-verbatim phrasings of the skill probes: their relatives may train (refusing, agreeing), the probe wording not.
+PROBE_PHRASES = re.compile(
+    r"shak\w* (?:\w+ )?head|head[- ]?shak|nod\w* yes|up at the stars|bow\w* deeply|cower|jump\w* for joy|"
+    r"yawn\w* widely|both ways|look at the person|step back in fear",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -183,7 +190,7 @@ CATEGORIES: list[Category] = [
 
 
 def category(family: str) -> str:
-    return next((c.slug for c in CATEGORIES if family.startswith(c.slug + "/")), family.split("/")[0])
+    return next((c.slug for c in CATEGORIES + BOOST if family.startswith(c.slug + "/")), family.split("/")[0])
 
 
 def _hash(text: str) -> str:
@@ -276,15 +283,22 @@ Write exactly {n} distinct families for this category, each with exactly {k} pro
 Reply with JSON only."""
 
 
-def families(work: Path, workers: int) -> None:
-    out = work / "families.json"
+def families(
+    work: Path,
+    workers: int,
+    categories: list[Category] = CATEGORIES,
+    template: str = FAMILY_PROMPT,
+    out_name: str = "families.json",
+    per_family: int = PROMPTS_PER_FAMILY,
+) -> None:
+    out = work / out_name
     have: dict[str, list[str]] = json.loads(out.read_text()) if out.exists() else {}
 
     def one(cat: Category) -> list[dict[str, Any]]:
-        msg = FAMILY_PROMPT.format(slug=cat.slug, brief=cat.brief, n=cat.families, k=PROMPTS_PER_FAMILY, avoid="")
-        return codex(msg, FAMILY_SCHEMA, work / "codex" / "families")["families"]
+        msg = template.format(slug=cat.slug, brief=cat.brief, n=cat.families, k=per_family, avoid="")
+        return codex(msg, FAMILY_SCHEMA, work / "codex" / out_name.removesuffix(".json"))["families"]
 
-    todo = [c for c in CATEGORIES if not any(f.startswith(c.slug + "/") for f in have)]
+    todo = [c for c in categories if not any(f.startswith(c.slug + "/") for f in have)]
     with ThreadPoolExecutor(workers) as ex:
         futures = {ex.submit(one, c): c for c in todo}
         for fut in as_completed(futures):
@@ -296,10 +310,161 @@ def families(work: Path, workers: int) -> None:
                 continue
             for fam in got:
                 name = fam["family"] if fam["family"].startswith(cat.slug + "/") else f"{cat.slug}/{fam['family']}"
-                have[name] = [p.strip() for p in fam["prompts"] if p.strip() and not OOD_BLOCK.search(p)]
+                have[name] = [p.strip() for p in fam["prompts"] if p.strip() and not leaks(p, name, probe_concepts())]
             out.write_text(json.dumps(have, indent=1))
             print(f"[families] {cat.slug}: {len(got)} families ({len(have)} total)", flush=True)
     print(f"[families] {len(have)} families, {sum(map(len, have.values()))} prompts -> {out}")
+
+
+BOOST: list[Category] = [
+    Category(
+        "talk/refuse",
+        2,
+        "saying no: declining an offer, refusing a request, a firm no, an absolute no, 'no, "
+        "thank you', 'I can't do that'",
+    ),
+    Category(
+        "talk/disagree",
+        2,
+        "disagreeing: politely unconvinced, 'I don't think so', 'that's not right', a "
+        "skeptical no, strong disagreement",
+    ),
+    Category(
+        "talk/agree",
+        2,
+        "agreeing and saying yes: 'sounds good', 'of course', 'yes!', 'pleased, small nod', "
+        "eager agreement, acknowledging an instruction",
+    ),
+    Category(
+        "talk/listen",
+        2,
+        "listening: attentive stillness while someone talks, 'I'm listening', 'go on', "
+        "'mm-hm', listening to something sad, listening to an exciting story",
+    ),
+    Category(
+        "talk/pardon",
+        2,
+        "not catching what was said: 'sorry, what?', 'pardon?', 'can you say that again?', "
+        "straining to hear over noise, mishearing something odd",
+    ),
+    Category(
+        "talk/apologise",
+        2,
+        "apologising: a quick sorry, 'my mistake', a sincere apology, a deep apology for letting someone down",
+    ),
+    Category(
+        "talk/hello",
+        2,
+        "greeting with a wave: 'hi!', 'hello there', 'welcome back', waving at someone across "
+        "the room, greeting a child, an excited hello",
+    ),
+    Category(
+        "talk/goodbye",
+        2,
+        "saying goodbye with a wave: 'bye!', 'see you later', 'good night', a reluctant "
+        "farewell, waving someone off at the door",
+    ),
+    Category(
+        "talk/think",
+        2,
+        "thinking and deciding: 'let me think', 'hmm', weighing two options, searching memory, "
+        "the moment of decision, 'got it!'",
+    ),
+    Category(
+        "talk/success",
+        2,
+        "celebrating a completed task: 'done!', 'all finished', a small satisfied 'there', "
+        "'nailed it', a big task finally complete",
+    ),
+    Category(
+        "talk/failure",
+        2,
+        "failing a task: 'oops', it slipped, 'that didn't work', deflated after trying, "
+        "frustrated after a second failure, 'let me try again'",
+    ),
+    Category(
+        "talk/notice",
+        2,
+        "noticing someone arrive: a person walks in, someone appears behind you, hearing "
+        "footsteps, recognising a friend, a stranger at the door",
+    ),
+    Category(
+        "talk/interrupted",
+        2,
+        "being interrupted: called mid-task, cut off mid-sentence, pausing politely for "
+        "someone, startled out of concentration, mildly annoyed at a second interruption",
+    ),
+    Category(
+        "talk/wait",
+        2,
+        "waiting patiently: waiting for an answer, waiting your turn, waiting for someone to "
+        "finish, waiting a long time, waiting with growing impatience",
+    ),
+]
+
+BOOST_FAMILY_PROMPT = """You are building training prompts for a small model that turns a text prompt into body
+language for MARS, a small home robot with one arm (its posture), a gripper (its mouth), a camera head that only tilts
+(its gaze) and a base that turns and rolls a little. MARS is a conversational companion: the brain that talks to people
+asks MARS to move with short prompts while it speaks.
+
+Beat: {slug}
+Scope: {brief}
+
+Write exactly {n} families for this beat, each with exactly {k} prompts: 3 situations on an intensity ladder (subtle,
+clear, emphatic), each phrased 3 ways, then 3 more phrasings of your choice:
+- family: a slug "{slug}/<name>" (lowercase, hyphens).
+- the 3 phrasings of a situation: (1) "<bare concept>. <one second-person sentence setting up the situation>."
+  e.g. "politely declining. Someone offers you a second slice of cake and you are full."; (2) a 2-6 word emote tag in
+  the voice of a chat assistant's body-language cue, e.g. "no thanks, polite", "pleased, small nod",
+  "deflated", "big excited wave"; (3) an imperative stage direction, e.g. "decline the offer politely".
+- Vary the wording across families; no prompt longer than 30 words.
+- Never use these words or concepts: sneezing, startled, drunk, dizzy, toddler, stalking, pouncing, heartbroken,
+  ecstatic, "shake/shaking your head", "head shake", "nodding yes", "bowing deeply", "cowering", "jumping for joy",
+  "yawning widely", "both ways", "look at the person", "step back in fear".
+{avoid}
+Reply with JSON only."""
+
+BOOST_STYLE = """
+MARS body vocabulary for conversational beats (MARS's head only tilts up and down):
+- A head shake (no, refusal, disagreement, disbelief) is the BASE turning left-right: osc b, amplitude 8-25 deg,
+  period 0.5-0.9 s, usually with a small pull-back (a < 0) and a closed mouth (g low). Stronger no = more swings,
+  wider and faster. A nod (yes, agreement, acknowledgement) is osc p.
+- Listening: gaze up on the face (p .3-.6), a slight lean in (a .2-.4), a little cant for warmth; nearly still but
+  alive (E .6-1.2) with a tiny slow osc (z or k, amplitude .03-.08).
+- Not catching something: lean in (a .4-.7, maybe d .03-.08) with a cant (k .3-.6) and gaze up; hold to listen.
+- Waves: arm raised and open (z .5-.9, x .4-.8, g .3-.5), osc k (amplitude .2-.6, period .5-.9 s).
+- Thinking: gaze up or aside (p .3-.6, or a b turn of 10-25 deg, or k), slow and quiet; a decision lands with a
+  small decisive nod or snap.
+- Celebrating: gather low, then rise tall and open, bounces (osc z), gripper open, energy peaks 4-8.
+- Failing: a small jolt, then deflate (z, x, p go down), maybe a look at the floor.
+- Noticing someone: the base turns to face them (b), the gaze lifts, a small rise.
+- Interrupted: a small jolt or freeze, turn toward the interrupter (b), then settle or resume.
+- Waiting: patient stillness with micro motion, an occasional small glance (b) or sway.
+These are defaults, not templates: keep each situation and intensity distinct.
+"""
+
+
+# The held-out conversational situations: in the first family of each beat, the "clear" situation's three
+# phrasings (prompts 3-5) and its free rephrasing (prompt 10), so no near-duplicate of them trains.
+CONV_VAL_PICKS = (3, 4, 5, 10)
+
+
+def conv_val_prompts(work: Path) -> dict[str, str]:
+    path = work / "families_boost.json"
+    if not path.exists():
+        return {}
+    fams: dict[str, list[str]] = json.loads(path.read_text())
+    first: dict[str, str] = {}
+    for family in fams:
+        first.setdefault(category(family), family)
+    return {fams[f][i]: f for f in first.values() for i in CONV_VAL_PICKS if i < len(fams[f])}
+
+
+def boost(work: Path, workers: int, system_file: Path | None) -> None:
+    """~300 targeted conversational rows (the robot's most common beats), written with BOOST_STYLE."""
+    families(work, workers, BOOST, BOOST_FAMILY_PROMPT, "families_boost.json", per_family=12)
+    fams: dict[str, list[str]] = json.loads((work / "families_boost.json").read_text())
+    run_batches(_batches(fams, 12), system_prompt(system_file), work / "boost", workers, BOOST_STYLE)
 
 
 RECIPE_SCHEMA = _strict(
@@ -588,6 +753,14 @@ def teacher_real(work: Path, system_file: Path | None) -> None:
     print(f"[author] teacher recipes for the held-out clips -> {out}")
 
 
+def leaks(prompt: str, family: str, concepts: set[str]) -> bool:
+    """A row the probes must not see: an OOD-core concept, a probe's wording, or a probe's bare concept."""
+    text = f"{prompt} {family}"
+    return (
+        bool(OOD_BLOCK.search(text) or PROBE_PHRASES.search(prompt)) or prompt.split(".")[0].strip().lower() in concepts
+    )
+
+
 def probe_concepts() -> set[str]:
     """Bare concepts of the probe prompts ("sneezing", "nodding yes", ...): never trained on verbatim."""
     from brain_client.expressive.probes import PROBES
@@ -607,14 +780,14 @@ def build(work: Path, out: Path) -> None:
     """dataset.jsonl (accepted, leak-filtered rows), val.jsonl (40 prompts x 2 teacher labels) and report.json."""
     import numpy as np
 
-    rows = _rows(work / "recipes", "astra", 1) + _rows(work / "seed", "seed", 3)
+    rows = (
+        _rows(work / "recipes", "astra", 1) + _rows(work / "seed", "seed", 3) + _rows(work / "boost", "astra_boost", 2)
+    )
     concepts = probe_concepts()
-    leaked = [
-        r
-        for r in rows
-        if OOD_BLOCK.search(f"{r['prompt']} {r['family']}") or r["prompt"].split(".")[0].strip().lower() in concepts
-    ]
-    accepted = [r for r in rows if r["error"] is None and r not in leaked]
+    leaked = [r for r in rows if leaks(r["prompt"], r["family"], concepts)]
+    conv_held = conv_val_prompts(work)
+    conv_val = [r for r in rows if r["error"] is None and r["prompt"] in conv_held]
+    accepted = [r for r in rows if r["error"] is None and r not in leaked and r["prompt"] not in conv_held]
     val_set = val_prompts(work)
     second = {r["prompt"]: r for r in _rows(work / "val2", "astra", 1) if r["error"] is None}
     first = {r["prompt"]: r for r in accepted}
@@ -634,6 +807,10 @@ def build(work: Path, out: Path) -> None:
     keys = ("prompt", "idea", "recipe", "source", "family", "weight")
     (out / "dataset.jsonl").write_text("".join(json.dumps({k: r[k] for k in keys}) + "\n" for r in accepted))
     (out / "val.jsonl").write_text("".join(json.dumps(v) + "\n" for v in val))
+    conv_keys = ("prompt", "idea", "recipe", "family")
+    (out / "conv_val.jsonl").write_text(
+        "".join(json.dumps({**{k: r[k] for k in conv_keys}, "beat": category(r["family"])}) + "\n" for r in conv_val)
+    )
     live = [liveliness(r["recipe"]) for r in accepted]
     cats: dict[str, int] = {}
     for r in accepted:
@@ -646,6 +823,7 @@ def build(work: Path, out: Path) -> None:
         "leak_dropped": len(leaked),
         "dataset_rows": len(accepted),
         "val_prompts": len(val),
+        "conversation_val_prompts": len(conv_val),
         "families": len(families_),
         "median_segments": float(np.median([x.segments for x in live])),
         "median_energy": float(np.median([x.median_energy for x in live])),
@@ -696,6 +874,10 @@ def main() -> None:
     tp.add_argument("--samples", type=int, default=12)
     tp.add_argument("--workers", type=int, default=12)
     tp.add_argument("--system-file", type=Path)
+    bo = sub.add_parser("boost", help="~300 targeted conversational rows (families + recipes)")
+    bo.add_argument("--work", type=Path, required=True)
+    bo.add_argument("--workers", type=int, default=14)
+    bo.add_argument("--system-file", type=Path)
     rl = sub.add_parser("real", help="the teacher's recipes for the 12 held-out real emotions")
     rl.add_argument("--work", type=Path, required=True)
     rl.add_argument("--system-file", type=Path)
@@ -716,6 +898,8 @@ def main() -> None:
         second_labels(a.work, a.workers, a.system_file)
     elif a.cmd == "probes":
         teacher_probes(a.work, a.samples, a.workers, a.system_file)
+    elif a.cmd == "boost":
+        boost(a.work, a.workers, a.system_file)
     elif a.cmd == "real":
         teacher_real(a.work, a.system_file)
     elif a.cmd == "build":

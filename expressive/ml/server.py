@@ -34,7 +34,7 @@ ENGINE: list[MotionEngine] = []
 # Fraction of GPU memory each tier's vLLM engine may take (weights + KV/state cache); the generator needs < 1 GB.
 GPU_SHARE = {"high": 0.5, "medium": 0.4, "low": 0.15}
 # FP8 halves the planners' weights, so the same tiers fit beside other jobs on the shared 5090.
-GPU_SHARE_FP8 = {"high": 0.35, "medium": 0.3, "low": 0.12}
+GPU_SHARE_FP8 = {"high": 0.35, "medium": 0.25, "low": 0.08}
 
 
 class Request(BaseModel):

@@ -20,7 +20,7 @@ from typing import Any
 from brain_client.expressive.dsl import check
 from brain_client.expressive.prompt import messages
 
-from ..author import OOD_BLOCK, probe_concepts
+from ..author import leaks, probe_concepts
 
 DATA = Path(__file__).parents[1] / "distill_data"
 
@@ -31,10 +31,6 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _write(rows: list[dict[str, Any]], path: Path) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-
-
-def leaks(prompt: str, family: str, concepts: set[str]) -> bool:
-    return bool(OOD_BLOCK.search(f"{prompt} {family}")) or prompt.split(".")[0].strip().lower() in concepts
 
 
 def build(dataset: Path, val_file: Path, out: Path, seed: int) -> None:

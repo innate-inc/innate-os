@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+MTP_FILE = "model-mtp.safetensors"
 TARGETS = [
     "q_proj",
     "k_proj",
@@ -137,12 +138,16 @@ def merge(base: str, adapter: Path, out: Path) -> None:
     for extra in root.iterdir():
         if extra.suffix != ".safetensors":
             shutil.copy(extra, out / extra.name)
-    merged, change = set(), 0.0
+    merged, change, mtp = set(), 0.0, {}
+    weight_map: dict[str, str] = {}
     for shard in sorted(root.glob("*.safetensors")):
         tensors = {}
         with safe_open(str(shard), "pt") as f:
             for key in f.keys():
                 weight = f.get_tensor(key)
+                if key.startswith("mtp."):
+                    mtp[key] = weight
+                    continue
                 if key in pairs:
                     a, b = pairs[key]
                     updated = (weight.float() + scale * (b.float() @ a.float())).to(weight.dtype)
@@ -151,7 +156,13 @@ def merge(base: str, adapter: Path, out: Path) -> None:
                     merged.add(key)
                 tensors[key] = weight
         save_file(tensors, str(out / shard.name), metadata={"format": "pt"})
+        weight_map |= dict.fromkeys(tensors, shard.name)
         del tensors
+    if mtp:
+        # the MTP head gets its own file so ml.distill.mtp can swap a fine-tuned head in by hard-linking the rest
+        save_file(mtp, str(out / MTP_FILE), metadata={"format": "pt"})
+        weight_map |= dict.fromkeys(mtp, MTP_FILE)
+    (out / "model.safetensors.index.json").write_text(json.dumps({"metadata": {}, "weight_map": weight_map}, indent=1))
     missing = sorted(set(pairs) - merged)
     if missing:
         raise SystemExit(f"merge: {len(missing)} LoRA pairs match no base tensor, e.g. {missing[:3]}")

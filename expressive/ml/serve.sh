@@ -20,8 +20,8 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 # SERVE_FLAGS= (set but empty) serves exact bf16 weights.
 cd "$W"
 setsid nohup envs/serve/bin/python -m ml.server \
-  --bundle medium="${MEDIUM:-runs/planner-4b/merged}" \
-  --bundle low="${LOW:-runs/planner-08b/merged}" \
+  --bundle medium="${MEDIUM:-runs/planner-4b-talk/served}" \
+  --bundle low="${LOW:-runs/planner-08b-talk/merged}" \
   --generator "${GENERATOR:-runs/generator/generator.pt}" \
   ${SERVE_FLAGS---fp8 --spec-tokens 3} --port "${PORT:-8000}" > logs/server.log 2>&1 &
 echo $! > "$PIDFILE"

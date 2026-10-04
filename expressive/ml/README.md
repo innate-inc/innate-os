@@ -9,16 +9,19 @@ Everything here imports the pure core (`brain_client.expressive`: channels, dsl,
 | retargeting | `retarget.py`, `retarget.json` | Pollen's real clips + Binh's synthetic library → MARS plan space (the matrix is data) |
 | generator | `generator/{model,data,train,sample,evaluate}.py` | 21.8M flow-matching transformer, plan → (T, 8) at 25 Hz |
 | teacher data | `author.py`, `seed_prompts.tsv`, `distill_data/` | Codex (`gpt-6-astra`, xhigh) writes recipes with the frozen prompt; checked, repaired, lively-calibrated |
-| planners | `distill/{sft,train,evaluate,common}.py` | Unsloth LoRA r = 32 on Qwen3.5-4B (`medium`) and 0.8B (`low`), Gated DeltaNet mixers included |
+| planners | `distill/{sft,train,evaluate,common,mtp}.py` | Unsloth LoRA r = 32 on Qwen3.5-4B (`medium`) and 0.8B (`low`), Gated DeltaNet mixers included; fine-tuned MTP head |
 | service | `engine.py`, `server.py`, `serve.sh`, `bench.py` | FastAPI per CONTRACTS §7: `/generate-sparse`, `/generate-dense`, `/health` |
 
 ## Results (details and the full tables in STATUS.md)
 
-| | probes (18) | OOD-core | skill | valid | plan agreement | real held-out clips top-1 / rank | latency (planner, alone / beside another GPU job) |
+| | probes (18) | OOD-core | skill | valid | plan agreement | real held-out clips top-1 / rank | planner latency (idle GPU) |
 |---|---|---|---|---|---|---|---|
 | teacher (gpt-6-astra, 12 takes) | 0.90 | 0.875 | 0.92 | 100% after repair | ceiling 0.77 | 17% / 3.9 | — |
-| `medium` Qwen3.5-4B, FP8 + 3 MTP drafts | 0.80 | 0.82 | 0.78 | 100% (bf16) / 99.6% (FP8) | 0.66 | 17-23% / 4.1 | 0.62 s / 1.08 s |
-| `low` Qwen3.5-0.8B, FP8 | 0.63 | 0.65 | 0.62 | 99.2% | 0.59 | 17% / 5.0 | 0.29 s / 0.51 s |
+| `medium` Qwen3.5-4B talk, FP8 + 3 tuned MTP drafts | 0.81 | 0.81 | 0.81 | 99.6% | 0.67 | 12% / 4.8 | 0.41 s |
+| `low` Qwen3.5-0.8B talk, FP8 | 0.62 | 0.57 | 0.66 | 100% | 0.58 | 8% / 5.0 | 0.31 s |
+
+Held-out conversational beats (refuse, agree, wave, listen, ...): body checks 0.86 (4B) / 0.69 (0.8B) vs the
+teacher's 0.97. Round-1 planners and the boost/MTP before-after are in STATUS.md.
 
 Generator (21.8M, 8 Euler steps, CFG 1.5): 14-23 ms on the 5090 per request; a 6 s clip costs ~0.2-0.26 s on 4 CPU
 threads (M1 Pro / Ryzen 9900X). Its >1 Hz detail matches real motion better than the procedural liveliness layer
@@ -49,13 +52,17 @@ envs/train/bin/python -m ml.generator.evaluate --ckpt runs/generator/generator.p
 # 2. teacher data (on the Mac: Codex CLI; resumable, W = a scratch dir)
 python -m ml.author families --work W && python -m ml.author recipes --work W --workers 24
 python -m ml.author seed --work W && python -m ml.author val2 --work W && python -m ml.author probes --work W
-python -m ml.author build --work W                                            # -> ml/distill_data/{dataset,val}.jsonl
+python -m ml.author boost --work W        # 336 conversational rows (refuse, agree, listen, wave, ...), 56 held out
+python -m ml.author build --work W        # -> ml/distill_data/{dataset,val,conv_val}.jsonl + report.json
 
 # 3. planners (4B ~1 h, 0.8B ~15 min on the 5090), then score them (vLLM env)
-envs/train/bin/python -m ml.distill.sft --out runs/sft
-envs/train/bin/python -m ml.distill.train --data runs/sft --out runs/planner-4b --model Qwen/Qwen3.5-4B
-envs/train/bin/python -m ml.distill.train --data runs/sft --out runs/planner-08b --model Qwen/Qwen3.5-0.8B
-VLLM_USE_FLASHINFER_SAMPLER=0 envs/serve/bin/python -m ml.distill.evaluate runs/planner-4b/merged --out runs/planner-4b/eval.json
+envs/train/bin/python -m ml.distill.sft --out runs/sft_talk
+envs/train/bin/python -m ml.distill.train --data runs/sft_talk --out runs/planner-4b-talk --model Qwen/Qwen3.5-4B
+envs/train/bin/python -m ml.distill.train --data runs/sft_talk --out runs/planner-08b-talk --model Qwen/Qwen3.5-0.8B
+VLLM_USE_FLASHINFER_SAMPLER=0 envs/serve/bin/python -m ml.distill.evaluate runs/planner-4b-talk/merged --fp8 --out runs/planner-4b-talk/eval_fp8.json
+# MTP head on the planner's own answers (~15 min on the 4B; the planner frozen), served from the hard-linked copy
+VLLM_USE_FLASHINFER_SAMPLER=0 envs/serve/bin/python -m ml.distill.mtp data runs/planner-4b/merged runs/sft/train.jsonl runs/planner-4b/mtp.jsonl
+envs/train/bin/python -m ml.distill.mtp train runs/planner-4b/merged runs/planner-4b/mtp.jsonl runs/planner-4b/served
 envs/train/bin/python -m ml.distill.evaluate --teacher W/teacher_probes.json      # the teacher on the same probes
 ```
 
@@ -70,7 +77,8 @@ curl -s innate52.local:8000/generate-dense -H 'content-type: application/json' \
 envs/train/bin/python -m ml.bench --url http://localhost:8000                     # 16 prompts, n = 1
 ```
 
-`serve.sh` reads `MEDIUM`, `LOW`, `GENERATOR`, `PORT` and `SERVE_FLAGS` from the environment. The default flags are
+Beside another GPU job, expect roughly 2x the planner latency. `serve.sh` serves `runs/planner-4b-talk/served` (`medium`) and `runs/planner-08b-talk/merged` (`low`) unless
+`MEDIUM` / `LOW` say otherwise; it also reads `GENERATOR`, `PORT` and `SERVE_FLAGS`. The default flags are
 `--fp8 --spec-tokens 3` (FP8 weights + MTP drafts: the 4B goes from 1.04 s to 0.67 s per prompt, probes unchanged);
 `SERVE_FLAGS=` serves exact bf16 weights. FlashInfer's sampler is disabled because it JIT-compiles with nvcc, which
 the box lacks. On the Mac, call the server by IP (192.168.0.156): mDNS lookups add ~120 ms per request.

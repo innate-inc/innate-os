@@ -1,8 +1,53 @@
 # ml workstream status (running log)
 
-**FINAL (22:20 box time): all five deliverables landed.** Server RUNNING at http://innate52.local:8000
-(= http://192.168.0.156:8000): `medium` = distilled Qwen3.5-4B, `low` = distilled Qwen3.5-0.8B, both FP8 + 3 MTP
-drafts, generator v3 (core c877d92f6). Shipped generator also at `expressive/out/models/generator.pt` (md5 746e338f...).
+**ROUND 2 (04:05 box time): conversational boost + MTP head — swapped in, server RUNNING** at
+http://192.168.0.156:8000 with `medium` = `runs/planner-4b-talk/served` (boosted 4B, FP8, fine-tuned MTP head) and
+`low` = `runs/planner-08b-talk/merged`; the round-1 dirs are kept (`runs/planner-4b/{merged,served}`,
+`runs/planner-08b/merged`). `serve.sh` defaults point at the new dirs.
+
+Data: 14 conversational beats x 2 families x 12 prompts = 336 Codex rows (xhigh, frozen prompt, lively house style +
+a MARS body-vocabulary note: refusal = `osc b`, yes = `osc p`, waves = raised arm + `osc k`, ...), each situation on an
+intensity ladder in three phrasings ("word. sentence.", a 2-6 word emote tag like "no thanks, polite", a stage
+direction). 100% valid after repair (71% first pass), 0 rows hit the leak filter (which now also blocks the skill
+probes' wording: "shaking your head", "nodding yes", ...). 280 rows train at weight 2; one situation per beat (56
+prompts) is held out as `distill_data/conv_val.jsonl`. SFT 10,660 rows. Same recipe for both models (the 4B at bs 8 x 4
+to fit beside another session's job). Val loss: 4B 0.8153 (round 1 0.8165), 0.8B 0.9055 (0.9053).
+
+| | 4B round 1 | **4B talk** | 0.8B round 1 | **0.8B talk** |
+|---|---|---|---|---|
+| probes (18 x 12) | 0.79 | **0.81** | 0.63 | 0.62 |
+| OOD-core / skill | 0.80 / 0.78 | 0.81 / 0.81 | 0.65 / 0.62 | 0.57 / 0.66 |
+| "shaking your head no" | 0.00 | **0.33** | 0.00 | 0.33 |
+| nodding yes / look at the person / step back | 1.00 / 1.00 / 0.92 | 0.92 / 1.00 / 1.00 | 0.58 / 1.00 / 0.75 | 0.50 / 0.67 / 0.75 |
+| held-out conversation: body checks (teacher 0.97) | 0.61 | **0.86** | 0.53 | **0.69** |
+| ... refuse / disagree shake the base | 0.00 / 0.00 | **0.75 / 0.75** | 0.00 / 0.25 | 0.00 / 0.25 |
+| ... hello / goodbye wave, listening gaze | .75 / .75 / .75 | **1.0 / 1.0 / 1.0** | 0 / .75 / .75 | .75 / 1.0 / .75 |
+| held-out conversation: agreement with teacher | 0.64 | **0.71** | 0.57 | 0.63 |
+| val agreement (40 prompts) | 0.66 | 0.67 | 0.59 | 0.58 |
+| validity | 99.6% | 99.6% | 99.2% | 100% |
+| real held-out clips top-1 / rank | 23% / 4.1 | 12% / 4.8 | 17% / 5.0 | 8% / 5.0 |
+
+(4B scored as served, FP8; 0.8B in bf16; the probe numbers include the core's c877d92f6 -> HEAD probe change, which
+moved no round-1 score.) The real-clip identification dropped (one greedy recipe per emotion x 12 emotions: Binh puts
+the noise at +-7 points; I would not read it as a regression without a second seed). "shaking your head no" stays
+weak because the probe's own wording says "head": the 4B nods (`osc p`) in 7 of 12 samples and once writes the
+gesture word as the channel (`osc 1.8 turn 14 .9`, rejected by the checker) — the prompts that SAY refusing now shake
+the base 75% of the time.
+
+MTP head (`ml/distill/mtp.py`, Binh's recipe: the planner frozen, 3 draft steps unrolled, 7,744 of the planner's own
+answers, 1 epoch, 14 min on the 5090): per-draft top-1 on held-out answers 0.69 / 0.47 / 0.37 -> 0.84 / 0.80 / 0.78.
+Trained on the round-1 4B's answers and transplanted unchanged into the boosted 4B (same base, same data family).
+Clean A/B on the boosted 4B, idle GPU, 16 prompts, n = 1, FP8 + 3 drafts: planner **571 -> 411 ms (-28%)**, wall
+595 -> 436 ms on the box; from the Mac by IP: `medium` 478 ms wall (411 planner, 23 generator), `low` 353 ms (312).
+The 0.8B keeps the stock head (its ~300 ms is mostly fixed per-request cost).
+
+GPU sharing: another session's overnight eval (`/media/jetson1/nvme/claude-scratch/v4-archives/w5k.sh`) only starts a
+step when the card is nearly empty (< 4 GB used); with our server resident (~11 GB) it waits indefinitely (it was
+blocked 22:28 -> 01:33 and again since 02:23). Someone needs to decide: stop the server overnight, or relax that gate
+(their steps fit beside the server: ~15 GB + 11 GB).
+
+**Round 1 (22:20 box time): all five deliverables landed** (superseded by round 2 above): `medium` = distilled
+Qwen3.5-4B, `low` = distilled Qwen3.5-0.8B, both FP8 + 3 MTP drafts, generator v3 (core c877d92f6). Shipped generator also at `expressive/out/models/generator.pt` (md5 746e338f...).
 
 ## 1. Retargeting — done
 - `ml/retarget.py` + `ml/retarget.json` (the matrix, retunable). Reachy features relative to rest (x -8 mm, z 3 mm):
