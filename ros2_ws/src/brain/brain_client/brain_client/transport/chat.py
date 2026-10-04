@@ -14,10 +14,13 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from brain_client.brain.context import emote_spans, split_emotes, split_tool_narration
 from brain_client.common.enums import StrEnum
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _REPLY_IDS = itertools.count(1)
@@ -108,8 +111,8 @@ class ChatManager:
         if self._tts_handler is not None:
             self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
 
-    def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self, on_emote=self.on_emote)
+    def stream_speech(self, hold: Callable[[], bool] | None = None) -> SpeechStreamer:
+        return SpeechStreamer(self, hold, on_emote=self.on_emote)
 
 
 class SpeechStreamer:
@@ -121,10 +124,20 @@ class SpeechStreamer:
     speak atomic, and :meth:`try_abandon` decides mute-if-unspoken atomically —
     without it, a reply could voice its first sentence right after the loop
     decided to abandon it.
+
+    While ``hold`` is true the reply has not started, so sentences queue up
+    unspoken (still abandonable) until :meth:`flush` lets them out in order.
     """
 
-    def __init__(self, chat: ChatManager, on_emote: Callable[[str], None] | None = None):
+    def __init__(
+        self,
+        chat: ChatManager,
+        hold: Callable[[], bool] | None = None,
+        on_emote: Callable[[str], None] | None = None,
+    ):
         self._chat = chat
+        self._hold = hold
+        self._held: list[str] = []
         self._on_emote = on_emote
         self._emotes: list[str] = []  # held until the reply speaks: a silent turn performs nothing
         self._buffer = ""
@@ -139,9 +152,13 @@ class SpeechStreamer:
             self._say(sentence)
 
     def flush(self) -> None:
-        self._say(self._buffer)
-        self._buffer = ""
+        """Speak what is left: held sentences first, then the unterminated tail."""
         with self._lock:
+            self._hold = None
+            held, self._held = self._held, []
+            for sentence in (*held, self._buffer):
+                self._say_locked(sentence)
+            self._buffer = ""
             if self.spoke and not self._muted:
                 self._perform()  # a tag after the last sentence still belongs to the reply
             self._emotes.clear()
@@ -151,6 +168,7 @@ class SpeechStreamer:
         with self._lock:
             self._muted = True
             self._buffer = ""
+            self._held = []
 
     def try_abandon(self) -> bool:
         """Mute iff nothing has been spoken yet; True when the reply was abandoned.
@@ -164,6 +182,7 @@ class SpeechStreamer:
                 return False
             self._muted = True
             self._buffer = ""
+            self._held = []
             return True
 
     def _say(self, sentence: str) -> None:
@@ -172,6 +191,9 @@ class SpeechStreamer:
 
     def _say_locked(self, sentence: str) -> None:
         if self._muted:
+            return
+        if self._held or (self._hold is not None and not self.spoke and self._hold()):
+            self._held.append(sentence)  # tags stay inside the held sentence until it is spoken
             return
         sentence, emotes = split_emotes(sentence)
         self._emotes.extend(emotes)
