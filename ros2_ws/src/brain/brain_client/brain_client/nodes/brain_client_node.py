@@ -54,6 +54,7 @@ from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
+from brain_client.expressive_driver.driver import ExpressionDriver, ExpressiveConfig
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor
@@ -309,6 +310,7 @@ class BrainClientNode(Node):
         self.camera.on_motion = self._on_camera_motion
         self.arm_recovery = ArmRecovery(self, state, runner=self.runner, chat=self.chat, brain=self.brain)
         self.rest_pose = ArmRestPose(self, state)
+        self.expression = self._init_expression()
         self.lifecycle = BrainLifecycle(
             self,
             state,
@@ -331,6 +333,28 @@ class BrainClientNode(Node):
             self._reload_primitives_client,
             self._reload_skills_client,
         )
+
+    def _init_expression(self) -> ExpressionDriver | None:
+        """The expressive body layer (brain_client/expressive_driver), wired into speech, gaze and the
+        prompt; None, and every path as before, when expressive.enabled is false."""
+        config = ExpressiveConfig.load(self)
+        if config is None:
+            return None
+        driver = ExpressionDriver(
+            self,
+            self.state,
+            config,
+            cmd_vel_pub=self.cmd_vel_pub,
+            provider=lambda: self.brain.llm.provider if self.brain.llm is not None else None,
+            standing_grip=lambda: self.rest_pose.grip,
+        )
+        self.chat.on_emote = driver.express
+        self.gaze.head_sink = driver.set_gaze
+        self.brain.emotes = True
+        if self._tts_handler is not None:
+            self._tts_handler.on_audio = driver.feed_audio
+            self._tts_handler.on_audio_cut = driver.cut_audio
+        return driver
 
     def _create_always_on_subscriptions(self) -> None:
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
@@ -847,6 +871,8 @@ class BrainClientNode(Node):
         if self._agent_status_heartbeat is not None and not self._agent_status_heartbeat.is_canceled():
             self._agent_status_heartbeat.cancel()
         self.reload.stop_watcher()
+        if self.expression is not None:
+            self.expression.close()
         if self._tts_handler is not None:
             self._tts_handler.close()
         self._service_call_node.destroy_node()

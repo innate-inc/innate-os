@@ -318,9 +318,33 @@ def split_tool_narration(text: str) -> tuple[str, bool]:
     return text[: match.start()].rstrip(), True
 
 
+# An unterminated tag runs to the end of the text: a reply that never closes one must not speak it.
+_EMOTE = re.compile(r"<emote>(.*?)(?:</emote>|\Z)|\[emote:(.*?)(?:\]|\Z)", re.IGNORECASE | re.DOTALL)
+
+
+def split_emotes(text: str) -> tuple[str, list[str]]:
+    """Cut ``<emote>prompt</emote>`` (or ``[emote: prompt]``) body-language tags out of speech.
+
+    Returns ``(text without the tags, their prompts in order)``. Like
+    :func:`split_tool_narration`, the one scrub the transcript and the audio
+    path share, so a tag is never spoken nor shown.
+    """
+    prompts = [" ".join((tagged or bracketed).split()) for tagged, bracketed in _EMOTE.findall(text)]
+    if not prompts:
+        return text, []
+    clean = re.sub(r"\s+([,.!?;:…])", r"\1", " ".join(_EMOTE.sub(" ", text).split()))
+    return clean, [prompt for prompt in prompts if prompt]
+
+
+def emote_spans(text: str) -> list[tuple[int, int]]:
+    """Where the emote tags are; one still waiting for its closer runs to the end of the text."""
+    return [match.span() for match in _EMOTE.finditer(text)]
+
+
 def _clean_speech(speech: str | None) -> str | None:
-    """Drop unspeakable output: placeholders and leaked tool-call narration."""
+    """Drop unspeakable output: placeholders, emote tags and leaked tool-call narration."""
     if not speech:
         return None
+    speech, _ = split_emotes(speech)
     speech, _ = split_tool_narration(speech)
     return speech if re.search(r"[a-zA-Z0-9]", speech) else None

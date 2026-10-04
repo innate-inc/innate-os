@@ -14,8 +14,9 @@ import json
 import re
 import threading
 import time
+from collections.abc import Callable
 
-from brain_client.brain.context import split_tool_narration
+from brain_client.brain.context import emote_spans, split_emotes, split_tool_narration
 from brain_client.common.enums import StrEnum
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
@@ -39,6 +40,8 @@ class ChatManager:
         self._task_status_pub = task_status_pub
         self._tts_handler = tts_handler
         self.history: list[dict] = []
+        # Bound late by the node: plays an emote tag's prompt the moment its sentence goes to TTS.
+        self.on_emote: Callable[[str], None] | None = None
 
     @staticmethod
     def entry(sender: Sender, text: str) -> dict:
@@ -106,7 +109,7 @@ class ChatManager:
             self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
 
     def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self)
+        return SpeechStreamer(self, on_emote=self.on_emote)
 
 
 class SpeechStreamer:
@@ -120,8 +123,9 @@ class SpeechStreamer:
     decided to abandon it.
     """
 
-    def __init__(self, chat: ChatManager):
+    def __init__(self, chat: ChatManager, on_emote: Callable[[str], None] | None = None):
         self._chat = chat
+        self._on_emote = on_emote
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -129,8 +133,7 @@ class SpeechStreamer:
         self._reply_id = f"reply-{next(_REPLY_IDS)}"
 
     def feed(self, text: str) -> None:
-        self._buffer += text
-        *sentences, self._buffer = _SENTENCE_END.split(self._buffer)
+        sentences, self._buffer = _split_sentences(self._buffer + text)
         for sentence in sentences:
             self._say(sentence)
 
@@ -165,6 +168,10 @@ class SpeechStreamer:
     def _say_locked(self, sentence: str) -> None:
         if self._muted:
             return
+        sentence, emotes = split_emotes(sentence)
+        if self._on_emote is not None:
+            for prompt in emotes:
+                self._on_emote(prompt)
         # Leaked tool narration, never speech — cut mid-sentence too (the model
         # appends it without a boundary) and mute the rest of the reply. Shared
         # with context._clean_speech so the audio never carries text the chat
@@ -179,3 +186,17 @@ class SpeechStreamer:
         # rest of this reply queues in order behind it.
         self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
         self.spoke = True
+
+
+def _split_sentences(text: str) -> tuple[list[str], str]:
+    """Complete sentences and the unfinished rest. An emote tag's prompt may hold a boundary
+    ("startled. jumps back"), so none inside a tag counts, nor in one still streaming in."""
+    tags = emote_spans(text)
+    sentences: list[str] = []
+    start = 0
+    for boundary in _SENTENCE_END.finditer(text):
+        if any(a <= boundary.start() < b for a, b in tags):
+            continue
+        sentences.append(text[start : boundary.start()])
+        start = boundary.end()
+    return sentences, text[start:]

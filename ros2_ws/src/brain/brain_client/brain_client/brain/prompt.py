@@ -57,7 +57,7 @@ it found or did.
 real time, and long replies talk over the conversation. When there is nothing to do or say, \
 call the wait tool if it is offered and write no text — never emit placeholder text of any \
 kind. Never narrate routine tool calls, and never repeat yourself across updates.
-- User messages come from speech recognition and can be noisy: fragments, mis-hearings, or \
+{emote_rule}- User messages come from speech recognition and can be noisy: fragments, mis-hearings, or \
 your own spoken words leaking back in. If a message is a stray fragment with no plausible \
 intent in context (e.g. "You", a lone word, a snippet of your own last sentence), ignore it — \
 write no text (call wait if you have it). Only answer what a person plausibly meant to say to you.
@@ -91,6 +91,13 @@ If the turn makes more than one call, the one that does the work goes first.
 # regressed it to 2/8, though it reads as a harmless clarification. Idle
 # silence itself is unharmed by the paragraph (verified 8/8 quiet).
 
+# The tags are stripped from speech and played as motion (transport/chat.py).
+_EMOTE_RULE = """\
+- Your body speaks too: open each spoken reply with an emote tag, and add one on an emotional \
+beat — 2-8 words of physical body language, e.g. <emote>delighted, bouncing tall</emote> or \
+<emote>leans in, curious</emote>. Tags are performed, never spoken; write none when you stay silent.
+"""
+
 # Skill guidance lives here, not in each turn's observation text: per turn it
 # would be re-billed in every history entry for the life of the conversation
 # (~27 tokens x up to 1000 turns). Changing it on skill start/stop costs no
@@ -102,10 +109,16 @@ A skill is running right now. Guidance while it runs:
 
 
 def build_system_prompt(
-    directive_prompt: str | None, identity: RobotIdentity | None = None, running_guidance: str = ""
+    directive_prompt: str | None,
+    identity: RobotIdentity | None = None,
+    running_guidance: str = "",
+    *,
+    emotes: bool = False,
 ) -> str:
     directive = (directive_prompt or "").strip() or "Be a helpful home robot."
-    prompt = _SYSTEM_PROMPT.format(directive=directive, identity=_identity_block(identity))
+    prompt = _SYSTEM_PROMPT.format(
+        directive=directive, identity=_identity_block(identity), emote_rule=_EMOTE_RULE if emotes else ""
+    )
     if running_guidance:
         prompt += _RUNNING_GUIDANCE.format(guidance=running_guidance)
     return prompt

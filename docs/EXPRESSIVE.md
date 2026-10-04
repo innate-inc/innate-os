@@ -123,7 +123,7 @@ extra ROS node): one `Animator` ticked by a 30 Hz node timer, its poses mapped o
 | output | topic | when |
 |---|---|---|
 | head | `/mars/head/set_position` (Int32, °) | when the rounded degree changes |
-| arm | `/mars/arm/commands` (6 rad, the streaming pass-through) | every tick while a clip plays, the robot speaks, or an agent runs with idle breathing on; a stream starts from the measured joints and is slewed at ≤ 1.8 rad/s per joint |
+| arm | `/mars/arm/commands` (6 rad, the streaming pass-through) | every tick while a clip plays, the robot speaks, or an agent runs with idle breathing on; each time the stream (re)starts the animator enters from the measured pose over 1.5 s (`Animator.enter_from`), and it rate-limits every joint (`basis.json` `max_speed`) |
 | base | the brain's `cmd_vel_topic` (`/cmd_vel_skills` → the mux on hardware, `/cmd_vel` in the sim) | while a clip's orient/advance is non-zero or the robot is off its anchor: feed-forward P-control on `/odom` (`stance.py` over `expressive.drive`), ≤ 0.6 rad/s and 0.15 m/s, one zero twist on arrival, then silence |
 
 A robot nobody talks to stays still: with the brain inactive and nothing playing, nothing is
@@ -131,7 +131,9 @@ published. The layer yields the body to whatever else owns it:
 
 - a running skill (any `running` on `/brain/skill_status_update` except `express`, or the brain's
   own skill slot) or a live Nav2 `/navigate_to_pose` goal masks everything: output stops at once,
-  the animator eases to neutral behind it, and the end of the skill plays a small reaction;
+  the stream resumes from wherever the skill left the body, and the end of the skill plays a small
+  reaction. Masking is silence rather than `Animator.set_mask`, whose eased-to-NEUTRAL parts would
+  start the resumed stream at NEUTRAL instead of the measured pose;
 - a `/mars/arm/commands` or `/mars/head/set_position` command that is not ours (leader arm, UDP
   teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message;
   `/joystick` holds the base off for 2 s;
@@ -193,6 +195,8 @@ turns.
       voice by the ALSA buffer; set the Animator's `speech_latency_s` if it does
 - [ ] the arm streaming at TELEOP gains for minutes while an agent runs: servo temperature, and
       whether the rest fold should be skipped when expression owns the idle arm
+- [ ] `basis.json` `max_speed` (6 rad/s per joint) against the pass-through's soft gains; the arm
+      SDK's own stream cap is 1.8 rad/s
 - [ ] the head servo at up to 30 commands/s during speech
 - [ ] the stance through the mux: `/cmd_vel_skills` outranks Nav2, and is published only while
       the base is being corrected

@@ -184,6 +184,8 @@ class BrainAgent:
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
         # published for nobody. Small events always publish.
         self.trace_has_audience: Callable[[], bool] = lambda: True
+        # Set by the composition root while the expression driver plays emote tags.
+        self.emotes = False
 
         if self._context is not None:
             self._context.on_request = self._trace_request  # the monitor renders the exact request body
@@ -413,6 +415,7 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            emotes=self.emotes,
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
