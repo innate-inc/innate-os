@@ -188,7 +188,13 @@ its anchor. The layer yields the body to whatever else owns it:
 Speech sway (only while an agent runs, or on top of a playing clip): the TTS loop hands the
 robot's own voice (never the sim's simulated residents) to
 `Animator.feed_speech` as it reaches the speaker: PCM s16le 16 kHz chunks on hardware, and in the
-sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`.
+sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`. The sway lays the audio
+end to end at playback speed (32,000 B/s), however fast it streams in. On hardware the first 0.5 s
+of each utterance is held back until `aplay` would start the device (its default start threshold
+is a full 0.5 s buffer), and every chunk is flushed to `aplay` as it arrives. Offline, against a
+fake `aplay` that plays like ALSA, this puts the sway on the speaker within 1 ms with the stream at
+4.5x or 1.3x real time; before, the sway led the voice by the buffer's fill time (110 ms at 4.5x,
+407 ms at 1.3x). `expressive.speech_latency_s` shifts it if a real device differs.
 
 Vocalizations (`expressive.vocalize`): a prompt or preset that plays while the robot is silent
 (no speech playing or queued) also makes a short non-verbal sound — a gasp, sigh, chirp, hum,
@@ -231,7 +237,9 @@ Parameters on brain_client_node:
 | `expressive.enabled` | `true` | `false` builds nothing; speech, gaze and the prompt behave as before |
 | `expressive.idle_breathing` | `true` | breathe while an agent runs; `false` holds still between clips |
 | `expressive.stand_in` | `true` | play the keyword preset while a prompt's clip is generated |
-| `expressive.vocalize` | `true` | a prompt or preset played while the robot is silent makes a short non-verbal sound |
+| `expressive.vocalize` | `true` | a prompt or preset played while the robot is silent makes a short non-verbal sound; applies at once |
+| `expressive.enabled_parts` | `[arm, base, head]` | the parts the layer may move; the rest stays still. Applies at once (`ros2 param set /brain_client_node expressive.enabled_parts "[head]"`): the bring-up stages it |
+| `expressive.speech_latency_s` | `0.0` | how far the speaker trails the speech sway's audio; positive delays the motion |
 | `expressive.server_url` | `""` | the planner server (`http://<host>:8000`); empty skips it. Set it per robot in `config/settings.yaml` (stanza below) |
 | `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
 | `expressive.on_skill_failed` | `sad` | |
@@ -268,17 +276,61 @@ Clip JSON on `/brain/express/play`. On the Agent page, start an agent and chat: 
 an emote, the head and wrist sway while the browser plays the voice, and the arm breathes between
 turns.
 
-### Hardware checklist
+### Hardware bring-up
 
-- [ ] speech sway against `aplay`: chunks are fed as they are written, so the sway may lead the
-      voice by the ALSA buffer; set the Animator's `speech_latency_s` if it does
-- [ ] vocalizations through `aplay` (`-t raw -f S16_LE -r 16000 -c 1`): audible but clearly under
-      the voice on the real speaker, no click at start or end; adjust `BELOW_VOICE_DB` in `vocal.py`
-- [ ] the arm streaming at TELEOP gains for minutes while an agent runs: servo temperature, and
-      whether the rest fold should be skipped when expression owns the idle arm
-- [ ] `basis.json` `max_speed` (the per-joint TELEOP profile speeds: j1 6.0, j2 3.6, j3 4.8, j4 2.4,
-      j5 2.4, j6 1.4 rad/s) against the pass-through's soft gains; the arm SDK's own stream cap is 1.8 rad/s
-- [ ] the head servo at up to 30 commands/s during speech
+`scripts/expressive_bringup.sh` brings the layer up on a real robot one part of the body at a
+time, in about ten minutes. Run it on the robot with the agent stopped (Agent page) and no skill
+running; it sources the ROS environment if the shell has not. Each stage sets
+`expressive.enabled_parts` (and `expressive.vocalize` for `voice`), drives the driver through its
+topics, measures what reached the servos, the speaker and the base, and prints PASS or FAIL for
+every check with its number. On exit, Ctrl-C included, it stops the expression, sends a zero twist
+after `full`, and restores the parameters. Each run leaves `/tmp/expressive_bringup/<stage>-<time>.log`
+and `.json` (the raw samples).
+
+```bash
+cd ~/innate-os
+scripts/expressive_bringup.sh check   # 10 s
+scripts/expressive_bringup.sh head    # 40 s, watch the head
+scripts/expressive_bringup.sh voice   # 45 s, listen
+scripts/expressive_bringup.sh arm     # 30 s; --rounds 6 is a three-minute thermal soak
+scripts/expressive_bringup.sh full    # 45 s, the base too, once the operator types YES
+```
+
+Run them in this order and stop at the first FAIL.
+
+| stage | moves | plays | passes when |
+|---|---|---|---|
+| `check` | nothing | — | the brain node is up; `expressive.enabled` on, `simulator_mode` off, `expressive.enabled_parts` declared; the state at 4-6 Hz; `/joint_states`, `/mars/arm/state`, `/odom` above 5 Hz; the prompt, stop, `/brain/tts`, head, arm and cmd_vel topics each have a subscriber, `/tts/is_playing` a publisher; `/mars/arm/status` ok with torque on; the agent stopped and nothing masked; the planner server's `/health` answers (a robot with no server URL is only noted) |
+| `head` | head | `curious`, `agreeing`, `sad`; `listening` silent, then over a spoken line | at least 5 head commands per preset; within ±20°; at most 31 commands in any second; every step within the 200°/s cap (+1° for rounding); the measured head follows the commands with at most 0.3 s lag and 4° p95 error; 0 arm commands and 0 twists; the spoken line moves the head at least 0.3° RMS away from the silent take; the state reports `speaking` at least 80 % of the time from the first sway until the voice stops |
+| `voice` | head | `surprised` and `sleepy` on a silent robot; `happy` during a line; `surprised`, with a line sent while its gasp plays | each silent emote raises `/tts/is_playing` once, within 0.5 s, for its sound's length ± 0.3 s (gasp 0.40 s, sigh 1.10 s); the emote during speech adds no second run; the line starts only after the gasp ends; the operator confirms the three sounds were audible, clearly under the voice, with no clicks |
+| `arm` | arm, head | `agreeing`, `curious`, `happy`, `proud`, `excited`, × `--rounds` | j1-j5 load at most 70 % (`/mars/arm/state` effort); `/mars/arm/status` ok throughout; every streamed step within `basis.json` `max_speed` × the ticks elapsed (× 1.15: message arrival jitters a few ms around 33 ms); 0 twists; torque on and status ok afterwards |
+| `full` | everything | `confused`, `curious`, `sad`, `affectionate`, `scared` (up to 46° and 25 cm) | for each: at most 50 cm from the anchor; back within 3 cm and 3° after 2.5 s; twists within 0.165 m/s and 0.66 rad/s; the last twist is zero and the base is silent for the final second; the `arm` checks throughout |
+
+In `arm` and `full`, a j1-j5 load over 70 % for 0.1 s, or any not-ok `/mars/arm/status`, stops the
+expression at once and fails the stage after reporting the arm checks and the torque state. The
+claw (j6) reports current, not load, so its peak is only noted. Also noted without a threshold:
+the head servo's lag, how long after `/tts/is_playing` the sway starts (synthesis plus `aplay`'s
+start buffer), the arm stream's rate, and its tracking error per joint at +150 ms.
+
+What the script cannot judge:
+
+- servo temperature below 70 °C. The arm node publishes temperatures only as its own ≥ 70 °C
+  (and ≥ 80 % load) flag in `/mars/arm/status`, every 5 s, which aborts the stage; a 60 °C limit
+  needs the arm node to publish temperatures. Feel the servos after `arm --rounds 6`.
+- whether the sway keeps time with the voice: watch the head during `head`'s line, and set
+  `expressive.speech_latency_s` (restart the brain) if it leads or trails.
+- how loud the sounds are: the operator answers in `voice`; `BELOW_VOICE_DB` in `vocal.py` sets it.
+
+In the sim, `check` fails `simulator_mode` and `/mars/arm/status` (the sim publishes none). The
+other stages run once a status is faked:
+`ros2 topic pub -r 1 /mars/arm/status mars_msgs/msg/ArmStatus "{is_ok: true, is_torque_enabled: true}"`.
+
+Still checked by hand:
+
+- [ ] the arm streaming at TELEOP gains for minutes while an agent runs: whether the rest fold
+      should be skipped when expression owns the idle arm
+- [ ] `basis.json` `max_speed` (the TELEOP profile speeds: j1 6.0, j2 3.6, j3 4.8, j4 2.4, j5 2.4,
+      j6 1.4 rad/s) against the pass-through's soft gains; `arm`'s tracking errors are the evidence
 - [ ] Mad mode while an agent emotes: the brace fold completes (the arm hold reads `/robot/info`,
       up to 1 s behind the mode switch)
 - [ ] the stance through the mux: `/cmd_vel_skills` outranks Nav2, and is published only while

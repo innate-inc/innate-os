@@ -6,9 +6,10 @@ Each tick's ActuatorPose goes to the head servo (when its integer degree changes
 streaming pass-through, and the base through a stance tracker on /odom. Whenever the arm stream
 (re)starts, the animator enters from the measured pose, so expression never jumps from wherever
 a skill or an operator left the body; the animator also rate-limits every joint. The body is yielded
-whenever something else owns it: a running skill or a Nav2 goal masks everything, a foreign
-/mars/arm/commands stream (teleop, the arm SDK page) or Mad mode's arm brace the arm, a foreign
-head command the head, the joystick and the gaze tracker the base. Outside a clip or speech the arm
+whenever something else owns it: a running skill masks the parts it declares and a Nav2 goal
+everything, a foreign /mars/arm/commands stream (teleop, the arm SDK page) or Mad mode's arm brace
+the arm, a foreign head command the head, the joystick and the gaze tracker the base;
+``expressive.enabled_parts`` keeps the rest still for a staged bring-up. Outside a clip or speech the arm
 streams only while an agent is running and idle breathing is on, so a robot nobody talks to keeps
 its arm wherever skills and auto-rest put it.
 
@@ -26,13 +27,14 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import Twist, Vector3
 from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, Int32, String
@@ -53,6 +55,7 @@ if TYPE_CHECKING:
 
     from innate_llm import Provider
     from rclpy.node import Node
+    from rclpy.parameter import Parameter
     from rclpy.publisher import Publisher
 
     from brain_client.core.state import BrainState
@@ -97,6 +100,8 @@ class ExpressiveConfig:
     idle_breathing: bool
     stand_in: bool  # play the keyword preset at once while a prompt's clip is generated
     vocalize: bool  # a short non-verbal sound with an emote nobody is speaking over
+    enabled_parts: Parts  # the rest of the body never moves (scripts/expressive_bringup.sh stages it)
+    speech_latency_s: float  # how far the speaker trails the speech-sway tap
     server_url: str
     on_skill_completed: str  # a preset name, or a prompt to generate; "" = no reaction
     on_skill_failed: str
@@ -109,6 +114,8 @@ class ExpressiveConfig:
             idle_breathing=bool(node.declare_parameter("expressive.idle_breathing", True).value),
             stand_in=bool(node.declare_parameter("expressive.stand_in", True).value),
             vocalize=bool(node.declare_parameter("expressive.vocalize", True).value),
+            enabled_parts=_parts(node.declare_parameter("expressive.enabled_parts", sorted(ALL_PARTS)).value),
+            speech_latency_s=float(node.declare_parameter("expressive.speech_latency_s", 0.0).value or 0.0),
             server_url=str(node.declare_parameter("expressive.server_url", "").value),
             on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
             on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
@@ -155,7 +162,11 @@ class ExpressionDriver:
         self._maker = ClipMaker(config.server_url, provider, self._logger)
         self._basis = Basis.load()
         self._animator = Animator(
-            fps=FPS, idle=Breathing() if config.idle_breathing else STILL, blend_s=BLEND_S, basis=self._basis
+            fps=FPS,
+            idle=Breathing() if config.idle_breathing else STILL,
+            blend_s=BLEND_S,
+            basis=self._basis,
+            speech_latency_s=config.speech_latency_s,
         )
         self._stance = StanceTracker()
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="expressive")
@@ -178,9 +189,10 @@ class ExpressionDriver:
         self._running_skills: dict[str, Parts] = {}
         self._skill_parts: dict[str, Parts] = {}  # last declared parts per skill: the agent's slot claims first
         self._navigating = False
-        self._was_masked = False
+        self._enabled = config.enabled_parts
+        self._masked_now: Parts = frozenset()
+        self._released_at: dict[str, float] = {}  # when a skill last let go of each part
         self._reply_emote_at = -math.inf
-        self._unmasked_at = 0.0
         self._gaze = False
         self._streaming = False
         self._grip_lock: float | None = None
@@ -218,6 +230,7 @@ class ExpressionDriver:
         node.create_subscription(GoalStatusArray, NAV_STATUS_TOPIC, self._on_nav_status, _ACTION_STATUS_QOS)
         node.create_subscription(String, "/robot/info", self._on_robot_info, 10)
         node.create_timer(1.0 / FPS, self._tick)
+        node.add_on_set_parameters_callback(self._on_parameters)
         self._logger.info(
             f"[Expressive] driver up: {FPS:.0f} Hz, planner server {config.server_url or '(none)'}, "
             f"idle breathing {'on' if config.idle_breathing else 'off'}"
@@ -249,7 +262,7 @@ class ExpressionDriver:
         """A built-in preset, at once and with its sound (``name`` must be in ``presets.PRESETS``)."""
         seq = self._next_seq()
         self._submit(self._play_preset, seq, name, ClipSource.PRESET, request_id)
-        self._submit(self._vocalize, seq, name, name)
+        self._submit(self._vocalize, seq, "", name)  # its own sound: the name's words would pick another (sleepy)
 
     def play(self, clip: Clip, request_id: str | None = None) -> None:
         seq = self._next_seq()
@@ -378,16 +391,17 @@ class ExpressionDriver:
         if stage["playing"] or agent:
             self._live_until = now + LINGER_S
         masked = self._masked()
-        if self._was_masked and not masked:
-            self._unmasked_at = now
-        self._was_masked = bool(masked)
+        for part in self._masked_now - masked:
+            self._released_at[part] = now
+        self._masked_now = masked
+        held = masked | (ALL_PARTS - self._enabled)
         live = now < self._live_until
-        streaming = live and "arm" not in masked and now >= self._arm_quiet_until and not self._mad
+        streaming = live and "arm" not in held and now >= self._arm_quiet_until and not self._mad
         entering = streaming and not self._streaming
         if entering:
             self._enter_from_measured()
         self._streaming = streaming
-        head_on = (live or self._gaze) and "head" not in masked and now >= self._head_quiet_until
+        head_on = (live or self._gaze) and "head" not in held and now >= self._head_quiet_until
         if head_on and not self._head_on and not entering and self._joints is not None:
             self._head_entry = (now, math.degrees(self._joints[6]))  # the arm's entry blend covers the head
         self._head_on = head_on
@@ -395,7 +409,7 @@ class ExpressionDriver:
         self._drive_head(pose, head_on, now)
         if streaming:
             self._drive_arm(pose)
-        self._drive_base(pose, dt, "base" not in masked and not self._gaze and now >= self._base_quiet_until, now)
+        self._drive_base(pose, dt, "base" not in held and not self._gaze and now >= self._base_quiet_until, now)
         self._ticks += 1
         if self._ticks % STATE_EVERY == 0:
             self._publish_state(stage, masked)
@@ -596,7 +610,7 @@ class ExpressionDriver:
 
     def _on_arm_command(self, msg: Float64MultiArray) -> None:
         now = time.monotonic()
-        if tuple(msg.data) not in self._ours and self._outsider(now):
+        if tuple(msg.data) not in self._ours and self._outsider("arm", now):
             self._arm_quiet_until = max(self._arm_quiet_until, now + FOREIGN_HOLD_S)
 
     def _on_head_command(self, msg: Int32) -> None:
@@ -609,12 +623,12 @@ class ExpressionDriver:
             if degrees == msg.data:
                 del self._head_echoes[index]
                 return
-        if self._outsider(now):
+        if self._outsider("head", now):
             self._head_quiet_until = now + FOREIGN_HOLD_S
 
-    def _outsider(self, now: float) -> bool:
-        """A command from neither us nor the skill that just owned the body (it yields by finishing)."""
-        return not self._was_masked and now - self._unmasked_at > SKILL_TAIL_S
+    def _outsider(self, part: str, now: float) -> bool:
+        """A command for ``part`` from neither us nor the skill that owns it or just let it go."""
+        return part not in self._masked_now and now - self._released_at.get(part, -math.inf) > SKILL_TAIL_S
 
     def _on_nav_status(self, msg: GoalStatusArray) -> None:
         self._navigating = any(goal.status in NAV_LIVE for goal in msg.status_list)
@@ -625,6 +639,27 @@ class ExpressionDriver:
 
     def _on_robot_info(self, msg: String) -> None:
         self._mad = is_mad_mode(msg.data)
+
+    def _on_parameters(self, params: list[Parameter]) -> SetParametersResult:
+        """``expressive.enabled_parts`` and ``expressive.vocalize`` apply at once; every other expressive
+        parameter is read at startup."""
+        for param in params:
+            if param.name == "expressive.enabled_parts":
+                parts = _parts(param.value)
+                if len(parts) != len(set(param.value or ())):
+                    return SetParametersResult(successful=False, reason=f"parts are {', '.join(sorted(ALL_PARTS))}")
+                self._enabled = parts
+            elif param.name == "expressive.vocalize":
+                self._config = replace(self._config, vocalize=bool(param.value))
+                if param.value:
+                    self._submit(_warm_sounds)
+        return SetParametersResult(successful=True)
+
+
+def _parts(names: object) -> Parts:
+    if not isinstance(names, (list, tuple)):
+        return ALL_PARTS
+    return frozenset(str(name) for name in names) & ALL_PARTS
 
 
 def _warm_sounds() -> None:
