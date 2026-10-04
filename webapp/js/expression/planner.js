@@ -9,7 +9,10 @@
 import { checkRecipe, parseClip, recipeToClip } from "./pipeline.js";
 
 /** @typedef {import("./pipeline.js").Clip} Clip */
-/** @typedef {{ clip: Clip, source: string, detail: string }} Made */
+/**
+ * A clip and where it came from; `prompt` is the one the robot reports planning from, when it says.
+ * @typedef {{ clip: Clip, source: string, detail: string, prompt?: string }} Made
+ */
 
 // FROZEN (CONTRACTS §8): the distilled planner is trained on exactly this text.
 export const SYSTEM_PROMPT = `You plan expressive motions for MARS: a small mobile robot with a 5-joint arm and gripper on its back
@@ -49,6 +52,24 @@ const MAX_REPAIRS = 2;
 const GENERATE_REQ_TOPIC = "/brain/express/generate_req";
 const GENERATE_RES_TOPIC = "/brain/express/generate_res";
 const STRING_TYPE = "std_msgs/msg/String";
+
+/**
+ * A signal that aborts with `outer` or after `ms`; call done() once the request settles.
+ * @param {AbortSignal} outer @param {number} ms
+ */
+export function timeoutSignal(outer, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error("timed out")), ms);
+  const forward = () => ctrl.abort(outer.reason);
+  outer.addEventListener("abort", forward, { once: true });
+  return {
+    signal: ctrl.signal,
+    done: () => {
+      clearTimeout(timer);
+      outer.removeEventListener("abort", forward);
+    },
+  };
+}
 
 /** @param {string} text */
 function parseRecipeJson(text) {
@@ -110,16 +131,18 @@ export const denseUrl = (url) => (/\/generate-dense\/?$/.test(url) ? url : `${ur
 /**
  * The 5090 planner + generator (POST /generate-dense). Uses its generated
  * clip when it sends one, else expands its recipe here.
- * @param {string} prompt @param {{ url: string, seed?: number, signal?: AbortSignal }} cfg @returns {Promise<Made>}
+ * @param {string} prompt
+ * @param {{ url: string, seed?: number, effort?: string, signal?: AbortSignal }} cfg effort picks the planner tier
+ * @returns {Promise<Made>}
  */
-export async function planWithServer(prompt, { url, seed = 0, signal }) {
+export async function planWithServer(prompt, { url, seed = 0, effort = "medium", signal }) {
   if (location.protocol === "https:" && url.startsWith("http:")) {
     throw new Error("this page is https, the server http: the browser blocks it — use the robot source");
   }
   const res = await fetch(denseUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, n: 1, seed, effort: "medium" }),
+    body: JSON.stringify({ prompt, n: 1, seed, effort }),
     signal,
   });
   if (!res.ok) throw new Error(`server HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`);
@@ -128,17 +151,14 @@ export async function planWithServer(prompt, { url, seed = 0, signal }) {
   if (raw) {
     const clip = parseClip({ name: prompt, prompt, idea: data.idea, recipe: data.recipe, ...raw });
     const total = Number(data?.timing_ms?.total);
-    return {
-      clip,
-      source: "server",
-      detail: `planner + generator${Number.isFinite(total) ? ` · ${Math.round(total)} ms on the 5090` : ""}`,
-    };
+    const timing = Number.isFinite(total) ? ` · ${Math.round(total)} ms on the 5090` : "";
+    return { clip, source: "server", detail: `${data.effort ?? effort} planner + generator${timing}` };
   }
   const recipe = String(data?.recipe ?? "");
   const error = checkRecipe(recipe);
   if (error) throw new Error(`server recipe invalid: ${error}`);
   const { clip } = recipeToClip(recipe, { name: prompt, prompt, idea: String(data.idea ?? ""), seed });
-  return { clip, source: "server", detail: "planner · local liveliness" };
+  return { clip, source: "server", detail: `${data.effort ?? effort} planner · local liveliness` };
 }
 
 /**
@@ -170,7 +190,8 @@ export function createRobotPlanner(ros) {
       }
       try {
         const clip = parseClip({ prompt: waiter.prompt, ...reply.clip });
-        waiter.resolve({ clip, source: "robot", detail: String(reply.source ?? "") });
+        const prompt = typeof reply.prompt === "string" ? reply.prompt : undefined;
+        waiter.resolve({ clip, source: "robot", detail: String(reply.source ?? ""), prompt });
       } catch (err) {
         waiter.reject(err instanceof Error ? err : new Error(String(err)));
       }
@@ -180,8 +201,13 @@ export function createRobotPlanner(ros) {
   );
 
   return {
-    /** @param {string} prompt @param {{ timeoutMs?: number, signal?: AbortSignal }} [opts] @returns {Promise<Made>} */
-    generate(prompt, { timeoutMs = 20_000, signal } = {}) {
+    /**
+     * @param {string} prompt
+     * @param {{ timeoutMs?: number, signal?: AbortSignal, extra?: Record<string, string> }} [opts] extra rides
+     *   along in the request (a spoken sentence's `speech`, `heard`, `before`)
+     * @returns {Promise<Made>}
+     */
+    generate(prompt, { timeoutMs = 20_000, signal, extra = {} } = {}) {
       if (ros.state !== "connected") return Promise.reject(new Error("robot not connected"));
       // randomUUID exists only in secure contexts; the robot also serves the app on plain http.
       const id = crypto.randomUUID?.() ?? `web-${Date.now()}-${Math.random()}`;
@@ -211,7 +237,7 @@ export function createRobotPlanner(ros) {
             reject(err);
           },
         });
-        ros.publish(GENERATE_REQ_TOPIC, { data: JSON.stringify({ id, prompt }) });
+        ros.publish(GENERATE_REQ_TOPIC, { data: JSON.stringify({ ...extra, id, prompt }) });
       });
     },
     destroy() {

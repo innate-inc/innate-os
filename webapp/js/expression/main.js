@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 // Expression Studio — type a feeling, watch MARS perform it, send it to the robot.
+// Speech mode (speechCard.js) performs a whole spoken reply sentence by sentence.
 //
 // A prompt becomes a recipe (from the robot's own generate path, the 5090
 // planner server, or Gemini in the browser — planner.js), the recipe becomes a
@@ -27,9 +28,10 @@ import {
 import { Player, sampleTake, takeDuration } from "./player.js";
 import { createTimeline } from "./plots.js";
 import { DEFAULT_PRESET, PRESETS, nearestPreset } from "./presets.js";
-import { createRobotPlanner, planWithGemini, planWithServer } from "./planner.js";
+import { createRobotPlanner, planWithGemini, planWithServer, timeoutSignal } from "./planner.js";
 import { loadGeminiConfig, saveGeminiConfig } from "./judge.js";
 import { createJudgeCard } from "./judgeCard.js";
+import { TRIES as SPEECH_TRIES, createSpeechCard } from "./speechCard.js";
 import { createStage, THUMB_VIEW, VIEWS } from "./viz.js";
 import { ros } from "../rosClient.js";
 
@@ -40,8 +42,9 @@ import { ros } from "../rosClient.js";
 /**
  * A clip ready to play, with the stages that made it (for the plots).
  * @typedef {import("./player.js").Take & { frames: number[][] | null, plan: Plan | null,
- *            source: string, detail: string, seed: number, local?: boolean }} StudioTake
- * `local` takes stay in the studio even with follow on (the planner's stand-in, the greeting).
+ *            source: string, detail: string, seed: number, local?: boolean, title?: string }} StudioTake
+ * `local` takes stay in the studio even with follow on (the planner's stand-in, the greeting, spoken
+ * sentences — the robot performs those itself when it says them); `title` replaces the prompt on stage.
  */
 
 const PLAY_TOPIC = "/brain/express/play";
@@ -77,10 +80,36 @@ const ICON = {
 const PAGE_HTML = `
   <div class="page-head">
     <h1 class="page-title">Expression Studio</h1>
-    <span class="exs-sub">type a feeling · watch MARS perform it · send it to the robot</span>
+    <span class="exs-sub exs-feel">type a feeling · watch MARS perform it · send it to the robot</span>
+    <span class="exs-sub exs-speech">type what MARS says · watch it perform each sentence</span>
+    <div class="exs-mode" role="group" aria-label="Studio mode" data-el="mode">
+      <button data-mode="feeling" title="One feeling, character or moment → one clip">Feeling</button>
+      <button data-mode="speech" title="A spoken reply → one clip per sentence, timed to the voice">Speech</button>
+    </div>
   </div>
   <div class="exs-body">
-    <div class="exs-ask">
+    <div class="exs-speak exs-speech">
+      <label class="exs-heard">they said
+        <input type="text" data-el="heard" autocomplete="off" spellcheck="false"
+          placeholder="optional — the person's last words, prompted with the first sentence"></label>
+      <textarea data-el="reply" rows="3" spellcheck="false" aria-label="What MARS says"
+        placeholder="What MARS says — a reply of a few sentences; &lt;emote&gt;…&lt;/emote&gt; tags allowed"></textarea>
+      <div class="exs-row">
+        <select data-el="speechSource" title="Where each sentence's recipe comes from"
+          aria-label="Recipe source"></select>
+        <select data-el="effort" title="The 5090 planner tier: low = the 0.8B talk planner, medium = 4B"
+          aria-label="Planner effort"></select>
+        <label title="Speak with this browser's voice; off, each sentence is timed by its length">
+          <input type="checkbox" data-el="voice"> voice</label>
+        <span class="spacer"></span>
+        <button data-el="generate" title="Plan every sentence's clip again, in order">Generate</button>
+        <button class="exs-primary" data-el="speakBtn"
+          title="Speak the reply and perform each sentence as its audio starts (⌘/Ctrl+Enter)">Perform</button>
+        <button data-el="sendSpeech"
+          title="Publish on /brain/tts: the robot (or sim) says it and performs each sentence itself">Send to robot</button>
+      </div>
+    </div>
+    <div class="exs-ask exs-feel">
       <div class="exs-ask-field">
         <input type="text" data-el="prompt" autocomplete="off" spellcheck="false"
           placeholder="a curious puppy hearing a strange noise…" aria-label="Describe a feeling, a character or a moment">
@@ -95,7 +124,8 @@ const PAGE_HTML = `
       <button class="exs-primary" data-el="go">Perform</button>
     </div>
     <div class="exs-status" data-el="status"></div>
-    <div class="exs-tries" data-el="tries"><span class="exs-sub">try</span></div>
+    <div class="exs-tries exs-feel" data-el="tries"><span class="exs-sub">try</span></div>
+    <div class="exs-tries exs-speech" data-el="speechTries"><span class="exs-sub">try</span></div>
 
     <div class="exs-main">
       <div class="exs-card exs-stage">
@@ -116,6 +146,12 @@ const PAGE_HTML = `
         </div>
       </div>
       <div class="exs-side">
+        <div class="exs-card exs-speech">
+          <h2>Sentences <span class="spacer"></span><span class="exs-sub" data-el="beatsInfo"></span></h2>
+          <ol class="exs-beats" data-el="beats"></ol>
+          <p class="exs-sub exs-beats-note">● records the whole reply, each sentence captioned — silently: a browser
+            can't capture its own voice.</p>
+        </div>
         <div class="exs-card">
           <h2>Recipe <span class="spacer"></span><span class="exs-sub" data-el="seedInfo"></span></h2>
           <textarea class="exs-recipe" data-el="recipe" spellcheck="false" rows="4" aria-label="Recipe"></textarea>
@@ -237,13 +273,20 @@ function mountUnavailable(stage, err) {
   return { destroy: () => root.remove() };
 }
 
-/** @returns {{ source: string, serverUrl: string, follow: boolean, view: string, loop: boolean }} */
+/**
+ * @typedef {{ reply: string, heard: string, source: string, effort: string, voice: boolean }} SpeechPrefs
+ * @returns {{ source: string, serverUrl: string, follow: boolean, view: string, loop: boolean,
+ *             mode: string, speech: SpeechPrefs }}
+ */
 function loadPrefs() {
+  const { reply, heard } = SPEECH_TRIES[0];
+  const speech = { reply, heard, source: "auto", effort: "low", voice: true };
   const defaults = { source: "auto", serverUrl: DEFAULT_SERVER, follow: false, view: "quarter", loop: false };
   try {
-    return { ...defaults, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    return { ...defaults, mode: "feeling", ...saved, speech: { ...speech, ...saved.speech } };
   } catch {
-    return defaults;
+    return { ...defaults, mode: "feeling", speech };
   }
 }
 
@@ -350,6 +393,7 @@ export async function mount(stage) {
   /** A take the user picked: it supersedes a pending ask, whose answer must not replace it. @param {StudioTake} take @param {boolean} [queue] */
   function choose(take, queue = false) {
     cancelAsk();
+    speech.stop();
     perform(take, queue);
   }
 
@@ -365,7 +409,7 @@ export async function mount(stage) {
   function showTake(take) {
     if (!take) return;
     const clip = take.clip;
-    el("clipName").textContent = clip.prompt || clip.name;
+    el("clipName").textContent = take.title ?? (clip.prompt || clip.name);
     el("clipIdea").textContent = clip.idea;
     el("clipSource").hidden = false;
     el("clipSource").textContent = take.detail ? `${take.source} · ${take.detail}` : take.source;
@@ -442,6 +486,7 @@ export async function mount(stage) {
   });
   el("stopBtn").addEventListener("click", () => {
     cancelAsk();
+    speech.stop();
     player.stop();
     renderNow();
   });
@@ -468,7 +513,8 @@ export async function mount(stage) {
       renderNow();
     } else if (ev.key === "/") {
       ev.preventDefault();
-      input("prompt").focus();
+      if (prefs.mode === "speech") speech.focus();
+      else input("prompt").focus();
     }
   }
   document.addEventListener("keydown", onKey);
@@ -527,21 +573,6 @@ export async function mount(stage) {
     return [...(gemini.apiKey ? [llm] : []), ...(ros.state === "connected" ? [robot] : []), server];
   }
 
-  /** @param {AbortSignal} outer */
-  function withTimeout(outer) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(new Error("timed out")), SOURCE_TIMEOUT_MS);
-    const forward = () => ctrl.abort(outer.reason);
-    outer.addEventListener("abort", forward, { once: true });
-    return {
-      signal: ctrl.signal,
-      done: () => {
-        clearTimeout(timer);
-        outer.removeEventListener("abort", forward);
-      },
-    };
-  }
-
   /** Drop a pending ask, so its answer can't start motion after a Stop or replace a newer choice. */
   function cancelAsk() {
     if (!inflight) return;
@@ -569,7 +600,7 @@ export async function mount(stage) {
     try {
       for (const source of sourceChain()) {
         status(`${source.name} is planning “${prompt}”…`, "busy");
-        const timed = withTimeout(ctrl.signal);
+        const timed = timeoutSignal(ctrl.signal, SOURCE_TIMEOUT_MS);
         try {
           const made = await source.run(prompt, timed.signal);
           if (ctrl.signal.aborted || destroyed) return;
@@ -728,6 +759,7 @@ export async function mount(stage) {
   });
   el("robotStop").addEventListener("click", () => {
     cancelAsk();
+    speech.stop();
     player.stop();
     renderNow();
     if (!ros.publish(STOP_TOPIC, { data: "" })) log("robot not connected", "err");
@@ -790,7 +822,49 @@ export async function mount(stage) {
     pill.className = `exs-pill ${state === "connected" ? "on" : "off"}`;
     button("apply").disabled = state !== "connected";
     button("robotStop").disabled = state !== "connected";
+    button("sendSpeech").disabled = state !== "connected";
   });
+
+  // ---- speech mode ---------------------------------------------------------------------
+  const speech = createSpeechCard(el, {
+    makeTake: (made, beat, prompt) => ({
+      ...makeTake({ ...made.clip, name: beat.text, prompt }, { source: made.source, detail: made.detail }),
+      local: true,
+      title: beat.text,
+    }),
+    presetTake: (name) => ({ ...presetTake(name), local: true }),
+    play: (take) => perform(take),
+    status,
+    log,
+    robotPlanner,
+    gemini,
+    serverUrl: () => prefs.serverUrl,
+    ros,
+    prefs: prefs.speech,
+    savePrefs,
+  });
+
+  /** @param {string} mode */
+  function setMode(mode) {
+    const speaking = mode === "speech";
+    prefs.mode = speaking ? "speech" : "feeling";
+    savePrefs();
+    cancelAsk();
+    speech.stop();
+    root.classList.toggle("exs-speech-mode", speaking);
+    el("mode")
+      .querySelectorAll("button")
+      .forEach((b) => b.classList.toggle("active", b.dataset.mode === prefs.mode));
+    el("recBtn").title = speaking
+      ? "Record the whole reply performed, each sentence captioned (silent: a browser can't capture its own voice)"
+      : "Record this clip from the start to a .webm";
+    // Each sentence's clip plays once, as on the robot: a loop would repeat it under the next sentence.
+    player.loop = !speaking && prefs.loop;
+    button("loopBtn").disabled = speaking;
+  }
+  el("mode")
+    .querySelectorAll("button")
+    .forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode ?? "feeling")));
 
   // ---- presets gallery -------------------------------------------------------------
   for (const preset of PRESETS) {
@@ -889,51 +963,91 @@ export async function mount(stage) {
 
   // ---- recording ----------------------------------------------------------------------
   let recording = false;
-  el("recBtn").addEventListener("click", async () => {
-    const take = player.take;
-    if (!stageApi || !take || recording) return;
-    const clip = take.clip;
-    /** @type {ReturnType<typeof stageApi.record>} */
-    let recorder;
-    try {
-      recorder = stageApi.record({
-        caption: clip.prompt || clip.name,
-        sub: clip.recipe ? `MARS · ${clip.recipe}` : "MARS",
-      });
-    } catch (err) {
-      log(`this browser can't record the canvas: ${message(err)}`, "err");
-      return;
-    }
-    cancelAsk();
-    recording = true;
-    el("recBtn").classList.add("rec");
-    const looping = player.loop;
-    player.loop = false;
-    player.restart();
-    renderNow();
-    const deadline = performance.now() + (takeDuration(take) + 3) * 1000;
-    await new Promise((resolve) => {
+
+  /** Resolves once the body is back in idle breathing, or after `maxS` seconds. @param {number} maxS */
+  function settled(maxS) {
+    const deadline = performance.now() + maxS * 1000;
+    return new Promise((resolve) => {
       const poll = setInterval(() => {
-        const settled = !player.playing && !player.settle;
-        if (destroyed || settled || performance.now() > deadline) {
+        const still = !player.playing && !player.settle;
+        if (destroyed || still || performance.now() > deadline) {
           clearInterval(poll);
           setTimeout(resolve, 300);
         }
       }, 100);
     });
-    const blob = await recorder.stop();
-    player.loop = looping;
-    recording = false;
-    el("recBtn").classList.remove("rec");
-    if (destroyed) return;
-    const filename = `mars-${slug(clip.name)}.${blob.type.includes("mp4") ? "mp4" : "webm"}`;
+  }
+
+  /**
+   * Record the stage while `act` performs, then offer the video.
+   * @param {{ caption: string, sub: string, name: string, note?: string }} meta
+   * @param {(recorder: ReturnType<NonNullable<typeof stageApi>["record"]>) => Promise<void>} act
+   */
+  async function recordWhile({ caption, sub, name, note = "" }, act) {
+    if (!stageApi || recording) return;
+    /** @type {ReturnType<typeof stageApi.record>} */
+    let recorder;
+    try {
+      recorder = stageApi.record({ caption, sub });
+    } catch (err) {
+      log(`this browser can't record the canvas: ${message(err)}`, "err");
+      return;
+    }
+    recording = true;
+    el("recBtn").classList.add("rec");
+    try {
+      await act(recorder);
+    } finally {
+      const blob = await recorder.stop();
+      recording = false;
+      el("recBtn").classList.remove("rec");
+      if (!destroyed) offerVideo(blob, name, note);
+    }
+  }
+
+  /** @param {Blob} blob @param {string} name @param {string} note */
+  function offerVideo(blob, name, note) {
+    const filename = `mars-${slug(name)}.${blob.type.includes("mp4") ? "mp4" : "webm"}`;
     const href = download(blob, filename);
-    const line = log(`recorded ${filename} (${(blob.size / 1e6).toFixed(1)} MB) — `, "ok");
+    const line = log(`recorded ${filename} (${(blob.size / 1e6).toFixed(1)} MB)${note} — `, "ok");
     const again = document.createElement("a");
     again.href = href;
     again.download = filename;
     again.textContent = "download again";
     line.appendChild(again);
+  }
+
+  el("recBtn").addEventListener("click", () => {
+    if (prefs.mode === "speech") {
+      if (!prefs.speech.reply.trim()) {
+        status("nothing to record — type what MARS says", "err");
+        return;
+      }
+      void recordWhile(
+        { caption: "", sub: "MARS", name: "speech", note: ", silent: a browser can't capture its own voice" },
+        async (recorder) => {
+          cancelAsk();
+          await speech.perform(recorder);
+          await settled(15);
+        },
+      );
+      return;
+    }
+    const take = player.take;
+    if (!take) return;
+    const clip = take.clip;
+    void recordWhile(
+      { caption: clip.prompt || clip.name, sub: clip.recipe ? `MARS · ${clip.recipe}` : "MARS", name: clip.name },
+      async () => {
+        cancelAsk();
+        const looping = player.loop;
+        player.loop = false;
+        player.restart();
+        renderNow();
+        await settled(takeDuration(take) + 3);
+        player.loop = looping;
+      },
+    );
   });
 
   // ---- 3D stage ---------------------------------------------------------------------
@@ -957,8 +1071,13 @@ export async function mount(stage) {
 
   // A first-time visitor sees MARS alive at once; local, so a saved follow can't drive the robot unasked.
   player.play({ ...presetTake(DEFAULT_PRESET), local: true });
-  status("ready — type a feeling and press Enter (/ focuses the prompt)");
-  input("prompt").focus({ preventScroll: true });
+  setMode(prefs.mode);
+  if (prefs.mode === "speech") {
+    status("ready — type what MARS says and press Perform (⌘/Ctrl+Enter)");
+  } else {
+    status("ready — type a feeling and press Enter (/ focuses the prompt)");
+    input("prompt").focus({ preventScroll: true });
+  }
 
   return {
     destroy() {
@@ -970,6 +1089,7 @@ export async function mount(stage) {
       unsubState();
       unsubConn();
       unadvertise.forEach((u) => u());
+      speech.destroy();
       robotPlanner.destroy();
       judgeCard.destroy();
       timeline.destroy();

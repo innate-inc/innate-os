@@ -37,6 +37,51 @@
 .exs-unavailable pre { background: var(--bg); border: 1px solid var(--hairline); border-radius: 8px; padding: 9px 11px;
   font-family: var(--font-mono); font-size: 12px; color: var(--danger); white-space: pre-wrap; }
 
+/* --- mode ------------------------------------------------------------------ */
+.exs-mode { margin-left: auto; display: flex; background: var(--panel); border: 1px solid var(--hairline-strong);
+  border-radius: 999px; padding: 3px; }
+.exs .exs-mode button { border: none; background: none; border-radius: 999px; padding: 4px 14px; font-size: 12.5px;
+  color: var(--muted); }
+.exs .exs-mode button.active { background: var(--accent-faint); color: var(--accent); }
+.exs.exs-speech-mode .exs-feel, .exs:not(.exs-speech-mode) .exs-speech { display: none; }
+
+/* --- speech ------------------------------------------------------------------ */
+.exs-speak { display: flex; flex-direction: column; gap: 8px; }
+.exs .exs-heard { display: flex; gap: 10px; font-size: 12px; }
+.exs .exs-heard input { flex: 1; min-width: 0; }
+.exs .exs-speak textarea { width: 100%; box-sizing: border-box; min-height: 74px; resize: vertical; font-size: 16px;
+  line-height: 1.5; padding: 11px 14px; border-radius: 12px; background: var(--panel); }
+.exs .exs-speak textarea:focus { box-shadow: 0 0 0 3px var(--accent-faint); }
+.exs-beats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+  max-height: 520px; overflow-y: auto; }
+.exs .exs-beat { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 11px;
+  background: var(--bg); border-radius: 10px; }
+.exs .exs-beat:disabled { opacity: 1; }
+.exs .exs-beat.unplanned, .exs .exs-beat.waiting { opacity: .62; }
+.exs .exs-beat.planning { border-color: var(--accent-dim); }
+.exs .exs-beat.fallback { border-color: rgb(217 106 90 / 45%); }
+.exs .exs-beat.speaking { border-color: var(--accent); background: var(--accent-faint); }
+.exs-beat-head { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em; }
+.exs-beat-head .spacer { flex: 1; }
+.exs-beat-n { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%;
+  border: 1px solid var(--hairline-strong); font-size: 10.5px; color: var(--text); letter-spacing: 0; }
+.exs-beat.speaking .exs-beat-n { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.exs-beat.planning .exs-beat-state, .exs-beat.speaking .exs-beat-state { color: var(--accent); }
+.exs-beat.planning .exs-beat-state { animation: exs-pulse 1s ease-in-out infinite; }
+.exs-beat-tag { border: 1px solid var(--accent-dim); color: var(--accent); border-radius: 999px; padding: 0 6px;
+  letter-spacing: .02em; text-transform: none; }
+.exs-beat-tag.warn { border-color: rgb(217 106 90 / 55%); color: var(--danger); }
+.exs-beat-meta { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; }
+.exs-beat-text { font-size: 14px; color: var(--text); line-height: 1.4; }
+.exs-beat-prompt { font-family: var(--font-mono); font-size: 11px; color: var(--muted); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.exs-beat-idea { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.exs-beat-src { font-size: 11px; color: var(--accent); }
+.exs-beat-err { font-size: 11px; color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exs-beats-note { margin: 10px 0 0; }
+
 /* --- ask ------------------------------------------------------------------- */
 .exs-ask { display: flex; gap: 8px; align-items: stretch; }
 .exs-ask-field { flex: 1; position: relative; display: flex; min-width: 0; }
@@ -181,4 +226,6 @@
   .exs-views { left: 12px; right: auto; }
   .exs-time { min-width: 0; }
   .exs-frames { grid-template-columns: repeat(2, 1fr); }
+  .exs .page-head { flex-wrap: wrap; }
+  .exs .exs-heard { flex-direction: column; align-items: stretch; gap: 4px; }
 }

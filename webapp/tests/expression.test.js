@@ -7,7 +7,9 @@
 // stage is checked: expansion, plan, interpolation, liveliness, the basis and its
 // rate limit, the PRNG, randomised variants, osc gesture words, idle breathing,
 // the presets, the frozen planner prompt, and the checker's error strings (they
-// are the planner's repair hints).
+// are the planner's repair hints). speech.js — the sentence splitter, the emote and
+// tool-narration scrubs, the per-sentence planner prompt and the reply streamer's cues —
+// is held to speech_golden.json, written from brain_client's own modules.
 // Regenerate the fixture: cd expressive && uv run mars-express golden
 
 import assert from "node:assert/strict";
@@ -29,9 +31,18 @@ import {
 } from "../js/expression/pipeline.js";
 import { SYSTEM_PROMPT } from "../js/expression/planner.js";
 import { DEFAULT_PRESET, PRESETS, nearestPreset } from "../js/expression/presets.js";
+import {
+  emoteSpans,
+  replyBeats,
+  speechPrompt,
+  splitEmotes,
+  splitSentences,
+  splitToolNarration,
+} from "../js/expression/speech.js";
 
 const repo = new URL("../../", import.meta.url);
 const golden = JSON.parse(readFileSync(new URL("expressive/fixtures/golden.json", repo), "utf8"));
+const speechGolden = JSON.parse(readFileSync(new URL("expressive/fixtures/speech_golden.json", repo), "utf8"));
 const core = new URL("ros2_ws/src/brain/brain_client/brain_client/expressive/", repo);
 const coreBasis = JSON.parse(readFileSync(new URL("basis.json", core), "utf8"));
 
@@ -138,6 +149,33 @@ test("presets mirror the core's, keyword matching included", () => {
 test("the planner prompt is the core's frozen SYSTEM prompt", () => {
   const python = readFileSync(new URL("prompt.py", core), "utf8");
   assert.equal(SYSTEM_PROMPT, /SYSTEM = """([\s\S]*?)"""/.exec(python)?.[1]);
+});
+
+test("sentences split and emote tags scrub like the robot's", () => {
+  for (const c of speechGolden.texts) {
+    const what = JSON.stringify(c.text);
+    assert.deepEqual(splitSentences(c.text), [c.sentences, c.tail], what);
+    assert.deepEqual(splitEmotes(c.text), [c.clean, c.emotes], what);
+    // Python's offsets count code points, JS's UTF-16 units.
+    const utf16 = (/** @type {number} */ i) => Array.from(c.text).slice(0, i).join("").length;
+    assert.deepEqual(
+      emoteSpans(c.text),
+      c.spans.map((/** @type {number[]} */ span) => span.map(utf16)),
+      what,
+    );
+  }
+});
+
+test("each sentence's planner prompt is the core's speech_prompt", () => {
+  for (const c of speechGolden.prompts) assert.equal(speechPrompt(c.sentence, c.heard, c.before), c.prompt);
+});
+
+test("leaked tool narration is cut like the robot's", () => {
+  for (const c of speechGolden.narration) assert.deepEqual(splitToolNarration(c.text), c.cut, c.text);
+});
+
+test("a reply becomes the cues the robot's SpeechStreamer hands its body", () => {
+  for (const c of speechGolden.replies) assert.deepEqual(replyBeats(c.reply, c.heard), c.beats, c.reply);
 });
 
 console.log(`\n${passed} passed`);

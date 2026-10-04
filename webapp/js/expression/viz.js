@@ -332,14 +332,18 @@ export async function createStage(container, { onFrame, onOrbit } = {}) {
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(renderer.domElement, 0, 0, width, height);
     const pad = Math.round(height * 0.045);
+    /** @param {string} text */
+    const fit = (text) => {
+      let line = text;
+      while (line.length > 4 && ctx.measureText(line).width > width - 2 * pad) line = `${line.slice(0, -2)}…`;
+      return line;
+    };
     ctx.font = `600 ${Math.round(height * 0.042)}px system-ui, -apple-system, sans-serif`;
     ctx.fillStyle = "#e7e7ea";
-    ctx.fillText(caption, pad, height - pad - Math.round(height * 0.04));
+    ctx.fillText(fit(caption), pad, height - pad - Math.round(height * 0.04));
     ctx.font = `${Math.round(height * 0.026)}px ui-monospace, Menlo, monospace`;
     ctx.fillStyle = "#e8a33d";
-    let line = sub;
-    while (line.length > 4 && ctx.measureText(line).width > width - 2 * pad) line = `${line.slice(0, -2)}…`;
-    ctx.fillText(line, pad, height - pad);
+    ctx.fillText(fit(sub), pad, height - pad);
   }
 
   /**
@@ -367,7 +371,13 @@ export async function createStage(container, { onFrame, onOrbit } = {}) {
       if (e.data.size) chunks.push(e.data);
     };
     recorder.start(250);
+    const own = recording;
     return {
+      /** Change the burnt-in caption from the next frame on. @param {string} text @param {string} subText */
+      caption(text, subText) {
+        own.caption = text;
+        own.sub = subText;
+      },
       /** @returns {Promise<Blob>} */
       stop: () =>
         new Promise((resolve) => {
@@ -395,6 +405,9 @@ export async function createStage(container, { onFrame, onOrbit } = {}) {
     raf = requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    // A frame stamped at or before the last one (often the first) gives an unbounded channel's rate
+    // limit Infinity * 0: NaN in the base pose hides the robot until something resets it.
+    if (dt <= 0) return;
     onFrame?.(dt);
     stepTween(dt);
     controls.update();
