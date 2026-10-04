@@ -34,6 +34,7 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    sound: tuple[bytes, int] | None = None  # PCM s16le mono and its rate, played instead of speaking ``text``
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -414,6 +415,48 @@ class TTSHandler:
         payload = base64.b64encode(wav).decode("ascii")
         self.tts_audio_pub.publish(String(data=payload))
 
+    def busy(self) -> bool:
+        """Speaking, or about to: something plays or waits in the queue."""
+        return self.is_playing or bool(self._speech_queue)
+
+    def play_sound_async(self, pcm: bytes, sample_rate: int) -> bool:
+        """Queue a short non-verbal sound (PCM s16le mono) through the voice's own output, so it never
+        overlaps speech; a newer reply's flush drops it like any stale backlog."""
+        with self._speech_cv:
+            if len(self._speech_queue) >= self._speech_queue_maxlen:
+                return False
+            self._speech_queue.append(_Utterance("", None, None, None, None, False, sound=(pcm, sample_rate)))
+            self._speech_cv.notify()
+        return True
+
+    def _play_sound(self, pcm: bytes, sample_rate: int) -> bool:
+        with self.play_lock:
+            if self.is_playing:
+                return False
+            self.is_playing = True
+        self._publish_tts_status("true")  # the microphone ducks for it like for speech
+        try:
+            self._tap(pcm, sample_rate)
+            if self._simulator_mode and self.tts_audio_pub is not None:
+                self._publish_audio(_pcm_wav(pcm, sample_rate))
+                self._closing.wait(len(pcm) / 2 / sample_rate)
+                return True
+            player = subprocess.run(
+                ["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(sample_rate), "-c", "1"],
+                input=pcm,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return player.returncode == 0
+        except OSError as e:
+            self.logger.error(f"❌ Sound playback failed: {e}")
+            return False
+        finally:
+            with self.play_lock:
+                self.is_playing = False
+            self._publish_tts_status("false")
+
     def speak_text_async(
         self,
         text: str,
@@ -534,6 +577,10 @@ class TTSHandler:
             # only if it takes it when its audio starts -- otherwise a newer
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
+            if item.sound is not None:
+                self._own_voice = True
+                self._play_sound(*item.sound)
+                continue
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
             self._own_voice = not item.protected  # another character's line is not the robot speaking
             success = self.speak_text(item.text, item.voice_config, take_floor)
@@ -583,6 +630,16 @@ def _finalize_wav(data: bytes) -> bytes:
     struct.pack_into("<I", out, 4, len(out) - 8)  # RIFF chunk size
     struct.pack_into("<I", out, data_idx + 4, len(out) - (data_idx + 8))  # data size
     return bytes(out)
+
+
+def _pcm_wav(pcm: bytes, sample_rate: int) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return buffer.getvalue()
 
 
 def _wav_pcm(data: bytes) -> tuple[bytes, int] | None:

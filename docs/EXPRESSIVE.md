@@ -156,15 +156,20 @@ stage and any clip still being generated are dropped, the arm stream ends within
 crossfade, and a stance in progress gets one zero twist and stops where it is — no trip back to
 its anchor. The layer yields the body to whatever else owns it:
 
-- a running skill (a `running` on `/brain/skill_status_update`, or the brain's own skill slot) or
-  a live Nav2 `/navigate_to_pose` goal masks everything: output stops at once, and the stream
-  resumes from wherever the skill left the body. Masking is silence rather than
-  `Animator.set_mask`, whose eased-to-NEUTRAL parts would start the resumed stream at NEUTRAL
-  instead of the measured pose. Skills that never move the body leave expression running:
-  `LEAVES_BODY` in `expressive_driver/utils.py` (`search_memory`, `change_volume`, and `express` itself). It is an
-  allowlist because a skill's declared interfaces cannot prove it body-free —
-  `navigate_to_position` and `navigate_with_vision` drive the base through raw ROS clients without
-  declaring `Mobility` — so an unknown skill masks. Add a shipped skill there when it is body-free;
+- a running skill (a `running` on `/brain/skill_status_update`, or the brain's own skill slot)
+  masks the parts it owns, and a live Nav2 `/navigate_to_pose` goal masks everything. A masked
+  part's output stops at once and resumes from wherever the skill left it; the other parts keep
+  breathing and swaying (`turn_in_place` leaves the arm and head expressive). Masking is silence
+  rather than `Animator.set_mask`, whose eased-to-NEUTRAL parts would start the resumed stream at
+  NEUTRAL instead of the measured pose. The skills server puts the parts a skill's declarations
+  reach in its `running` status as `body` (`Head` → head, `Manipulation` → arm, `Mobility` → base,
+  plus its subskills' parts; physical subskills → all), and `expressive_driver/utils.py` decides:
+  `LEAVES_BODY` (`search_memory`, `change_volume`, `express`, `head_emotion`, which moves the body
+  through this driver) masks nothing; `MASKS_ALL` (`navigate_to_position`, `navigate_with_vision`,
+  which drive the base through raw ROS clients without declaring `Mobility`) masks everything;
+  a skill that declares no body part, or a run with no `body`, masks everything too, since a
+  declaration cannot prove a skill body-free. Add a shipped skill to the right list when its
+  declarations under- or over-state what it moves;
 - when a body skill ends while an agent runs, a small reaction plays at once
   (`expressive.on_skill_completed` / `on_skill_failed`, preset names, so no LLM call), unless the
   agent's reply carried an emote in the last 3 s; a skill run by hand on an idle robot draws none;
@@ -185,14 +190,26 @@ robot's own voice (never the sim's simulated residents) to
 `Animator.feed_speech` as it reaches the speaker: PCM s16le 16 kHz chunks on hardware, and in the
 sim the whole 44.1 kHz WAV once, when it is published on `/tts/audio`.
 
+Vocalizations (`expressive.vocalize`): a prompt or preset that plays while the robot is silent
+(no speech playing or queued) also makes a short non-verbal sound — a gasp, sigh, chirp, hum,
+grumble, yawn or chuckle, picked by keyword from the prompt, else from the preset it matched
+(`expressive_driver/vocal.py`; a prompt with neither stays silent). The sounds are synthesized in
+numpy (tones and band-passed breath, 0.3-1.3 s, three variations each, cached at startup) at
+12 dB under the voice (-40 dBFS RMS against Cartesia's measured -28). They go through the TTS
+queue, so they never overlap speech: a reply's first sentence drops a sound still queued, and a
+sound playing finishes before the reply starts. On hardware they play through the same `aplay`
+as speech; in the sim they are published on `/tts/audio` as a 16 kHz WAV. They raise
+`/tts/is_playing` (the microphone ducks) and feed the speech sway like the voice does. Emotes in
+a reply are never voiced: their sentence is about to be spoken.
+
 ### ROS surface
 
 | topic | type | |
 |---|---|---|
-| `/brain/express/prompt` | String | a prompt, or `{"prompt", "id"}`: generate and play |
+| `/brain/express/prompt` | String | a prompt, `{"prompt", "id"}` to generate and play, or `{"preset", "id"}` to play a built-in preset at once |
 | `/brain/express/play` | String | a Clip JSON object to play now (never a path; malformed clips are logged and ignored) |
 | `/brain/express/stop` | String (payload ignored) | back to idle. Not `Empty`: rosbridge (rws) serializes `std_msgs/Empty` to 0 bytes, which every ROS subscriber rejects |
-| `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, speaking, source, id}` |
+| `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, masked_parts, speaking, source, id}`; `masked_parts` lists the parts a skill or Nav2 holds |
 | `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing |
 
 A prompt moves the robot at once: its keyword preset (`presets.match`) starts playing as a
@@ -214,6 +231,7 @@ Parameters on brain_client_node:
 | `expressive.enabled` | `true` | `false` builds nothing; speech, gaze and the prompt behave as before |
 | `expressive.idle_breathing` | `true` | breathe while an agent runs; `false` holds still between clips |
 | `expressive.stand_in` | `true` | play the keyword preset while a prompt's clip is generated |
+| `expressive.vocalize` | `true` | a prompt or preset played while the robot is silent makes a short non-verbal sound |
 | `expressive.server_url` | `""` | the planner server (`http://<host>:8000`); empty skips it. Set it per robot in `config/settings.yaml` (stanza below) |
 | `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
 | `expressive.on_skill_failed` | `sad` | |
@@ -223,7 +241,10 @@ The agent emotes through tags in its replies. The system prompt asks for
 emotional beats, invented fresh each time (its examples span proud, sheepish, startled and subtle,
 and it is told never to reuse one: with a single example the model copied it verbatim); the
 speech streamer cuts them out (never spoken, never shown in the chat) and plays each one when its
-sentence goes to TTS. Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`).
+sentence goes to TTS. Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`);
+`head_emotion` keeps its 13 emotion names but plays each through this driver with the whole body
+(a preset, or a prompt for `very_happy` and `disappointed`), and the agents' prompts now ask for
+emote tags while talking and `head_emotion` only for a deliberate gesture.
 
 To point a robot (or the sim) at a planner server, add to the gitignored `config/settings.yaml`
 and restart the brain:
@@ -251,6 +272,8 @@ turns.
 
 - [ ] speech sway against `aplay`: chunks are fed as they are written, so the sway may lead the
       voice by the ALSA buffer; set the Animator's `speech_latency_s` if it does
+- [ ] vocalizations through `aplay` (`-t raw -f S16_LE -r 16000 -c 1`): audible but clearly under
+      the voice on the real speaker, no click at start or end; adjust `BELOW_VOICE_DB` in `vocal.py`
 - [ ] the arm streaming at TELEOP gains for minutes while an agent runs: servo temperature, and
       whether the rest fold should be skipped when expression owns the idle arm
 - [ ] `basis.json` `max_speed` (the per-joint TELEOP profile speeds: j1 6.0, j2 3.6, j3 4.8, j4 2.4,

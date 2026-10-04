@@ -27,7 +27,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 from action_msgs.msg import GoalStatus, GoalStatusArray
@@ -43,9 +43,10 @@ from brain_client.expressive.animator import Animator
 from brain_client.expressive.basis import ActuatorPose, Basis
 from brain_client.expressive.breathing import Breathing
 from brain_client.expressive.motion import Clip
+from brain_client.expressive_driver import vocal
 from brain_client.expressive_driver.sources import ClipMaker, ClipSource, Made
 from brain_client.expressive_driver.stance import StanceTracker
-from brain_client.expressive_driver.utils import is_mad_mode, leaves_body
+from brain_client.expressive_driver.utils import ALL_PARTS, Parts, is_mad_mode, leaves_body, parts_of
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,6 +96,7 @@ STILL = Breathing(rise_amplitude=0.0, approach_amplitude=0.0, attend_amplitudes=
 class ExpressiveConfig:
     idle_breathing: bool
     stand_in: bool  # play the keyword preset at once while a prompt's clip is generated
+    vocalize: bool  # a short non-verbal sound with an emote nobody is speaking over
     server_url: str
     on_skill_completed: str  # a preset name, or a prompt to generate; "" = no reaction
     on_skill_failed: str
@@ -106,11 +108,20 @@ class ExpressiveConfig:
         config = cls(
             idle_breathing=bool(node.declare_parameter("expressive.idle_breathing", True).value),
             stand_in=bool(node.declare_parameter("expressive.stand_in", True).value),
+            vocalize=bool(node.declare_parameter("expressive.vocalize", True).value),
             server_url=str(node.declare_parameter("expressive.server_url", "").value),
             on_skill_completed=str(node.declare_parameter("expressive.on_skill_completed", "agreeing").value),
             on_skill_failed=str(node.declare_parameter("expressive.on_skill_failed", "sad").value),
         )
         return config if enabled else None
+
+
+class Voice(Protocol):
+    """The robot's speaker, shared with speech (transport/tts.py ``TTSHandler``)."""
+
+    def busy(self) -> bool: ...
+
+    def play_sound_async(self, pcm: bytes, sample_rate: int) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -132,6 +143,7 @@ class ExpressionDriver:
         cmd_vel_pub: Publisher,
         provider: Callable[[], Provider | None],
         standing_grip: Callable[[], float | None],
+        voice: Voice | None = None,
     ) -> None:
         """``standing_grip`` is the arm's last commanded j6 (hardware only); ``provider`` the brain's LLM."""
         self._logger = node.get_logger()
@@ -139,6 +151,7 @@ class ExpressionDriver:
         self._config = config
         self._cmd_vel_pub = cmd_vel_pub
         self._standing_grip = standing_grip
+        self._voice = voice
         self._maker = ClipMaker(config.server_url, provider, self._logger)
         self._basis = Basis.load()
         self._animator = Animator(
@@ -149,6 +162,8 @@ class ExpressionDriver:
         # A pool, not a thread per prompt: Thread.start() waits for the new thread to take the GIL, which
         # a synthesizing worker holds for milliseconds — too long for the speech streamer calling in.
         self._generators = ThreadPoolExecutor(max_workers=3, thread_name_prefix="expressive-gen")
+        if config.vocalize:
+            self._submit(_warm_sounds)  # the first synthesis pays numpy's FFT setup: not on an emote
         self._lock = threading.Lock()  # the request bookkeeping below; hooks arrive on many threads
 
         self._seq = 0  # bumped by every request and stop: a clip made for an older one is dropped
@@ -160,7 +175,8 @@ class ExpressionDriver:
         self._odom: Pose | None = None
         self._odom_at = 0.0
         self._joints: list[float] | None = None  # measured j1..j6 rad, head rad
-        self._running_skills: set[str] = set()
+        self._running_skills: dict[str, Parts] = {}
+        self._skill_parts: dict[str, Parts] = {}  # last declared parts per skill: the agent's slot claims first
         self._navigating = False
         self._was_masked = False
         self._reply_emote_at = -math.inf
@@ -208,7 +224,7 @@ class ExpressionDriver:
         )
 
     # ================= hooks (any thread) =================
-    def express(self, prompt: str, request_id: str | None = None) -> None:
+    def express(self, prompt: str, request_id: str | None = None, *, vocalize: bool = True) -> None:
         """Play ``prompt``'s keyword preset at once (with ``stand_in``), and the generated clip when it
         arrives; a newer play, prompt or stop supersedes a clip still being generated. Cheap: safe
         to call from the speech streamer while it holds its lock."""
@@ -216,14 +232,24 @@ class ExpressionDriver:
         if not prompt:
             return
         seq = self._next_seq()
+        stand_in = presets.match(prompt)
         if self._config.stand_in:
-            self._submit(self._play_preset, seq, presets.match(prompt), ClipSource.STAND_IN, request_id, prompt)
+            self._submit(self._play_preset, seq, stand_in, ClipSource.STAND_IN, request_id, prompt)
+        if vocalize:
+            self._submit(self._vocalize, seq, prompt, stand_in)
         self._generators.submit(self._make_and_play, seq, prompt, request_id)
 
     def emote(self, prompt: str) -> None:
-        """An emote tag from the agent's reply, played as its sentence goes to TTS."""
+        """An emote tag from the agent's reply, played as its sentence goes to TTS — never voiced:
+        the sentence it opens is about to be spoken."""
         self._reply_emote_at = time.monotonic()
-        self.express(prompt)
+        self.express(prompt, vocalize=False)
+
+    def play_preset(self, name: str, request_id: str | None = None) -> None:
+        """A built-in preset, at once and with its sound (``name`` must be in ``presets.PRESETS``)."""
+        seq = self._next_seq()
+        self._submit(self._play_preset, seq, name, ClipSource.PRESET, request_id)
+        self._submit(self._vocalize, seq, name, name)
 
     def play(self, clip: Clip, request_id: str | None = None) -> None:
         seq = self._next_seq()
@@ -296,6 +322,14 @@ class ExpressionDriver:
         except Exception as error:  # noqa: BLE001 — a thread's crash reporter: generation must not die silently
             self._logger.error(f"[Expressive] could not make a clip for '{prompt}': {error!r}")
 
+    def _vocalize(self, seq: int, prompt: str, preset: str) -> None:
+        """A non-verbal sound for an emote, unless the robot speaks or is about to (worker thread)."""
+        if seq != self._seq or not self._config.vocalize or self._voice is None or self._voice.busy():
+            return
+        sound = vocal.sound_for(prompt, preset)
+        if sound is not None:
+            self._voice.play_sound_async(vocal.synthesize(sound, seq % 3).tobytes(), vocal.RATE)
+
     def _play_preset(self, seq: int, name: str, source: ClipSource, request_id: str | None, prompt: str = "") -> None:
         self._prepare_and_play(seq, Made(presets.clip(name, prompt=prompt), source), request_id)
 
@@ -346,14 +380,14 @@ class ExpressionDriver:
         masked = self._masked()
         if self._was_masked and not masked:
             self._unmasked_at = now
-        self._was_masked = masked
-        live = now < self._live_until and not masked
-        streaming = live and now >= self._arm_quiet_until and not self._mad
+        self._was_masked = bool(masked)
+        live = now < self._live_until
+        streaming = live and "arm" not in masked and now >= self._arm_quiet_until and not self._mad
         entering = streaming and not self._streaming
         if entering:
             self._enter_from_measured()
         self._streaming = streaming
-        head_on = (live or (self._gaze and not masked)) and now >= self._head_quiet_until
+        head_on = (live or self._gaze) and "head" not in masked and now >= self._head_quiet_until
         if head_on and not self._head_on and not entering and self._joints is not None:
             self._head_entry = (now, math.degrees(self._joints[6]))  # the arm's entry blend covers the head
         self._head_on = head_on
@@ -361,7 +395,7 @@ class ExpressionDriver:
         self._drive_head(pose, head_on, now)
         if streaming:
             self._drive_arm(pose)
-        self._drive_base(pose, dt, not masked and not self._gaze and now >= self._base_quiet_until, now)
+        self._drive_base(pose, dt, "base" not in masked and not self._gaze and now >= self._base_quiet_until, now)
         self._ticks += 1
         if self._ticks % STATE_EVERY == 0:
             self._publish_state(stage, masked)
@@ -381,10 +415,16 @@ class ExpressionDriver:
             self._arm_quiet_until = max(self._arm_quiet_until, now + ACTIVATION_HOLD_S)
         self._was_active = active
 
-    def _masked(self) -> bool:
+    def _masked(self) -> Parts:
+        """The parts something else owns right now: running skills' declared parts, everything for a
+        Nav2 goal. The agent's own skill slot is claimed before the skills server reports the run."""
+        if self._navigating:
+            return ALL_PARTS
+        masked = frozenset().union(*self._running_skills.values())
         running = self._state.primitive_running
-        skill = running is not None and not leaves_body(running.skill_id)
-        return skill or self._navigating or bool(self._running_skills)
+        if running is not None and running.skill_id not in self._running_skills:
+            masked |= self._skill_parts.get(running.skill_id, parts_of(running.skill_id, None))
+        return masked
 
     def _drive_head(self, pose: ActuatorPose, on: bool, now: float) -> None:
         if not on:
@@ -436,7 +476,7 @@ class ExpressionDriver:
         msg.linear.x, msg.angular.z = twist
         self._cmd_vel_pub.publish(msg)
 
-    def _publish_state(self, stage: AnimatorState, masked: bool) -> None:
+    def _publish_state(self, stage: AnimatorState, masked: Parts) -> None:
         with self._lock:
             on_stage = [label for label in self._labels if stage["playing"] and label.name == stage["name"]]
         label = on_stage[-1] if on_stage else None
@@ -444,7 +484,8 @@ class ExpressionDriver:
             **stage,
             "t": round(stage["t"], 2),
             "duration": round(stage["duration"], 2),
-            "masked": masked,
+            "masked": bool(masked),
+            "masked_parts": sorted(masked),
             "source": label.source if label is not None else None,
             "id": label.request_id if label is not None else None,
         }
@@ -452,15 +493,21 @@ class ExpressionDriver:
 
     # ================= subscriptions (executor thread) =================
     def _on_prompt(self, msg: String) -> None:
-        """A bare prompt, or ``{"prompt", "id"}`` so a waiter can find its clip on the state topic."""
-        prompt, request_id = msg.data, None
+        """A bare prompt, ``{"prompt", "id"}`` so a waiter can find its clip on the state topic, or
+        ``{"preset", "id"}`` to play a built-in one exactly (head_emotion)."""
         try:
             data = json.loads(msg.data)
         except json.JSONDecodeError:
             data = None
-        if isinstance(data, dict):
-            prompt, request_id = str(data.get("prompt", "")), data.get("id")
-        self.express(prompt, None if request_id is None else str(request_id))
+        if not isinstance(data, dict):
+            self.express(msg.data)
+            return
+        request_id = None if data.get("id") is None else str(data["id"])
+        preset = data.get("preset")
+        if isinstance(preset, str) and preset in presets.PRESETS:
+            self.play_preset(preset, request_id)
+            return
+        self.express(str(data.get("prompt") or preset or ""), request_id)
 
     def _on_play(self, msg: String) -> None:
         """Clip JSON only — never a path: the topic is open to anything on the network. Parsed on the
@@ -499,8 +546,10 @@ class ExpressionDriver:
         self._generated_pub.publish(String(data=json.dumps(reply)))
 
     def _on_skill_status(self, msg: String) -> None:
-        """Mask while a skill that may move the body runs (keyed by skill id: the app's mirror of a run
-        and the skills server's own report carry different run ids), and react when it ends.
+        """Mask the parts a running skill may move (keyed by skill id: the app's mirror of a run and the
+        skills server's own report carry different run ids), and react when it ends. The server's
+        report names the parts; a report without them masks everything, unless the same skill's
+        parts are already known from another report of this run.
 
         Masking is silence, not ``Animator.set_mask``: the animator's mask scales the pose toward
         NEUTRAL after ``enter_from``, so a released mask would start the stream at NEUTRAL instead of
@@ -513,11 +562,16 @@ class ExpressionDriver:
         if not skill or leaves_body(skill):
             return
         if status == "running":
-            self._running_skills.add(skill)
+            declared = payload.get("body")
+            if declared is None and skill in self._running_skills:
+                return  # the app's mirror of a run the server already described
+            parts = parts_of(skill, declared)
+            if declared is not None:
+                self._skill_parts[skill] = parts
+            self._running_skills[skill] = parts
             return
-        if status not in TERMINAL or skill not in self._running_skills:
+        if status not in TERMINAL or self._running_skills.pop(skill, None) is None:
             return
-        self._running_skills.discard(skill)
         if self._running_skills:
             return
         reaction = {"completed": self._config.on_skill_completed, "failed": self._config.on_skill_failed}.get(status)
@@ -528,7 +582,7 @@ class ExpressionDriver:
         if reaction not in presets.PRESETS:
             self.express(reaction)  # free text: a prompt to generate
             return
-        self._submit(self._play_preset, self._next_seq(), reaction, ClipSource.PRESET, None)
+        self.play_preset(reaction)
 
     def _on_odom(self, msg: Odometry) -> None:
         position = msg.pose.pose.position
@@ -571,3 +625,9 @@ class ExpressionDriver:
 
     def _on_robot_info(self, msg: String) -> None:
         self._mad = is_mad_mode(msg.data)
+
+
+def _warm_sounds() -> None:
+    for sound in vocal.Sound:
+        for seed in range(3):
+            vocal.synthesize(sound, seed)

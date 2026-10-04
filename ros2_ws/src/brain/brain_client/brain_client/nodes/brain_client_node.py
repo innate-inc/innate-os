@@ -350,6 +350,7 @@ class BrainClientNode(Node):
             cmd_vel_pub=self.cmd_vel_pub,
             provider=lambda: self.brain.llm.provider if self.brain.llm is not None else None,
             standing_grip=lambda: self.rest_pose.grip,
+            voice=self._tts_handler if self._tts_handler is not None and self._tts_handler.is_available() else None,
         )
         self.chat.on_emote = driver.emote
         self.gaze.head_sink = driver.set_gaze
