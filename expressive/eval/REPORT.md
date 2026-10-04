@@ -268,8 +268,9 @@ against 2.81). The pairwise judge is dominated by presentation order: Gemini pic
 77 % of the time, and only 22 of 62 pairs are unanimous across its three calls. Its reasons credit
 "overshoot and settle" and "follow-through" to whichever clip it picks. Both arms play through the
 sim's servos, which lag and settle on their own, and the liveliness detail (2-4 % overshoot, noise
-scaled by E) is small next to that, and next to the 1.5 m camera. To measure it, run each pair in
-both orders and count only verdicts that agree.
+scaled by E) is small next to that, and next to the 1.5 m camera. The harness now runs every pair in
+both orders and counts a win only when both orders agree. The single-order numbers above predate that
+change; in a 2-pair smoke of the new A/B, Gemini picked the second-shown video both times in both rounds.
 
 **6. Speech sway is real but small.** Offline (`demo/idle_speech.yaml` through one Animator), the
 head moves over 4.2° while speaking against 1.4° while breathing, its p95 speed is 17.8°/s against

@@ -1424,6 +1424,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+flow = [
+    { name = "torch" },
+]
 ml = [
     { name = "datasets" },
     { name = "fastapi" },
@@ -1455,6 +1458,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "safetensors", marker = "extra == 'ml'", specifier = ">=0.5" },
     { name = "scipy", specifier = ">=1.11" },
+    { name = "torch", marker = "extra == 'flow'", specifier = ">=2.6" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.6" },
     { name = "transformers", marker = "extra == 'ml'", specifier = ">=5.5" },
     { name = "trl", marker = "extra == 'ml'", specifier = ">=0.24" },

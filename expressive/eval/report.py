@@ -143,42 +143,66 @@ def recognition_table(scored: list[Scored], arms: Sequence[str]) -> tuple[list[s
     return lines, numbers
 
 
-def ab_table(root: Path, catalog: Sequence[Item], arm: str) -> tuple[list[str], dict[str, Any]]:
+def pairings(root: Path) -> list[tuple[str, str]]:
+    """The pairs of arms judged under ``root`` (from ``ab/<item>.<a>-<b>.json``)."""
+    found = {tuple(path.stem.rsplit(".", 1)[1].split("-", 1)) for path in (root / "ab").glob("*.json")}
+    return sorted((a, b) for a, b in found)
+
+
+def outcome(round_: list[dict[str, str]]) -> str:
+    """The arm both orders picked, or the slot that won both times ("first" / "second": position-biased)."""
+    in_order, reversed_order = round_
+    if in_order["winner"] == reversed_order["winner"]:
+        return in_order["winner"]
+    return "first" if in_order["winner"] == in_order["shown_first"] else "second"
+
+
+def ab_table(root: Path, catalog: Sequence[Item], pair: tuple[str, str]) -> tuple[list[str], dict[str, Any]]:
+    """Each round shows the pair both ways; a win counts only when both orders agree."""
+    a, b = pair
     lines = [
-        "| prompts | verdicts | lively wins | clear lively wins | clear direct wins | first-shown wins |",
+        f"| prompts | rounds | {a} wins | {b} wins | position-biased (first / second shown won both) | "
+        f"{a} share of agreed |",
         "|---|---|---|---|---|---|",
     ]
     numbers: dict[str, Any] = {}
-    every: list[dict[str, str]] = []
+    every: list[str] = []
     for name, keep in SUBSETS:
-        verdicts = [v for item in catalog if keep(item) for v in (_load(root / "pairs" / f"{item.id}.json") or [])]
-        if not verdicts:
+        outcomes = [
+            outcome(round_)
+            for item in catalog
+            if keep(item)
+            for round_ in (_load(root / "ab" / f"{item.id}.{a}-{b}.json") or [])
+        ]
+        if not outcomes:
             continue
-        every += verdicts
-        numbers[name] = _ab_row(verdicts, arm)
+        every += outcomes
+        numbers[name] = _ab_row(outcomes, pair)
         lines.append(_ab_line(name, numbers[name]))
     if every:
-        numbers["all"] = _ab_row(every, arm)
+        numbers["all"] = _ab_row(every, pair)
         lines.append(_ab_line("**all**", numbers["all"]))
     return lines, numbers
 
 
-def _ab_row(verdicts: list[dict[str, str]], arm: str) -> dict[str, float]:
-    wins = [v["winner"] == arm for v in verdicts]
-    first = [v["winner"] == v["shown_first"] for v in verdicts]
+def _ab_row(outcomes: list[str], pair: tuple[str, str]) -> dict[str, float]:
+    a, b = pair
+    a_wins, b_wins = outcomes.count(a), outcomes.count(b)
     return {
-        "verdicts": len(verdicts),
-        "win": float(np.mean(wins)),
-        "clear_win": float(np.mean([w and v["margin"] == "clear" for w, v in zip(wins, verdicts, strict=True)])),
-        "clear_loss": float(np.mean([not w and v["margin"] == "clear" for w, v in zip(wins, verdicts, strict=True)])),
-        "first_shown_wins": float(np.mean(first)),
+        "rounds": len(outcomes),
+        "a_wins": a_wins,
+        "b_wins": b_wins,
+        "unanimous": a_wins + b_wins,
+        "biased_first": outcomes.count("first"),
+        "biased_second": outcomes.count("second"),
+        "a_share": a_wins / (a_wins + b_wins) if a_wins + b_wins else float("nan"),
     }
 
 
 def _ab_line(name: str, row: dict[str, float]) -> str:
     return (
-        f"| {name} | {row['verdicts']:.0f} | {_pct(row['win'])} | {_pct(row['clear_win'])} | "
-        f"{_pct(row['clear_loss'])} | {_pct(row['first_shown_wins'])} |"
+        f"| {name} | {row['rounds']:.0f} | {row['a_wins']:.0f} | {row['b_wins']:.0f} | "
+        f"{row['biased_first']:.0f} / {row['biased_second']:.0f} | {_pct(row['a_share'])} |"
     )
 
 
@@ -401,23 +425,31 @@ def write_report(out: Path, snapshot: Path | None = None) -> Path:
         tag = root.name
         all_scored[tag] = scored
         rec_lines, rec = recognition_table(scored, arms)
-        ab_lines, ab = ab_table(root, catalog, "lively")
+        ab = {f"{a}-{b}": ab_table(root, catalog, (a, b)) for a, b in pairings(root)}
         png = confusion_png(
             scored,
             "lively",
             out / f"confusion.{tag}.png",
             f"Blind judge {tag}: mean probability per label (lively arm; orange box = target label)",
         )
-        metrics[tag] = {"recognition": rec, "ab": ab}
+        metrics[tag] = {"recognition": rec, "ab": {pairing: numbers for pairing, (_, numbers) in ab.items()}}
         lines += [
             f"## Judge `{tag}`",
             "",
             *rec_lines,
             "",
-            "A/B (lively vs direct, which moves more like a living creature; order randomised):",
-            "",
-            *ab_lines,
-            "",
+            *[
+                line
+                for pairing, (ab_lines, _) in ab.items()
+                for line in (
+                    f"A/B {pairing.replace('-', ' vs ')}: which moves more like a living creature. Every round "
+                    "shows the pair in both orders; a win counts only when both orders agree, otherwise the "
+                    "round is position-biased.",
+                    "",
+                    *ab_lines,
+                    "",
+                )
+            ],
             f"![confusion]({png.name})",
             "",
         ]

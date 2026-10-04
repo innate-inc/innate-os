@@ -4,7 +4,8 @@ plan     the planner LLM writes recipes for the held-out and preset prompts (val
 probes   the physical probe suite: each probe prompt planned ``samples`` times and checked
 clips    every recipe through every arm (lively = procedural liveliness, direct = the bare plan, ...)
 media    a key-frame strip (kinematic) and a caption-free mp4 (physical) per clip
-judge    ``n`` blind readings per clip, ``n`` lively-vs-direct verdicts per prompt, descriptions graded
+judge    ``n`` blind readings per clip, descriptions graded, and ``n`` A/B rounds per prompt: each pair of
+         arms (lively vs direct by default) judged in both orders
 report   metrics.json, confusion.png, REPORT.md
 """
 
@@ -12,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import subprocess
 import time
 import zlib
@@ -197,11 +197,19 @@ def _forget(cfg: Config, item: Item, arm: str) -> None:
     """A clip that changed (a new plan, a retuned generator) takes its media and every judgment with it."""
     media = media_of(cfg, item, arm)
     stale = [media.strip, media.video]
-    stale += list((cfg.out / "judged").glob(f"*/*/{item.id}.{arm}.json")) + list(
-        (cfg.out / "judged").glob(f"*/pairs/{item.id}.json")
-    )
+    stale += list((cfg.out / "judged").glob(f"*/*/{item.id}.{arm}.json"))
+    stale += [
+        path
+        for path in (cfg.out / "judged").glob(f"*/ab/{item.id}.*.json")
+        if arm in path.stem.split(".")[-1].split("-")
+    ]
     for path in stale:
         path.unlink(missing_ok=True)
+
+
+def ab_path(root: Path, item: Item, pair: tuple[str, str]) -> Path:
+    """One A/B file per prompt and pair of arms: rounds of [first arm shown first, second arm shown first]."""
+    return root / "ab" / f"{item.id}.{pair[0]}-{pair[1]}.json"
 
 
 def judge_tag(judge: Judge) -> str:
@@ -235,12 +243,12 @@ def judge_all(cfg: Config, playable: list[tuple[Item, str]]) -> None:
     )
 
     def pairs(item: Item) -> None:
-        path = root / "pairs" / f"{item.id}.json"
-        done: list[Verdict] = _read(path) or []
-        rng = random.Random(f"{item.id}-{len(done)}")
-        while len(done) < cfg.n:
-            done.append(judge.pair((a, media_of(cfg, item, a)), (b, media_of(cfg, item, b)), rng))
-            _write(path, done)
+        path = ab_path(root, item, cfg.pair)
+        rounds: list[list[Verdict]] = _read(path) or []
+        shown = ((a, media_of(cfg, item, a)), (b, media_of(cfg, item, b)))
+        while len(rounds) < cfg.n:
+            rounds.append([judge.pair(*shown), judge.pair(*shown[::-1])])
+            _write(path, rounds)
 
     _parallel(playable, readings, cfg.workers, "read")
     _parallel(playable, grades, cfg.workers, "grade")

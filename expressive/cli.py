@@ -119,11 +119,16 @@ def _golden(_: argparse.Namespace) -> None:
 def _eval(args: argparse.Namespace) -> None:
     import logging
 
-    from eval.arms import ARMS, load_arm
+    from eval.arms import ARMS, flow, load_arm
     from eval.run import Config, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     arms = dict(ARMS) | dict(load_arm(spec) for spec in args.arm)
+    if args.flow:
+        arms["flow"] = flow(args.flow)
+    pair = tuple(args.pair.split(","))
+    if len(pair) != 2 or not set(pair) <= set(arms):
+        raise SystemExit(f"--pair wants two of {sorted(arms)}, got {args.pair!r}")
     cfg = Config(
         out=Path(args.out),
         judge=args.judge,
@@ -132,6 +137,7 @@ def _eval(args: argparse.Namespace) -> None:
         planner_model=args.planner_model,
         samples=args.samples,
         arms=arms,
+        pair=(pair[0], pair[1]),
         workers=args.workers,
         probes=not args.no_probes,
     )
@@ -205,6 +211,8 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--planner-model", default="gpt-6-astra")
     evaluate.add_argument("--samples", type=int, default=8, help="planner samples per physical probe")
     evaluate.add_argument("--arm", action="append", default=[], help="extra arm: name=module:function")
+    evaluate.add_argument("--flow", metavar="CKPT", help="add the flow generator arm (uv run --extra flow)")
+    evaluate.add_argument("--pair", default="lively,direct", help="the two arms of the A/B, e.g. flow,lively")
     evaluate.add_argument("--out", default=str(OUT / "eval"))
     evaluate.add_argument("--workers", type=int, default=8)
     evaluate.add_argument("--no-probes", action="store_true")

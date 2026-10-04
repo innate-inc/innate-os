@@ -259,15 +259,19 @@ uv run mars-express eval --report-only --snapshot eval/   # rebuild REPORT.md + 
   grumpy neighbour, a cat hunting a mouse, tipsy, winning the lottery, crossing a street, the cookie
   jar…). The planner is `gpt-6-astra` through `planner.write`.
 - **Arms.** Each recipe is played two ways: **lively** (the plan through `liveliness`, what ships) and
-  **direct** (the same plan, no liveliness, the control). An arm is any `(plan_frames, seed) ->
-  motion` function, so the flow generator joins as `--arm flow=module:function`.
+  **direct** (the same plan, no liveliness, the control). An arm is any function from the serving plan
+  (`plan.frames(plan.to_plan(dsl.expand(recipe)))`, (T, 9) at 25 Hz) and a seed to (T, 8) motion. The
+  ml workstream's flow generator joins with `uv run --extra flow mars-express eval --flow
+  runs/generator/generator.pt --pair flow,lively` (it wraps `ml.generator.sample.Generator.generate_frames`;
+  the checkpoint is rsynced from the 5090). Any other arm joins with `--arm name=module:function`.
 - **Media.** A 2x4 key-frame strip (farthest-point sampled, so a 0.2 s snap makes the strip) and a
   caption-free mp4 played physically in the sim, both from the three-quarter view.
 - **Judges.** Three independent calls per clip. Each spreads probability over the studio's 17 labels
   (read from `webapp/js/expression/judge.js`, so the two judges cannot drift), gives one free-text
   description, and rates alive and readable 1-5. A text grader then scores each description against
-  the prompt (2 same, 1 related, 0 different). A pairwise judge picks the more alive of lively and
-  direct, with the order coin-flipped.
+  the prompt (2 same, 1 related, 0 different). A pairwise judge picks the more alive of the `--pair`
+  arms (lively and direct by default). Every round shows the pair in both orders, and a win counts only
+  when both orders agree. A round where the same slot won both times counts as position-biased.
 - **Planner.** First-pass validity, repairs and latency of every write, and the 18 physical probes ×
   8 samples.
 - Everything is cached under `out/eval/`. A clip that changes (a new core, a retuned basis) drops its
@@ -282,7 +286,7 @@ Results on core `c877d92f6` (lively = what ships; chance with 17 labels is 6 % t
 | planner on the preset prompts: top-3 / related | 54 % / 33 % | 38 % / 50 % |
 | planner on 30 held-out prompts: top-3 / related | 26 % / 42 % | 52 % / 77 % |
 | alive 1-5, lively / direct (presets) | 2.62 / 2.50 | 2.90 / 2.81 |
-| A/B lively wins (186 verdicts) | 46 % (the second-shown video wins 77 %) | 56 % (91 % "slight") |
+| A/B lively wins (186 single-order verdicts, before the both-orders A/B) | 46 % (the second-shown video wins 77 %) | 56 % (91 % "slight") |
 
 Planner (`gpt-6-astra`, 190 writes): 100 % valid on the first pass, no repairs, 4.9 s median per call
 (p90 8.1 s). Physical probes, 18 × 8 samples: 97 % (out-of-distribution core 100 %).

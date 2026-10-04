@@ -15,6 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# eval/ with the flow generator as an arm (`mars-express eval --flow CKPT`): torch only, not the training stack.
+flow = ["torch>=2.6"]
 # 5090-side ML (ml/): generator training, Codex-authored dataset, planner distillation, the planner service.
 # vLLM lives in its own env on the 5090 (envs/serve); it is not a dependency here.
 ml = [

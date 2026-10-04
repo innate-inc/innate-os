@@ -1,13 +1,12 @@
 """Blind judges. A judge sees the motion (a key-frame strip, or the video itself for Gemini) and is never
 told the prompt: it spreads probability over the studio's fixed labels, names the motion in its own
 words, and rates how alive and how readable it is. A pairwise judge picks the more alive of two motions
-(order coin-flipped per call); a text grader, which does see the prompt, scores each blind description
+(the runner asks in both orders); a text grader, which does see the prompt, scores each blind description
 against it."""
 
 from __future__ import annotations
 
 import base64
-import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -175,9 +174,9 @@ class Judge:
             "readable": int(raw.get("readable", 0)),
         }
 
-    def pair(self, first: tuple[str, Media], second: tuple[str, Media], rng: random.Random) -> Verdict:
-        """Which of two arms' motions looks more alive; presentation order is coin-flipped."""
-        shown = [first, second] if rng.random() < 0.5 else [second, first]
+    def pair(self, first: tuple[str, Media], second: tuple[str, Media]) -> Verdict:
+        """Which of two arms' motions looks more alive, shown in exactly this order."""
+        shown = (first, second)
         raw = self._ask(
             [
                 ("text", f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{PAIR_TASK}"),
