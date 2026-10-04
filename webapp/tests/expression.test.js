@@ -4,19 +4,22 @@
 // golden fixture — zero dependencies, plain node:
 //   node tests/expression.test.js
 // The studio previews what the robot will do only while the two agree, so every
-// stage is checked: expansion, plan, interpolation, liveliness, the basis, the
-// PRNG, randomised variants, idle breathing, the presets, the frozen planner
-// prompt, and the checker's error strings (they are the planner's repair hints).
+// stage is checked: expansion, plan, interpolation, liveliness, the basis and its
+// rate limit, the PRNG, randomised variants, osc gesture words, idle breathing,
+// the presets, the frozen planner prompt, and the checker's error strings (they
+// are the planner's repair hints).
 // Regenerate the fixture: cd expressive && uv run mars-express golden
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  ACTUATOR_KEYS,
   CHANNELS,
   breathing,
   checkRecipe,
   expandRecipe,
+  limitFrames,
   liveliness,
   mulberry32,
   planFrames,
@@ -92,8 +95,16 @@ for (const [n, c] of golden.cases.entries()) {
     const actuators = c.motion.map((/** @type {number[]} */ row) => synthesize(coreBasis, [...row, 0]));
     const grid = (/** @type {Record<string, number>[]} */ poses) => poses.map((p) => keys.map((k) => p[k]));
     assert.ok(maxDiff(grid(actuators), grid(c.actuators), "actuators") < GENERATED_TOL);
+    const limited = limitFrames(coreBasis, actuators, 1 / golden.fps).map((p) => ACTUATOR_KEYS.map((k) => p[k]));
+    assert.ok(maxDiff(limited, c.limited, "limited") < GENERATED_TOL);
   });
 }
+
+test("osc gesture words expand like their letters", () => {
+  for (const { recipe, letters, same } of golden.aliases) {
+    assert.equal(maxDiff(expandRecipe(recipe), expandRecipe(letters), recipe) === 0, same, recipe);
+  }
+});
 
 test("variants draw amplitude, tempo and jitter in the core's order", () => {
   const { recipe, n, seed, plans } = golden.variants;
