@@ -35,7 +35,7 @@ from innate_llm.configure import DEFAULT_MODEL
 from brain_client.brain import grounding
 from brain_client.brain.context import ChatContext, Decision
 from brain_client.brain.loop import LoopThread
-from brain_client.brain.prompt import build_system_prompt, self_reference_turns
+from brain_client.brain.prompt import Emotes, build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
 from brain_client.brain.utils import (
     Event,
@@ -208,7 +208,7 @@ class BrainAgent:
         # published for nobody. Small events always publish.
         self.trace_has_audience: Callable[[], bool] = lambda: True
         # Set by the composition root while the expression driver plays emote tags.
-        self.emotes = False
+        self.emotes = Emotes.OFF
 
         if self._context is not None:
             self._context.on_request = self._trace_request  # the monitor renders the exact request body

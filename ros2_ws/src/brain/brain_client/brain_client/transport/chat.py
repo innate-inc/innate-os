@@ -14,13 +14,11 @@ import json
 import re
 import threading
 import time
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from brain_client.brain.context import emote_spans, split_emotes, split_tool_narration
 from brain_client.common.enums import StrEnum
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _REPLY_IDS = itertools.count(1)
@@ -36,6 +34,29 @@ class Sender(StrEnum):
     SKILL_OUTPUT = "skill_output"
 
 
+@dataclass(frozen=True)
+class Spoken:
+    """One sentence on its way to the speaker, for the body to perform."""
+
+    text: str  # tags cut out
+    tags: tuple[str, ...]  # its emote tags' prompts
+    before: str | None  # the previous sentence of the same reply; None opens the reply
+    heard: str | None  # what the person last said, for the first sentence of a reply that answers it
+
+
+@dataclass(frozen=True)
+class Performance:
+    """The body's part in one spoken sentence, called back by the speaker."""
+
+    start: Callable[[], None]  # its audio started
+    end: Callable[[bool], None]  # its audio ended (True) or it never played (False)
+    close_with: Callable[[tuple[str, ...]], None]  # emote tags written after it, the reply's last sentence
+
+
+Cue = Callable[[Spoken], Performance | None]
+"""Called as a sentence goes to TTS."""
+
+
 class ChatManager:
     def __init__(self, logger, chat_out_pub, task_status_pub, tts_handler=None):
         self._logger = logger
@@ -43,8 +64,7 @@ class ChatManager:
         self._task_status_pub = task_status_pub
         self._tts_handler = tts_handler
         self.history: list[dict] = []
-        # Bound late by the node: plays an emote tag's prompt the moment its sentence goes to TTS.
-        self.on_emote: Callable[[str], None] | None = None
+        self.on_sentence: Cue | None = None  # bound late by the node: the expression driver
 
     @staticmethod
     def entry(sender: Sender, text: str) -> dict:
@@ -107,12 +127,41 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False, reply_id: str | None = None) -> None:
-        if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
+    def speak(
+        self,
+        text: str,
+        replace_pending: bool = False,
+        reply_id: str | None = None,
+        performance: Performance | None = None,
+    ) -> None:
+        """Queue ``text`` for the speaker; ``performance`` follows its audio, or plays at once when
+        there is no voice to wait for."""
+        on_start, on_done = (performance.start, performance.end) if performance is not None else (None, None)
+        queued = self._tts_handler is not None and self._tts_handler.speak_text_async(
+            text, replace_pending=replace_pending, reply_id=reply_id, on_start=on_start, on_done=on_done
+        )
+        if not queued and performance is not None:
+            performance.start()
+            performance.end(True)
 
     def stream_speech(self, hold: Callable[[], bool] | None = None) -> SpeechStreamer:
-        return SpeechStreamer(self, hold, on_emote=self.on_emote)
+        """A streamer for the agent's reply: it supersedes stale queued speech, answers what was heard."""
+        return SpeechStreamer(self, hold, on_sentence=self.on_sentence, heard=self.last_heard)
+
+    def say_line(self, text: str) -> None:
+        """Speak a skill's line sentence by sentence, behind whatever is already queued."""
+        streamer = SpeechStreamer(self, on_sentence=self.on_sentence, supersede=False)
+        streamer.feed(text)
+        streamer.flush()
+
+    def last_heard(self) -> str | None:
+        """The person's latest words, unless the robot has spoken since: then they were answered."""
+        for entry in reversed(self.history):
+            if entry.get("sender") == Sender.ROBOT:
+                return None
+            if entry.get("sender") == Sender.USER:
+                return str(entry.get("text") or "") or None
+        return None
 
 
 class SpeechStreamer:
@@ -127,19 +176,32 @@ class SpeechStreamer:
 
     While ``hold`` is true the reply has not started, so sentences queue up
     unspoken (still abandonable) until :meth:`flush` lets them out in order.
+
+    Each sentence goes to ``on_sentence`` with its emote tags as it goes to TTS
+    (the body prepares its performance), and the speaker calls the returned
+    performance back as the sentence plays; tags after the reply's last
+    sentence close that sentence's performance. ``supersede`` false queues the
+    first sentence behind other speech instead of flushing it.
     """
 
     def __init__(
         self,
         chat: ChatManager,
         hold: Callable[[], bool] | None = None,
-        on_emote: Callable[[str], None] | None = None,
+        on_sentence: Cue | None = None,
+        *,
+        heard: Callable[[], str | None] | None = None,
+        supersede: bool = True,
     ):
         self._chat = chat
         self._hold = hold
         self._held: list[str] = []
-        self._on_emote = on_emote
-        self._emotes: list[str] = []  # held until the reply speaks: a silent turn performs nothing
+        self._on_sentence = on_sentence
+        self._heard = heard
+        self._supersede = supersede
+        self._emotes: list[str] = []  # wait for a spoken sentence: a silent turn performs nothing
+        self._before: str | None = None
+        self._last: Performance | None = None
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -159,8 +221,8 @@ class SpeechStreamer:
             for sentence in (*held, self._buffer):
                 self._say_locked(sentence)
             self._buffer = ""
-            if self.spoke and not self._muted:
-                self._perform()  # a tag after the last sentence still belongs to the reply
+            if self._last is not None and not self._muted and self._emotes:
+                self._last.close_with(tuple(self._emotes))  # a tag after the last sentence still belongs to the reply
             self._emotes.clear()
 
     def mute(self) -> None:
@@ -206,21 +268,28 @@ class SpeechStreamer:
             self._muted = True
         if not re.search(r"[a-zA-Z0-9]", sentence):
             return
-        self._perform()
+        self._last = self._cue(sentence)
         # The first sentence supersedes stale queued utterances (a reply
         # mid-playback keeps its rest, see _survives_flush in tts.py); the
         # rest of this reply queues in order behind it.
-        self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
+        self._chat.speak(
+            sentence,
+            replace_pending=self._supersede and not self.spoke,
+            reply_id=self._reply_id,
+            performance=self._last,
+        )
+        self._before = sentence
         self.spoke = True
 
-    def _perform(self) -> None:
-        """Play the held emote tags as their sentence goes to TTS. Held, not played on sight: a
-        model told to stay quiet still writes tag-only replies on idle turns, and those would
-        keep the robot fidgeting (and the planner busy) every few seconds."""
-        if self._on_emote is not None:
-            for prompt in self._emotes:
-                self._on_emote(prompt)
-        self._emotes.clear()
+    def _cue(self, sentence: str) -> Performance | None:
+        """Hand ``sentence`` and the tags held for it to the body. Tags wait for a spoken sentence, not
+        played on sight: a model told to stay quiet still writes tag-only replies on idle turns, and
+        those would keep the robot fidgeting (and the planner busy) every few seconds."""
+        tags, self._emotes = tuple(self._emotes), []
+        if self._on_sentence is None:
+            return None
+        heard = self._heard() if self._heard is not None and not self.spoke else None
+        return self._on_sentence(Spoken(sentence, tags, self._before, heard))
 
 
 def _split_sentences(text: str) -> tuple[list[str], str]:

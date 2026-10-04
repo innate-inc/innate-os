@@ -49,6 +49,7 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.context import split_emotes
 from brain_client.brain.memory_search import MemorySearch
+from brain_client.brain.prompt import Emotes
 from brain_client.brain.search_server import MemorySearchServer
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
@@ -352,10 +353,10 @@ class BrainClientNode(Node):
             standing_grip=lambda: self.rest_pose.grip,
             voice=self._tts_handler if self._tts_handler is not None and self._tts_handler.is_available() else None,
         )
-        self.chat.on_emote = driver.emote
+        self.chat.on_sentence = driver.cue
         self.gaze.head_sink = driver.set_gaze
         self.gaze.face_sink = driver.saw_person
-        self.brain.emotes = True
+        self.brain.emotes = Emotes.ACCENTS if config.per_sentence else Emotes.EVERY_REPLY
         if self._tts_handler is not None:
             self._tts_handler.on_audio = driver.feed_audio
             self._tts_handler.on_audio_cut = driver.cut_audio
@@ -528,16 +529,19 @@ class BrainClientNode(Node):
             self.brain.add_event(text)
 
     def _on_tts(self, msg: String) -> None:
-        """Speak a line a skill sent, and show it — emit, not speak: anything the
-        robot says aloud belongs in the transcript, or Skill.say goes unrecorded.
-        Emote tags are played, never spoken, exactly as on the agent-reply path."""
+        """Speak a line a skill sent, and show it: anything the robot says aloud belongs in the
+        transcript, or Skill.say goes unrecorded. It is spoken and performed sentence by sentence
+        like a reply; emote tags are performed, never spoken nor shown, and a line of tags alone
+        plays them at once."""
         text, emotes = split_emotes(msg.data)
-        for prompt in emotes:
-            if self.chat.on_emote is not None:
-                self.chat.on_emote(prompt)
-        if text.strip():
-            self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.emit(Sender.ROBOT, text)
+        if not text.strip():
+            if self.expression is not None:
+                for prompt in emotes:
+                    self.expression.emote(prompt)
+            return
+        self.get_logger().info(f"TTS request received: {text[:50]}...")
+        self.chat.emit(Sender.ROBOT, text, speak=False)
+        self.chat.say_line(msg.data)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice

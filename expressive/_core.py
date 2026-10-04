@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[1] / "ros2_ws" / "src"
-for _pkg in (_SRC / "brain" / "brain_client", _SRC / "mars_bot" / "mars_sim_driver"):
+# innate-llm: brain_client.transport (the robot's sentence splitter) imports it
+_PACKAGES = ("brain/brain_client", "mars_bot/mars_sim_driver", "cloud/clients/innate-llm")
+for _pkg in (_SRC / p for p in _PACKAGES):
     if str(_pkg) not in sys.path:
         sys.path.insert(0, str(_pkg))

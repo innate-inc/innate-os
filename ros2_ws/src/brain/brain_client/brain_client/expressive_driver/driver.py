@@ -13,14 +13,16 @@ the arm, a foreign head command the head, the joystick and the gaze tracker the 
 streams only while an agent is running and idle breathing is on, so a robot nobody talks to keeps
 its arm wherever skills and auto-rest put it.
 
-Prompts arrive on topics, from the express skill and from the agent's emote tags, and become clips
-down the fallback chain in ``sources``. Clips are synthesized to actuator frames on a worker
-thread, never on the executor or under the lock, and a newer request, a stop or a deactivation
-drops a clip still on its way.
+Prompts arrive on topics and from the express skill, and become clips down the fallback chain in
+``sources``. Every sentence the robot speaks is performed too (``cue``): its clip is made from the
+moment the sentence goes to TTS and plays when its audio starts. Clips are synthesized to actuator
+frames on a worker thread, never on the executor or under the lock, and a newer request, a stop or
+a deactivation drops a clip still on its way.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import threading
@@ -40,11 +42,13 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, Int32, String
 
+from brain_client.brain.context import split_emotes
 from brain_client.common.geometry import quaternion_to_yaw
 from brain_client.expressive import presets
 from brain_client.expressive.animator import Animator
 from brain_client.expressive.basis import ActuatorPose, Basis
 from brain_client.expressive.breathing import Breathing
+from brain_client.expressive.director import Direction, Director, fallback_clip
 from brain_client.expressive.motion import Clip
 from brain_client.expressive_driver import vocal
 from brain_client.expressive_driver.sources import ClipMaker, ClipSource, Made
@@ -58,6 +62,7 @@ from brain_client.expressive_driver.utils import (
     leaves_body,
     parts_of,
 )
+from brain_client.transport.chat import Performance
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -69,6 +74,7 @@ if TYPE_CHECKING:
     from brain_client.core.state import BrainState
     from brain_client.expressive.animator import AnimatorState
     from brain_client.perception.pose import Pose
+    from brain_client.transport.chat import Spoken
 
 FPS = 30.0
 BLEND_S = 0.4
@@ -108,6 +114,8 @@ STILL = Breathing(rise_amplitude=0.0, approach_amplitude=0.0, attend_amplitudes=
 class ExpressiveConfig:
     idle_breathing: bool
     stand_in: bool  # play the keyword preset at once while a prompt's clip is generated
+    per_sentence: bool  # perform every spoken sentence; off, only emote tags move the body
+    speech_effort: str  # the planner server's tier for spoken sentences
     vocalize: bool  # a short non-verbal sound with an emote nobody is speaking over
     enabled_parts: Parts  # the rest of the body never moves (scripts/expressive_bringup.sh stages it)
     speech_latency_s: float  # how far the speaker trails the speech-sway tap
@@ -124,6 +132,8 @@ class ExpressiveConfig:
         config = cls(
             idle_breathing=bool(node.declare_parameter("expressive.idle_breathing", True).value),
             stand_in=bool(node.declare_parameter("expressive.stand_in", True).value),
+            per_sentence=bool(node.declare_parameter("expressive.per_sentence", True).value),
+            speech_effort=str(node.declare_parameter("expressive.speech_effort", "low").value),
             vocalize=bool(node.declare_parameter("expressive.vocalize", True).value),
             enabled_parts=_parts(node.declare_parameter("expressive.enabled_parts", sorted(ALL_PARTS)).value),
             speech_latency_s=float(node.declare_parameter("expressive.speech_latency_s", 0.0).value or 0.0),
@@ -151,6 +161,26 @@ class _Label:
     name: str
     source: ClipSource
     request_id: str | None
+
+
+@dataclass(eq=False)
+class _Cue:
+    """One spoken sentence's performance, made from its hand-off to TTS and played from its audio start.
+    Mutated only under the driver's lock."""
+
+    text: str
+    direction: Direction
+    epoch: int
+    handed_at: float
+    plays: bool = False  # something was set in motion for it; a cue that holds supersedes nothing
+    seq: int | None = None  # taken when its audio starts: a sentence not yet heard supersedes nothing
+    started_at: float | None = None
+    ended: bool = False
+    tail: _Cue | None = None  # tags written after the sentence, played when its audio ends
+    stand_in: Clip | None = None  # prepared
+    made: Made | None = None  # prepared, final
+    made_at: float | None = None
+    on_stage: Clip | None = None
 
 
 class ExpressionDriver:
@@ -186,11 +216,16 @@ class ExpressionDriver:
         # A pool, not a thread per prompt: Thread.start() waits for the new thread to take the GIL, which
         # a synthesizing worker holds for milliseconds — too long for the speech streamer calling in.
         self._generators = ThreadPoolExecutor(max_workers=3, thread_name_prefix="expressive-gen")
+        # Spoken sentences ask the server one at a time, in speech order: it serves one request at a time, so
+        # a reply's sentences sent together reach it in any order and the last waits out the others.
+        self._speech_lane = ThreadPoolExecutor(max_workers=1, thread_name_prefix="expressive-speech")
         if config.vocalize:
             self._submit(_warm_sounds)  # the first synthesis pays numpy's FFT setup: not on an emote
         self._lock = threading.Lock()  # the request bookkeeping below; hooks arrive on many threads
 
         self._seq = 0  # bumped by every request and stop: a clip made for an older one is dropped
+        self._epoch = 0  # bumped by every stop: a sentence handed to TTS before it is not performed
+        self._director = Director()
         self._final_seq = 0  # the request whose own clip is on stage: its stand-in comes too late
         self._labels: deque[_Label] = deque(maxlen=4)  # newest last: a stand-in and its replacement overlap
         self._pcm_carry = b""
@@ -249,7 +284,8 @@ class ExpressionDriver:
         node.add_on_set_parameters_callback(self._on_parameters)
         self._logger.info(
             f"[Expressive] driver up: {FPS:.0f} Hz, planner server {config.server_url or '(none)'}, "
-            f"idle breathing {'on' if config.idle_breathing else 'off'}"
+            f"idle breathing {'on' if config.idle_breathing else 'off'}, "
+            f"per-sentence {f'on ({config.speech_effort} tier)' if config.per_sentence else 'off'}"
         )
 
     # ================= hooks (any thread) =================
@@ -269,10 +305,31 @@ class ExpressionDriver:
         self._generators.submit(self._make_and_play, seq, prompt, request_id)
 
     def emote(self, prompt: str) -> None:
-        """An emote tag from the agent's reply, played as its sentence goes to TTS — never voiced:
-        the sentence it opens is about to be spoken."""
+        """An emote tag, played at once — never voiced: the robot is speaking, or about to."""
         self._reply_emote_at = time.monotonic()
         self.express(prompt, vocalize=False)
+
+    def _emote_all(self, prompts: tuple[str, ...]) -> None:
+        for prompt in prompts:
+            self.emote(prompt)
+
+    def cue(self, spoken: Spoken) -> Performance:
+        """A sentence going to TTS: direct it and start making its clip now, to play when its audio
+        starts. Cheap: the speech streamer calls in under its lock."""
+        if not self._config.per_sentence:
+            for prompt in spoken.tags:
+                self.emote(prompt)
+            return Performance(_nothing, _ended, self._emote_all)
+        self._reply_emote_at = time.monotonic()
+        with self._lock:
+            direction = self._director.direct(spoken.text, spoken.tags, spoken.before, spoken.heard)
+            cue = _Cue(spoken.text, direction, self._epoch, time.monotonic())
+        cue.plays = self._launch(cue, direction)
+        return Performance(
+            functools.partial(self._start_cue, cue),
+            functools.partial(self._end_cue, cue),
+            functools.partial(self._close_cue, cue),
+        )
 
     def play_preset(self, name: str, request_id: str | None = None) -> None:
         """A built-in preset, at once and with its sound (``name`` must be in ``presets.PRESETS``)."""
@@ -285,10 +342,13 @@ class ExpressionDriver:
         self._submit(self._prepare_and_play, seq, Made(clip, ClipSource.PLAYED), request_id)
 
     def stop(self) -> None:
-        """Back to idle now: the clip on stage, any clip still being made, the speech sway, and the
-        stance — the base stops where it is instead of driving back to the anchor."""
+        """Back to idle now: the clip on stage, any clip still being made, the sentences still to be
+        heard, the speech sway, and the stance — the base stops where it is instead of driving back
+        to the anchor."""
         with self._lock:
             self._seq += 1
+            self._epoch += 1
+            self._director.reset()
             self._labels.clear()
             self._animator.stop()
         self._animator.interrupt_speech()
@@ -321,6 +381,7 @@ class ExpressionDriver:
         """Leave the base stopped: a stance in flight would otherwise coast until the deadman."""
         self._worker.shutdown(wait=False, cancel_futures=True)
         self._generators.shutdown(wait=False, cancel_futures=True)
+        self._speech_lane.shutdown(wait=False, cancel_futures=True)
         if self._stance.release() is not None:
             self._cmd_vel_pub.publish(Twist())
 
@@ -366,14 +427,17 @@ class ExpressionDriver:
     def _play_preset(self, seq: int, name: str, source: ClipSource, request_id: str | None, prompt: str = "") -> None:
         self._prepare_and_play(seq, Made(presets.clip(name, prompt=prompt), source), request_id)
 
-    def _prepare_and_play(self, seq: int, made: Made, request_id: str | None) -> None:
-        """Synthesize ``made`` to actuator frames here, off the executor and outside the lock."""
-        if seq != self._seq:
-            return  # superseded while queued: spare the synthesis
+    def _prepare(self, made: Made) -> Clip:
+        """``made`` as actuator frames: synthesized off the executor and outside the lock."""
         clip = made.clip
         if made.source != ClipSource.PLAYED and clip.space == "plan" and self._watched():
             clip = clear_camera(clip)  # eye contact over full excursions; a clip played as authored stays so
-        prepared = clip.to_actuators(self._basis).resample(FPS)
+        return clip.to_actuators(self._basis).resample(FPS)
+
+    def _prepare_and_play(self, seq: int, made: Made, request_id: str | None) -> None:
+        if seq != self._seq:
+            return  # superseded while queued: spare the synthesis
+        prepared = self._prepare(made)
         with self._lock:
             if seq != self._seq or (made.source == ClipSource.STAND_IN and self._final_seq == seq):
                 return
@@ -387,6 +451,128 @@ class ExpressionDriver:
         with self._lock:
             if seq == self._seq:
                 self._labels.append(_Label(name, ClipSource.PRESET, request_id))
+
+    # ================= spoken sentences (TTS, worker and generation threads) =================
+    def _launch(self, cue: _Cue, direction: Direction) -> bool:
+        """Start making ``direction``'s clip for ``cue``; False when nothing will play for it."""
+        if direction.tagged or self._maker.server_up:
+            if direction.stand_in is not None and self._config.stand_in:
+                self._submit(self._prepare_stand_in, cue, direction)
+            (self._generators if direction.tagged else self._speech_lane).submit(self._make_cue, cue, direction)
+            return True
+        if direction.fallback is not None:
+            self._submit(self._prepare_fallback, cue, direction)
+            return True
+        return False  # no planner, and the body moved recently enough: stay with the voice's sway
+
+    def _start_cue(self, cue: _Cue) -> None:
+        with self._lock:
+            self._start_locked(cue)
+
+    def _start_locked(self, cue: _Cue) -> None:
+        """Its audio started: the clip if it is ready, else the stand-in until the clip lands."""
+        cue.started_at = time.monotonic()
+        if cue.epoch != self._epoch or not cue.plays:
+            return
+        self._seq += 1
+        cue.seq = self._seq
+        if cue.made is not None:
+            self._show(cue, cue.made)
+        elif cue.stand_in is not None:
+            self._show(cue, Made(cue.stand_in, ClipSource.STAND_IN))
+
+    def _end_cue(self, cue: _Cue, played: bool) -> None:
+        with self._lock:
+            cue.ended = True
+            if played and cue.tail is not None:
+                self._start_locked(cue.tail)
+
+    def _close_cue(self, cue: _Cue, tags: tuple[str, ...]) -> None:
+        """Tags after the reply's last sentence: its performance if it is not heard yet, else they play
+        when it ends."""
+        with self._lock:
+            if cue.epoch != self._epoch:
+                return
+            direction = self._director.direct("", tags, cue.text)
+            if cue.started_at is None:
+                cue.direction, cue.stand_in, cue.made, cue.plays = direction, None, None, True
+                target = cue
+            else:
+                target = cue.tail = _Cue("", direction, self._epoch, time.monotonic(), plays=True)
+                if cue.ended:
+                    self._start_locked(target)
+        self._launch(target, direction)
+
+    def _make_cue(self, cue: _Cue, direction: Direction) -> None:
+        if cue.epoch != self._epoch or (cue.seq is not None and cue.seq != self._seq):
+            return  # stopped, or a later sentence is already heard: spare the planner
+        try:
+            made = self._made_for(direction)
+            if made is None:
+                return
+            if made.source == ClipSource.PRESET and cue.stand_in is not None and made.clip.name == cue.stand_in.name:
+                self._deliver(cue, direction, Made(cue.stand_in, ClipSource.PRESET))  # settle on the stand-in
+                return
+            self._deliver(cue, direction, Made(self._prepare(made), made.source))
+        except Exception as error:  # noqa: BLE001 — a thread's crash reporter: generation must not die silently
+            self._logger.error(f"[Expressive] could not perform '{cue.text}': {error!r}")
+
+    def _made_for(self, direction: Direction) -> Made | None:
+        """A tag down the whole chain; a sentence from the planner server, else its fallback (blocks)."""
+        if direction.tagged:
+            return self._maker.make(direction.prompt)
+        clip = self._maker.perform(direction.prompt, self._config.speech_effort)
+        if clip is not None:
+            return Made(clip, ClipSource.SERVER)
+        if direction.fallback is None:
+            return None
+        return Made(fallback_clip(direction.fallback, self._seq % 4, direction.prompt), ClipSource.PRESET)
+
+    def _prepare_stand_in(self, cue: _Cue, direction: Direction) -> None:
+        if direction.stand_in is None:
+            return
+        made = Made(presets.clip(direction.stand_in, prompt=direction.prompt), ClipSource.STAND_IN)
+        prepared = self._prepare(made)
+        with self._lock:
+            if cue.direction is not direction:
+                return  # trailing tags took the sentence over
+            cue.stand_in = prepared
+            if cue.seq is not None and cue.seq == self._seq and cue.made is None:
+                self._show(cue, Made(prepared, ClipSource.STAND_IN))
+
+    def _prepare_fallback(self, cue: _Cue, direction: Direction) -> None:
+        if direction.fallback is None:
+            return
+        clip = fallback_clip(direction.fallback, self._seq % 4, direction.prompt)
+        self._deliver(cue, direction, Made(self._prepare(Made(clip, ClipSource.PRESET)), ClipSource.PRESET))
+
+    def _deliver(self, cue: _Cue, direction: Direction, made: Made) -> None:
+        """``made`` is prepared: it plays now if its sentence is being heard and nothing newer took over."""
+        with self._lock:
+            if cue.direction is not direction:
+                return  # trailing tags took the sentence over
+            cue.made, cue.made_at = made, time.monotonic()
+            if cue.seq is not None and cue.seq == self._seq:
+                self._show(cue, made)
+
+    def _show(self, cue: _Cue, made: Made) -> None:
+        """Put a cue's prepared clip on stage (under the lock)."""
+        self._labels.append(_Label(made.clip.name, made.source, None))
+        if made.source != ClipSource.STAND_IN:
+            self._final_seq = self._seq
+            self._log_cue(cue, made)
+        if cue.on_stage is made.clip:
+            return  # the stand-in it settled on is already playing
+        cue.on_stage = made.clip
+        self._animator.play(made.clip)
+
+    def _log_cue(self, cue: _Cue, made: Made) -> None:
+        heard_at = cue.started_at or cue.handed_at
+        ready = f"ready {cue.made_at - cue.handed_at:.2f} s after hand-off" if cue.made_at else "ready"
+        self._logger.info(
+            f"[Expressive] sentence '{cue.text[:60] or '(tags after the reply)'}' -> {made.clip.name[:60]} "
+            f"({made.source}, {ready}, on stage {time.monotonic() - heard_at:+.2f} s from its audio start)"
+        )
 
     # ================= the tick (executor thread) =================
     def _tick(self) -> None:
@@ -572,13 +758,29 @@ class ExpressionDriver:
         self._prepare_and_play(seq, Made(clip, ClipSource.PLAYED), None)
 
     def _on_generate_request(self, msg: String) -> None:
+        """``{id, prompt}``, or ``{id, speech}`` (with optional ``heard`` and ``before``) to see how a spoken
+        sentence would be performed; the reply then carries the prompt the planner got."""
         try:
             data = json.loads(msg.data)
-            request_id, prompt = data["id"], str(data["prompt"])
-        except (json.JSONDecodeError, TypeError, KeyError):
-            self._logger.warning(f"[Expressive] ignoring {GENERATE_REQ_TOPIC}: expected {{id, prompt}}")
+            request_id = data["id"]
+            speech = data.get("speech")
+            prompt = None if isinstance(speech, str) else str(data["prompt"])
+        except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+            self._logger.warning(
+                f"[Expressive] ignoring {GENERATE_REQ_TOPIC}: expected {{id, prompt}} or {{id, speech}}"
+            )
             return
-        self._generators.submit(self._generate, request_id, prompt)
+        if prompt is not None:
+            self._generators.submit(self._generate, request_id, prompt)
+            return
+        heard, before = data.get("heard"), data.get("before")
+        self._generators.submit(
+            self._generate_speech,
+            request_id,
+            speech,
+            heard if isinstance(heard, str) else None,
+            before if isinstance(before, str) else None,
+        )
 
     def _generate(self, request_id: object, prompt: str) -> None:
         try:
@@ -586,6 +788,19 @@ class ExpressionDriver:
             reply = {"id": request_id, "clip": made.clip.to_dict(), "source": made.source}
         except Exception as error:  # noqa: BLE001 — the studio waits on this id: it must get an answer
             reply = {"id": request_id, "error": str(error) or type(error).__name__}
+        self._generated_pub.publish(String(data=json.dumps(reply)))
+
+    def _generate_speech(self, request_id: object, speech: str, heard: str | None, before: str | None) -> None:
+        """A fresh director: the request must not disturb the pacing of the sentences being spoken."""
+        text, tags = split_emotes(speech)
+        direction = Director().direct(text, tags, before, heard)
+        try:
+            made = self._made_for(direction)
+            if made is None:
+                raise ValueError("no planner server, and no fallback for this sentence")
+            reply = {"id": request_id, "clip": made.clip.to_dict(), "source": made.source, "prompt": direction.prompt}
+        except Exception as error:  # noqa: BLE001 — the studio waits on this id: it must get an answer
+            reply = {"id": request_id, "error": str(error) or type(error).__name__, "prompt": direction.prompt}
         self._generated_pub.publish(String(data=json.dumps(reply)))
 
     def _on_skill_status(self, msg: String) -> None:
@@ -673,8 +888,8 @@ class ExpressionDriver:
         return self._config.camera_clear and (self._gaze or time.monotonic() - self._person_at < PERSON_RECENT_S)
 
     def _on_parameters(self, params: list[Parameter]) -> SetParametersResult:
-        """``enabled_parts``, ``vocalize``, ``camera_clear`` and ``hold_joints`` apply at once; every other
-        expressive parameter is read at startup."""
+        """``enabled_parts``, ``vocalize``, ``camera_clear``, ``hold_joints`` and ``speech_effort`` apply
+        at once; every other expressive parameter is read at startup."""
         for param in params:
             if param.name == "expressive.enabled_parts":
                 parts = _parts(param.value)
@@ -687,6 +902,8 @@ class ExpressionDriver:
                     self._submit(_warm_sounds)
             elif param.name == "expressive.camera_clear":
                 self._config = replace(self._config, camera_clear=bool(param.value))
+            elif param.name == "expressive.speech_effort":
+                self._config = replace(self._config, speech_effort=str(param.value))
             elif param.name == "expressive.hold_joints":
                 hold = held_joints(param.value)
                 if hold is None:
@@ -700,6 +917,14 @@ def _parts(names: object) -> Parts:
     if not isinstance(names, (list, tuple)):
         return ALL_PARTS
     return frozenset(str(name) for name in names) & ALL_PARTS
+
+
+def _nothing() -> None:
+    pass
+
+
+def _ended(_played: bool) -> None:
+    pass
 
 
 def _warm_sounds() -> None:

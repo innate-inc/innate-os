@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """Prompt -> clip, down the fallback chain: the LAN planner server, then the brain's own LLM writing
-a recipe for the procedural generator, then the nearest built-in preset — never nothing.
+a recipe for the procedural generator, then the nearest built-in preset — never nothing. A spoken
+sentence asks the server alone (``perform``): the brain's LLM takes seconds, the sentence is gone by then.
 
-No ROS. ``ClipMaker.make`` blocks (network), so callers run it off the executor thread.
+No ROS. ``ClipMaker.make`` and ``perform`` block (network), so callers run them off the executor thread.
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     from brain_client.expressive.planner import Chat
 
 SERVER_TIMEOUT_S = 1.5
+# The server answers one request at a time, so a sentence can queue behind others; its clip is made
+# while earlier sentences play, so waiting costs little.
+SPEECH_TIMEOUT_S = 3.0
 # Probed off the prompt path: resolving an absent .local host alone takes ~2 s.
 SERVER_PROBE_S = 30.0
 LLM_TIMEOUT_S = 10.0
@@ -61,6 +65,10 @@ class ClipMaker:
         if self._server_url:
             threading.Thread(target=self._watch_server, name="expressive-server-probe", daemon=True).start()
 
+    @property
+    def server_up(self) -> bool:
+        return self._server_up
+
     def make(self, prompt: str) -> Made:
         seed = next(self._seeds)
         clip = self._from_server(prompt, seed)
@@ -71,15 +79,21 @@ class ClipMaker:
             return Made(clip, ClipSource.LLM)
         return Made(presets.clip(presets.match(prompt), seed=seed, prompt=prompt), ClipSource.PRESET)
 
-    def _from_server(self, prompt: str, seed: int) -> Clip | None:
+    def perform(self, prompt: str, effort: str) -> Clip | None:
+        """The planner server's clip on its ``effort`` tier, None when the server is down or fails."""
+        return self._from_server(prompt, next(self._seeds), effort, SPEECH_TIMEOUT_S)
+
+    def _from_server(
+        self, prompt: str, seed: int, effort: str = "medium", timeout: float = SERVER_TIMEOUT_S
+    ) -> Clip | None:
         if not self._server_up:
             return None
-        body = json.dumps({"prompt": prompt, "n": 1, "seed": seed, "effort": "medium"}).encode()
+        body = json.dumps({"prompt": prompt, "n": 1, "seed": seed, "effort": effort}).encode()
         request = urllib.request.Request(
             f"{self._server_url}/generate-dense", data=body, headers={"Content-Type": "application/json"}
         )
         try:
-            with urllib.request.urlopen(request, timeout=SERVER_TIMEOUT_S) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return Clip.load(json.loads(response.read())["clips"][0])
         except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
             self._logger.warning(f"[Expressive] planner server failed on '{prompt}': {error}")

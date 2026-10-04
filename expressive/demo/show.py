@@ -10,6 +10,8 @@ show.yaml::
     intro: 1.0            # seconds of idle before the first beat
     outro: 1.5
     duration: null        # pad or cut the show to this many seconds
+    speech_led: false     # true: each line follows the last one (+ its pause) as the robot's TTS does, and its
+                          # gesture replaces one still playing; false: a line waits for the last gesture
     beats:
       - say: "Hi! I'm MARS."
         emote: "a cheerful hello"     # planned by the LLM (cached), else the closest preset
@@ -70,6 +72,7 @@ class Show:
     intro: float = 1.0
     outro: float = 1.5
     duration: float | None = None
+    speech_led: bool = False
 
     @classmethod
     def load(cls, path: Path) -> Show:
@@ -189,7 +192,7 @@ def cue_sheet(show: Show, studio: Studio) -> list[Cue]:
         cue = Cue(beat, line_at, pcm, clip, clip_at)
         cues.append(cue)
         logger.info("%5.1f s  %-48s %s %s", t, beat.say[:48], source, recipe[:70])
-        t = max(cue.line_end, cue.clip_end - GESTURE_TAIL_S) + beat.pause
+        t = (cue.line_end if show.speech_led else max(cue.line_end, cue.clip_end - GESTURE_TAIL_S)) + beat.pause
     return cues
 
 

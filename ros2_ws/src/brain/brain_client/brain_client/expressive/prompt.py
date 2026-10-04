@@ -45,3 +45,19 @@ def messages(prompt: str, idea: str | None = None, recipe: str | None = None) ->
     if recipe is not None:
         chat.append({"role": "assistant", "content": json.dumps({"idea": idea or "", "recipe": recipe})})
     return chat
+
+
+def speech_prompt(sentence: str, heard: str | None = None, before: str | None = None) -> str:
+    """The prompt that performs one spoken sentence: ``before`` is the robot's previous sentence in the same
+    reply, ``heard`` what the person last said. FROZEN with ``SYSTEM``: the speech planners train on it."""
+    prompt = f'You say: "{_quote(sentence)}"'
+    if before:
+        prompt += f' right after: "{_quote(before)}"'
+    if heard:
+        prompt += f' to someone who said: "{_quote(heard)}"'
+    return prompt
+
+
+def _quote(text: str, limit: int = 140) -> str:
+    text = " ".join(text.replace('"', "'").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"

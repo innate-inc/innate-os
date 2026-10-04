@@ -69,8 +69,8 @@ class Express(Skill):
     """Act out a feeling or an attitude with the whole body — arm posture, gripper, head tilt and a
     small turn or step — from a short body-language prompt such as "proud, chest out", "a cat
     spotting a cucumber" or "sheepish, shrinking away". Use it when asked to show, act or mime
-    something, or for a deliberate gesture longer than a reaction; quick reactions while talking
-    belong in emote tags in your speech instead."""
+    something, or for a deliberate gesture longer than a reaction; while you talk, your body already
+    performs each sentence."""
 
     def execute(self, prompt: str, wait: bool = True) -> SkillReturn:
         prompt = " ".join(prompt.split())

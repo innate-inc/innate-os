@@ -42,7 +42,7 @@ EmotionName = Literal[
 
 class HeadEmotion(Skill):
     """Show an emotion with the whole body — posture, gripper, head and a small turn — for a deliberate
-    gesture. Quick reactions while talking belong in emote tags in your speech instead."""
+    gesture. While you talk, your body already performs each sentence."""
 
     def guidelines(self) -> str:
         return (

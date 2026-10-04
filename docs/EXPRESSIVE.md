@@ -176,8 +176,9 @@ its anchor. The layer yields the body to whatever else owns it:
   declaration cannot prove a skill body-free. Add a shipped skill to the right list when its
   declarations under- or over-state what it moves;
 - when a body skill ends while an agent runs, a small reaction plays at once
-  (`expressive.on_skill_completed` / `on_skill_failed`, preset names, so no LLM call), unless the
-  agent's reply carried an emote in the last 3 s; a skill run by hand on an idle robot draws none;
+  (`expressive.on_skill_completed` / `on_skill_failed`, preset names, so no LLM call), unless a
+  spoken sentence or an emote tag was performed in the last 3 s; a skill run by hand on an idle
+  robot draws none;
 - a `/mars/arm/commands` or `/mars/head/set_position` command that is not ours (leader arm, UDP
   teleop, the arm SDK page, the head slider) holds that part off for 5 s after its last message
   (each of our own commands is recognized once, by its echo); `/joystick` holds the base off for 2 s;
@@ -240,7 +241,7 @@ a reply are never voiced: their sentence is about to be spoken.
 | `/brain/express/play` | String | a Clip JSON object to play now (never a path; malformed clips are logged and ignored) |
 | `/brain/express/stop` | String (payload ignored) | back to idle. Not `Empty`: rosbridge (rws) serializes `std_msgs/Empty` to 0 bytes, which every ROS subscriber rejects |
 | `/brain/express/state` | String, 5 Hz | `{playing, name, t, duration, idle, masked, masked_parts, camera_clear, speaking, source, id}`; `masked_parts` lists the parts a skill or Nav2 holds; `camera_clear` is true while someone is watched and clips are capped |
-| `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing |
+| `/brain/express/generate_req` → `/brain/express/generate_res` | String | `{id, prompt}` → `{id, clip, source}` or `{id, error}`, without playing; `{id, speech}` (optional `heard`, `before`) performs a spoken sentence as below and the reply adds the `prompt` the planner got |
 
 A prompt moves the robot at once: its keyword preset (`presets.match`) starts playing as a
 stand-in (source `preset-stand-in`) while the real clip is generated, and the generated clip
@@ -261,6 +262,8 @@ Parameters on brain_client_node:
 | `expressive.enabled` | `true` | `false` builds nothing; speech, gaze and the prompt behave as before |
 | `expressive.idle_breathing` | `true` | breathe while an agent runs; `false` holds still between clips |
 | `expressive.stand_in` | `true` | play the keyword preset while a prompt's clip is generated |
+| `expressive.per_sentence` | `true` | perform every spoken sentence (below); `false`: only emote tags move the body, each played as its sentence goes to TTS, and the system prompt asks for one per reply |
+| `expressive.speech_effort` | `low` | the planner server's tier for spoken sentences: `low` the 0.8B planner, `medium` the 4B; applies at once |
 | `expressive.vocalize` | `true` | a prompt or preset played while the robot is silent makes a short non-verbal sound; applies at once |
 | `expressive.enabled_parts` | `[arm, base, head]` | the parts the layer may move; the rest stays still. Applies at once (`ros2 param set /brain_client_node expressive.enabled_parts "[head]"`): the bring-up stages it |
 | `expressive.speech_latency_s` | `0.0` | how far the speaker trails the speech sway's audio; positive delays the motion |
@@ -270,15 +273,90 @@ Parameters on brain_client_node:
 | `expressive.on_skill_completed` | `agreeing` | a preset name plays instantly; other text is a prompt to generate; `""` for none |
 | `expressive.on_skill_failed` | `sad` | |
 
-The agent emotes through tags in its replies. The system prompt asks for
-`<emote>a feeling plus one physical cue, 2-8 words</emote>` at the start of a reply and on
-emotional beats, invented fresh each time (its examples span proud, sheepish, startled and subtle,
-and it is told never to reuse one: with a single example the model copied it verbatim); the
-speech streamer cuts them out (never spoken, never shown in the chat) and plays each one when its
-sentence goes to TTS. Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`);
-`head_emotion` keeps its 13 emotion names but plays each through this driver with the whole body
-(a preset, or a prompt for `very_happy` and `disappointed`), and the agents' prompts now ask for
-emote tags while talking and `head_emotion` only for a deliberate gesture.
+Skills call `express(prompt, wait=True)` (`workspace/innate_skills/express.py`); `head_emotion`
+keeps its 13 emotion names but plays each through this driver with the whole body (a preset, or a
+prompt for `very_happy` and `disappointed`).
+
+### Per-sentence expression
+
+Every sentence the robot speaks, an agent's reply or a skill's line on `/brain/tts`, gets its own
+performance (`expressive.per_sentence`, on by default):
+
+```
+reply stream ─ SpeechStreamer: sentence + its emote tags ─► at hand-off to TTS: ExpressionDriver.cue
+   Director (expressive/director.py): planner prompt · instant stand-in · server-down fallback
+   ─► speech lane (one thread, speech order): planner server /generate-dense on the speech_effort tier
+   ─► synthesized to actuator frames
+at that sentence's audio start (TTSHandler on_start): its clip if ready, else the stand-in, then the clip as it lands
+```
+
+- **The planner performs the words.** The prompt is `speech_prompt(sentence, heard, before)` from
+  `expressive/prompt.py`, e.g. `You say: "I'm so sorry." right after: "Oh no." to someone who said:
+  "My grandpa is in hospital."`. `before` is the previous sentence of the same reply; `heard` is the
+  person's last words, only for a reply's first sentence and only while the robot has not answered
+  them. The planner decides how big each performance is: a beat for a plain line, a full gesture for
+  a peak. The format is frozen, since the speech-trained planners learn on it.
+- **An emote tag overrides its sentence.** The tag's prompt goes down the whole chain, as a prompt
+  does (server at `medium`, then the brain's LLM, then the keyword preset). With per-sentence on,
+  the system prompt asks for tags only for what the words leave unsaid (`Emotes.ACCENTS` in
+  `brain/prompt.py`); with it off, it still asks for one at the start of each reply. A tag written
+  after a reply's last sentence closes that sentence: it becomes its performance if the sentence is
+  not heard yet, else it plays when the sentence's audio ends. A tag-only `/brain/tts` line plays its
+  tags at once; a tag-only agent reply performs nothing.
+- **Stand-in.** A preset plays the moment the sentence is heard only when the words name a feeling
+  outright (`SPOKEN_CUES` in `director.py`: "congratulations" happy, "so sorry" sad, "wow"
+  surprised, "hmm" thinking, "goodbye" and "good night" affectionate, ...; the earliest cue in the
+  sentence wins). The presets' own keywords read prompts, not speech: on agent sentences they matched
+  "down the hall" as sad and "four new kittens" as curious. With no cue, the previous clip plays on
+  until the new one lands, which is prefetched and usually ready first.
+- **Without the planner server** (none configured, down, or a request failing), a sentence plays its
+  cue's preset, or one of eight small neutral beats (`BEATS`: nod, lean-in, tilt, open-hand, bob,
+  settle, lift, sway; never the same twice in a row). A beat plays only when, by the middle of its
+  sentence, the body would have been still for 4 s of speech, or when the reply just started, so a
+  run of short sentences is not a fidget each. Speech time is estimated at 0.46 s + 0.055 s per
+  character, fitted on 232 sim TTS clips (the robot's speaker runs ~10 % faster). The brain's LLM is
+  never asked per sentence: it takes 2-7 s, and the sentence is over by then. A sentence waits up to
+  3 s for the server (a prompt 1.5 s): the server answers one request at a time, and a sentence's
+  clip is made while the earlier ones play.
+- **Supersede.** A sentence's audio start supersedes whatever is playing, and a clip still on its way
+  for an earlier sentence is then dropped. A sentence not yet heard supersedes nothing, so a
+  prefetch never cuts the sentence being spoken. A stop or a deactivation drops every sentence not yet
+  heard as well as the clip on stage. Skills mask parts exactly as before.
+- **No TTS.** When the voice is unavailable (or its queue is full) the sentence plays at hand-off.
+- **Skill lines.** A `/brain/tts` line is shown once in the chat and spoken sentence by sentence,
+  queued behind other speech (it never flushes the agent's reply), each sentence performed.
+
+To watch it: start an agent on the Agent page and chat; every sentence the browser speaks moves the
+body. Each performance logs one line in the brain log, with the source that made it and the time it
+took:
+
+```bash
+./innate-sim sh
+grep -h "Expressive\] sentence" ~/.ros/log/python3_*.log | tail
+# [Expressive] sentence 'Then I'd spend the afternoon exploring...' -> You say: "Then I'd spend..." (server,
+#     ready 0.70 s after hand-off, on stage +0.00 s from its audio start)
+ros2 param set /brain_client_node expressive.speech_effort medium    # the 4B tier for speech
+```
+
+`/brain/express/generate_req` with `{"id": 1, "speech": "Oh no, I'm so sorry."}` returns the clip and
+the prompt one sentence would get, without playing it.
+
+Measured in the sim (2026-10-04, planner server on the 5090, `low` tier, Gemini agent): 33 of 33
+sentences across 13 replies got their own clip from the server; the clip was ready 0.4-1.7 s after
+hand-off (median 0.7 s), before its sentence's audio started in 32 of 33 (the other 0.18 s after),
+and `/brain/express/state` showed it 0.1-0.24 s after the browser received the audio (5 Hz state).
+The server alone answers a speech prompt in 0.32 s median on `low` and 0.48 s on `medium` (67 of 67
+valid on both), but it serves one request at a time, so the driver sends a reply's sentences in
+speech order on one thread: sent together, four took 0.31-1.41 s, and on `medium` four of ten
+missed a 1.5 s timeout and fell back (sentences now wait up to 3 s). In the sim the voice starts only once its whole clip is
+synthesized, which gives the prefetch a head start; on the robot audio starts at the first chunk,
+so a reply's first sentence may see its clip land a few hundred ms in (unmeasured). With the tier
+unavailable, six of seven sentences played their fallback (five beats, one `excited` cue) within
+0.16 s of hand-off and the seventh held. `/brain/express/stop` mid-clip idles the stage in 0.1 s, and
+deactivating the agent ends the arm stream in 0.5 s; either way the rest of that reply stays still.
+A skill masks only its parts (`turn_in_place`: the base) while sentences keep playing on the arm and
+head. With the `ACCENTS` wording as shipped, Gemini opened 2 of 7 replies with a tag, both emotional;
+two softer drafts drew one on 6 of 6 and 4 of 4 replies.
 
 To point a robot (or the sim) at a planner server, add to the gitignored `config/settings.yaml`
 and restart the brain:
@@ -298,9 +376,9 @@ innate skill run innate-os/express @prompt="proud, chest out"     # inside ./inn
 ```
 
 Over rosbridge (`ws://localhost:9090`), publish `/brain/express/prompt` (std_msgs/String) or a
-Clip JSON on `/brain/express/play`. On the Agent page, start an agent and chat: replies open with
-an emote, the head and wrist sway while the browser plays the voice, and the arm breathes between
-turns.
+Clip JSON on `/brain/express/play`. On the Agent page, start an agent and chat: every sentence
+is performed as it is heard, the head and wrist sway while the browser plays the voice, and the arm
+breathes between turns.
 
 ### Hardware bring-up
 
