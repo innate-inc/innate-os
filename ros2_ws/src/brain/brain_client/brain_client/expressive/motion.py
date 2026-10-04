@@ -28,6 +28,17 @@ if TYPE_CHECKING:
     from brain_client.expressive.plan import Plan
 
 Space = Literal["plan", "actuator"]
+MIN_FPS = 1.0
+MAX_FPS = 1000.0
+# 30 s recipes, plus the x1.25 tempo of planner variants and per-segment frame rounding.
+MAX_CLIP_S = 40.0
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:  # a long non-JSON string: ENAMETOOLONG
+        return False
 
 
 @dataclass(frozen=True)
@@ -40,6 +51,17 @@ class Clip:
     idea: str = ""
     recipe: str = ""
 
+    def __post_init__(self) -> None:
+        width = len(MOTION_KEYS if self.space == "plan" else ACTUATOR_KEYS)
+        if self.frames.ndim != 2 or self.frames.shape[1] != width or len(self.frames) == 0:
+            raise ValueError(f"a {self.space} clip needs (T >= 1, {width}) frames, got shape {self.frames.shape}")
+        if not np.all(np.isfinite(self.frames)):
+            raise ValueError("clip frames must be finite numbers")
+        if not MIN_FPS <= self.fps <= MAX_FPS:
+            raise ValueError(f"clip fps must be in [{MIN_FPS:g}, {MAX_FPS:g}], got {self.fps}")
+        if self.duration > MAX_CLIP_S:
+            raise ValueError(f"clip lasts {self.duration:.1f} s; the limit is {MAX_CLIP_S:g} s")
+
     @property
     def channels(self) -> tuple[str, ...]:
         return MOTION_KEYS if self.space == "plan" else ACTUATOR_KEYS
@@ -50,17 +72,20 @@ class Clip:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Clip:
+        """Parse clip JSON; every malformed input raises ``ValueError``."""
         space: Space = "actuator" if data.get("space") == "actuator" else "plan"
         expected = MOTION_KEYS if space == "plan" else ACTUATOR_KEYS
         channels = tuple(data.get("channels", expected))
         if channels != expected:
             raise ValueError(f"{space} clip channels must be {list(expected)}, got {list(channels)}")
-        frames = np.asarray(data["frames"], dtype=np.float64).reshape(-1, len(expected))
-        if len(frames) == 0 or not np.all(np.isfinite(frames)):
-            raise ValueError("clip frames must be a non-empty grid of finite numbers")
+        try:
+            frames = np.asarray(data["frames"], dtype=np.float64).reshape(-1, len(expected))
+            fps = float(data.get("fps", FPS))
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"clip needs numeric frames rows of {len(expected)} and a numeric fps ({e})") from None
         return cls(
             frames=frames,
-            fps=float(data.get("fps", FPS)),
+            fps=fps,
             space=space,
             name=str(data.get("name", "clip")),
             prompt=str(data.get("prompt", "")),
@@ -70,12 +95,18 @@ class Clip:
 
     @classmethod
     def load(cls, source: str | Path | Mapping[str, Any]) -> Clip:
-        """From a dict, a JSON string, or a path to a JSON file."""
+        """From a dict, a JSON string, or the path of an existing JSON file; anything else is a ``ValueError``."""
         if isinstance(source, Mapping):
             return cls.from_dict(source)
         if isinstance(source, str) and source.lstrip().startswith("{"):
-            return cls.from_dict(json.loads(source))
-        return cls.from_dict(json.loads(Path(source).read_text()))
+            data = json.loads(source)
+        elif _is_file(Path(source)):
+            data = json.loads(Path(source).read_text())
+        else:
+            raise ValueError(f"not clip JSON or an existing file: {str(source)[:80]!r}")
+        if not isinstance(data, Mapping):
+            raise ValueError("clip JSON must be an object")
+        return cls.from_dict(data)
 
     def to_dict(self, decimals: int = 4) -> dict[str, Any]:
         return {

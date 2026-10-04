@@ -93,7 +93,7 @@ def _osc(tokens: list[str], current: Frames, count: int, amp: float, rng: Mulber
         amplitude *= rng.uniform(0.8, 1.2)
         period *= rng.uniform(0.85, 1.15)
     u = np.arange(1, count + 1) / FPS
-    envelope = np.minimum(1.0, np.minimum(u, u[-1] - u + 1.0 / FPS) / OSC_RAMP_S)
+    envelope = np.minimum(1.0, np.minimum(u, u[-1] - u) / OSC_RAMP_S)
     rows = np.repeat(current[None], count, 0)
     rows[:, Ch.ENERGY] = np.linspace(current[Ch.ENERGY], target[Ch.ENERGY], count)
     rows[:, index] += amplitude * np.sin(2 * np.pi * u / period) * envelope

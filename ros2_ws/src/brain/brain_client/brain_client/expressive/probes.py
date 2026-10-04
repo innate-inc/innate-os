@@ -31,6 +31,8 @@ def frames_for(recipe: str, seed: int | None = None) -> Frames:
 def _half_cycles(x: Frames, amp: float) -> int:
     """Swings of at least ``amp`` around the running mean."""
     k = max(3, len(x) // 10)
+    if len(x) <= k:
+        return 0
     detrended = x - np.convolve(x, np.ones(k) / k, "same")
     signs = np.sign(np.where(np.abs(detrended) > amp / 2, detrended, 0))
     signs = signs[signs != 0]

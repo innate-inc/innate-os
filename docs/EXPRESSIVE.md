@@ -85,7 +85,7 @@ fold), askew −1 8 %, approach +1 6 %, approach −1 and rise −1 3 %, everyth
    fed forward: no lag on slow segments, a small overshoot (~2-4 % of the move) after fast ones;
 3. band-limited noise (5 sinusoids per channel, log-uniform in a per-channel band) scaled by
    `E · NOISE_SCALE` and sped up with energy: E 1 is a calm drift, E 8 a tremble (head ~3° RMS,
-   arm 0.02-0.1 rad RMS).
+   arm 0.02-0.1 rad RMS). Orient and advance get no noise: the base moves only when the recipe says so.
 
 `plan.extract(motion)` inverts it for training data: the RMS of the detail above 1 Hz divided by
 the same scale comes back as the plan's energy.

@@ -182,7 +182,7 @@ function osc(tokens, current, count, segment, { rand, amp = 1 }) {
   const last = count / FPS;
   return Array.from({ length: count }, (_, i) => {
     const u = (i + 1) / FPS;
-    const envelope = Math.min(1, Math.min(u, last - u + 1 / FPS) / OSC_RAMP_S);
+    const envelope = Math.min(1, Math.min(u, last - u) / OSC_RAMP_S);
     const row = current.slice();
     row[ENERGY] = energy[i];
     row[index] += amplitude * Math.sin((2 * Math.PI * u) / period) * envelope;
@@ -330,9 +330,11 @@ export function toPlan(frames, { kdt = SERVE_KDT, fc = SERVE_FC } = {}) {
   const posture = fc ? lowpass(raw, fc) : raw;
   /** @type {PlanKey[]} */
   const keys = [];
-  const n = Math.floor((count - 1) / FPS / kdt + 1e-9) + 1;
-  for (let k = 0; k < n; k++) {
-    const t = k * kdt;
+  const duration = (count - 1) / FPS;
+  const times = Array.from({ length: Math.floor(duration / kdt + 1e-9) + 1 }, (_, k) => k * kdt);
+  // the recipe's final partial interval (often its release) gets a key too, as in the core
+  if (duration - times[times.length - 1] > 1e-9) times.push(duration);
+  for (const t of times) {
     const i = Math.min(count - 1, frameCount(t));
     const key = /** @type {PlanKey} */ ({ t });
     MOTION_CHANNELS.forEach((c, j) => {
@@ -409,7 +411,7 @@ const NOISE_TERMS = 5;
 const WARP_S = 0.05;
 const WARP_BAND_HZ = /** @type {const} */ ([0.15, 0.4]);
 // approach expand rise attend askew orient advance grip
-const NOISE_SCALE = [0.008, 0.008, 0.008, 0.025, 0.015, 0.25, 0.0, 0.02];
+const NOISE_SCALE = [0.008, 0.008, 0.008, 0.025, 0.015, 0.0, 0.0, 0.02];
 const OMEGA = [14, 18, 14, 22, 16, 9, 7, 30];
 const NOISE_BAND_HZ = [
   [0.5, 2.0],

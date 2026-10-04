@@ -25,8 +25,9 @@ EXTRACT_KDT = 0.5
 EXTRACT_FC = 1.0
 # Energy is measured as the RMS of the fast (above-fc) detail divided by the liveliness layer's
 # per-unit-energy amplitude, so extract(liveliness(plan)) gives back roughly the plan's energy. The arm
-# channels are small because the basis turns one unit of rise/approach/expand into ~3 rad of elbow.
-ENERGY_SCALE: Frames = np.array([0.008, 0.008, 0.008, 0.025, 0.015, 0.25, 0.0, 0.02])
+# channels are small because the basis turns one unit of rise/approach/expand into ~3 rad of elbow;
+# orient and advance get none: the base moves only when the recipe says so.
+ENERGY_SCALE: Frames = np.array([0.008, 0.008, 0.008, 0.025, 0.015, 0.0, 0.0, 0.02])
 
 
 class Plan(TypedDict):
@@ -82,13 +83,22 @@ def to_plan(frames: Frames, kdt: float = SERVE_KDT, fc: float | None = SERVE_FC)
     posture = lowpass(frames[:, :MOTION_CHANNELS], fc) if fc else frames[:, :MOTION_CHANNELS]
     count = len(frames)
     keys: list[dict[str, float]] = []
-    for k in range(math.floor((count - 1) / FPS / kdt + 1e-9) + 1):
-        t = k * kdt
+    for t in key_times(count, kdt):
         i = min(count - 1, frame_count(t))
         key = {"t": t, **{c.key: float(posture[i, j]) for j, c in enumerate(CHANNELS[:MOTION_CHANNELS])}}
         key["energy"] = max(0.0, float(frames[i, Ch.ENERGY]))
         keys.append(key)
     return Plan(duration=(count - 1) / FPS, keys=keys)
+
+
+def key_times(count: int, kdt: float) -> list[float]:
+    """Key times every ``kdt`` over ``count`` frames, plus the last frame when it falls between keys
+    (else a recipe's final partial interval, often its release, would be cut off)."""
+    duration = (count - 1) / FPS
+    times = [k * kdt for k in range(math.floor(duration / kdt + 1e-9) + 1)]
+    if duration - times[-1] > 1e-9:
+        times.append(duration)
+    return times
 
 
 def frames(plan: Plan, count: int | None = None) -> Frames:
@@ -111,8 +121,7 @@ def extract(motion: Frames, kdt: float = EXTRACT_KDT, fc: float = EXTRACT_FC) ->
     count = len(motion)
     window = max(EXTRACT_KDT, kdt)
     keys: list[dict[str, float]] = []
-    for k in range(math.floor((count - 1) / FPS / kdt + 1e-9) + 1):
-        t = k * kdt
+    for t in key_times(count, kdt):
         i = min(count - 1, frame_count(t))
         lo, hi = max(0, math.floor((t - window / 2) * FPS)), min(count, math.floor((t + window / 2) * FPS) + 1)
         energy = float(np.sqrt((fast[lo:hi] ** 2).mean())) if hi > lo else 0.0
