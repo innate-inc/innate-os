@@ -38,6 +38,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 import numpy as np
 from innate_llm import configure
@@ -390,9 +391,9 @@ class MicroInput(InputDevice):
             mic.start()
             return mic
 
-        self.logger.info(f"🎙️ Using audio device: {device or 'default'}")
-        mic = ArecordStreamer(self.logger)
-        mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
+        self.logger.info(f"🎙️ Using audio device: {device or 'none yet'}")
+        mic = ArecordStreamer(self.logger, detect=self._detect_audio_device)
+        mic.start(device=device, sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
 
     def _on_elevenlabs_message(self, ws, message: str):
@@ -840,7 +841,6 @@ class MicroInput(InputDevice):
                     if empty_count >= 20:
                         # The wrist camera's USB audio dies on a link reset while arecord
                         # stays alive and blocked, so Scribe would idle out forever.
-                        self.logger.warning("⚠️ No audio chunks for 2 s: respawning the microphone capture")
                         self._respawn_mic()
                         empty_count = 0
                     continue
@@ -934,11 +934,14 @@ class MicroInput(InputDevice):
                     devices.append({"card": card_num, "device": device_num, "name": card_name, "id": device_id})
         except Exception:
             pass
+        # The Jetson's own cards have no microphone: APE drives the speaker's I2S amp and HDA is HDMI.
+        # Capturing from APE yields silence and contends with the speaker on the same card.
+        devices = [d for d in devices if "jetson" not in d["name"].lower()]
 
         # Try to find a suitable microphone device
         preferred_device = None
 
-        self.logger.info(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
+        self.logger.debug(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
 
         # Look for USB microphones (usually better quality)
         for dev in devices:
@@ -1045,8 +1048,11 @@ class RosPcmStreamer:
 class ArecordStreamer:
     """Streams audio from ALSA via arecord subprocess."""
 
-    def __init__(self, logger):
+    def __init__(self, logger, detect: Callable[[], str | None] | None = None):
+        """``detect`` finds the microphone again on every restart: a USB mic can re-enumerate, or vanish."""
         self.queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
+        self._detect = detect
+        self._device: str | None = None
         self._proc: subprocess.Popen | None = None
         self.logger = logger
         self.sample_rate = DEFAULT_SAMPLE_RATE
@@ -1054,11 +1060,16 @@ class ArecordStreamer:
         self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
 
-    def start(self, device: str = "default", sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
+    def start(
+        self, device: str | None = "default", sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS
+    ):
+        """``device`` None opens nothing: no microphone is enumerated yet, and ``restart`` looks again."""
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
-        self._device = str(device)
+        self._device = device
         self._stop.clear()
+        if device is None:
+            return
         # arecord raw PCM 16-bit, stdout
         cmd = [
             "arecord",
@@ -1143,5 +1154,13 @@ class ArecordStreamer:
                 self.queue.get_nowait()
             except queue.Empty:
                 break
-        self.start(device=self._device, sample_rate=self.sample_rate, channels=self.channels)
+        device = self._detect() if self._detect is not None else self._device
+        if device is None:
+            if self._device is not None:
+                self.logger.warning("⚠️ The microphone is gone: waiting for it to enumerate again")
+            self._device = None
+            return
+        if self._device is not None:
+            self.logger.warning(f"⚠️ No audio chunks for 2 s: respawning the microphone capture on {device}")
+        self.start(device=device, sample_rate=self.sample_rate, channels=self.channels)
         self.logger.info(f"🎙️ arecord respawned on {self._device} (pid: {self._proc.pid if self._proc else '?'})")
