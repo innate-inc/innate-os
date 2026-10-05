@@ -837,10 +837,10 @@ class MicroInput(InputDevice):
                     empty_count = 0  # Reset on successful get
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count >= 50:
+                    if empty_count >= 20:
                         # The wrist camera's USB audio dies on a link reset while arecord
                         # stays alive and blocked, so Scribe would idle out forever.
-                        self.logger.warning("⚠️ No audio chunks for 5 s: respawning the microphone capture")
+                        self.logger.warning("⚠️ No audio chunks for 2 s: respawning the microphone capture")
                         self._respawn_mic()
                         empty_count = 0
                     continue
