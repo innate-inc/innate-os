@@ -66,16 +66,17 @@ SPOKEN_CUES: dict[str, tuple[str, ...]] = {
     "bored": ("boring", "bored"),
 }
 
-# Small, low-energy recipes for a plain sentence while the planner server is down.
+# Small, low-energy recipes for a plain sentence while the planner server is down. Posture within about ±.3
+# reads as frozen on this body, so the values carry the speech planner's visibility gain (expressive/ml/speech.py).
 BEATS: dict[str, str] = {
-    "nod": "go .35 p=.3 a=.1 E=.6 | go .25 p=.05 | go .25 p=.25 | go .5 p=.1 a=0 E=.5 | hold .6",
-    "lean-in": "go .6 a=.3 p=.25 k=.1 E=.7 | hold 1 E=.5 | go .8 a=.05 p=.1 k=0",
-    "tilt": "go .5 k=.35 p=.2 E=.6 | hold .9 | go .6 k=0 p=.05",
-    "open-hand": "go .5 x=.3 z=.15 a=.1 g=.4 E=.8 | hold .6 | go .7 x=0 z=0 a=0 g=.15 E=.5",
-    "bob": "go .3 z=.1 p=.15 E=.7 | osc 1.2 z .08 .6 | go .5 z=0 p=.05",
-    "settle": "go .7 z=-.12 a=-.08 p=-.05 E=.4 | hold .8 | go .8 z=.05 p=.12 E=.5",
-    "lift": "go .3 z=.2 x=.1 p=.2 g=.25 E=.9 | hold .3 | go .6 z=0 x=0 p=.05 g=.15 E=.5",
-    "sway": "go .4 k=-.2 p=.15 E=.6 | go .6 k=.2 | go .5 k=0 p=.05 | hold .4",
+    "nod": "go .35 p=.47 a=.17 E=.6 | go .25 p=.09 | go .25 p=.4 | go .5 p=.17 a=0 E=.5 | hold .6",
+    "lean-in": "go .6 a=.47 p=.4 k=.17 E=.7 | hold 1 E=.5 | go .8 a=.09 p=.17 k=0",
+    "tilt": "go .5 k=.54 p=.33 E=.6 | hold .9 | go .6 k=0 p=.09",
+    "open-hand": "go .5 x=.47 z=.25 a=.17 g=.4 E=.8 | hold .6 | go .7 x=0 z=0 a=0 g=.15 E=.5",
+    "bob": "go .3 z=.17 p=.25 E=.7 | osc 1.2 z .14 .6 | go .5 z=0 p=.09",
+    "settle": "go .7 z=-.21 a=-.14 p=-.09 E=.4 | hold .8 | go .8 z=.09 p=.21 E=.5",
+    "lift": "go .3 z=.33 x=.17 p=.33 g=.25 E=.9 | hold .3 | go .6 z=0 x=0 p=.09 g=.15 E=.5",
+    "sway": "go .4 k=-.33 p=.25 E=.6 | go .6 k=.33 | go .5 k=0 p=.09 | hold .4",
 }
 
 _WORDS = re.compile(r"[^a-z']+")
