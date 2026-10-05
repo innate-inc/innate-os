@@ -314,14 +314,15 @@ class UninavidWsClient:
             with self._lock:
                 since_send = time.monotonic() - self._last_send_time if self._last_send_time > 0 else -1.0
 
-            # Report dropped frames (sent stamps older than the one the server responded to)
+            # Report dropped frames (sent stamps older than the one the server responded to).
+            # A reply for no pending frame (the stampless ack) must not drain the queue, or
+            # every later reply looks like a drop.
             resp_stamp = (stamp_sec, stamp_nsec)
             dropped = []
             with self._lock:
-                while self._sent_stamps and self._sent_stamps[0] != resp_stamp:
-                    dropped.append(self._sent_stamps.popleft())
-                if self._sent_stamps and self._sent_stamps[0] == resp_stamp:
-                    self._sent_stamps.popleft()  # consume the matched one
+                if resp_stamp in self._sent_stamps:
+                    while (sent := self._sent_stamps.popleft()) != resp_stamp:
+                        dropped.append(sent)
             if dropped:
                 self._log.info(f"dropped {len(dropped)} frames: {[f'{s}.{ns:09d}' for s, ns in dropped]}")
 
