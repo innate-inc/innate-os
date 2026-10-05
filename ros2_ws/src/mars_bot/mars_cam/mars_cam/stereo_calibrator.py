@@ -69,7 +69,10 @@ class StereoFeed:
     """
 
     def __init__(self, left_topic: str, right_topic: str, callback: Callable[[Image, Image], None]) -> None:
-        self._node = rclpy.create_node("stereo_calibrator_feed")
+        # Without global arguments: launch's __node remap would otherwise rename this node to the calibrator's.
+        self._node = rclpy.create_node(
+            "stereo_calibrator_feed", use_global_arguments=False, start_parameter_services=False
+        )
         left = message_filters.Subscriber(self._node, Image, left_topic)
         right = message_filters.Subscriber(self._node, Image, right_topic)
         self._sync = message_filters.ApproximateTimeSynchronizer([left, right], queue_size=10, slop=0.1)
