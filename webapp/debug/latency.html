@@ -247,7 +247,6 @@
         <option value="elevenlabs_batch">ElevenLabs Scribe (batch)</option>
         <option value="gemini">Gemini (batch)</option>
         <option value="elevenlabs">ElevenLabs Scribe (realtime)</option>
-        <option value="openai">OpenAI Realtime</option>
       </select>
     </label>
     <label class="status">VAD engine
@@ -258,6 +257,18 @@
     </label>
     <label class="status">silence <input id="cfg-silence" type="number" step="0.05" min="0.1" max="3" size="4" style="width:5.5em"> s</label>
     <label class="status">threshold <input id="cfg-threshold" type="number" step="0.05" min="0" max="1" size="4" style="width:5.5em"></label>
+  </div>
+  <div class="row">
+    <label class="status">realtime endpointing
+      <select id="cfg-commit">
+        <option value="vad">ElevenLabs VAD</option>
+        <option value="manual">local VAD (engine above)</option>
+      </select>
+    </label>
+    <label class="status">Scribe silence <input id="cfg-rt-silence" type="number" step="0.05" min="0.3" max="3" size="4" style="width:5.5em"> s</label>
+    <label class="status">Scribe threshold <input id="cfg-rt-threshold" type="number" step="0.05" min="0" max="1" size="4" style="width:5.5em"></label>
+    <label class="status">min speech <input id="cfg-rt-min-speech" type="number" step="10" min="0" size="4" style="width:5.5em"> ms</label>
+    <label class="status">min silence <input id="cfg-rt-min-silence" type="number" step="10" min="0" size="4" style="width:5.5em"> ms</label>
   </div>
   <div class="row">
     <label class="status">reply order
@@ -390,9 +401,11 @@
   <ul>
     <li>The batch STT backends (<code>elevenlabs_batch</code>, <code>gemini</code> — batch
       is the default) endpoint on the robot, so their internals are visible.</li>
-    <li>The realtime backends (<code>elevenlabs</code>, <code>openai</code>) endpoint
-      inside the vendor's WebSocket session. Nothing before the transcript is
-      observable, and the page says so rather than drawing a bar it cannot measure.</li>
+    <li>Scribe realtime (<code>elevenlabs</code>) is the VAD A/B: <i>realtime endpointing</i>
+      picks who cuts the utterance on the same streaming transcriber. <i>Local VAD</i> draws
+      the same bars as batch, with the commit round trip as the STT call. <i>ElevenLabs VAD</i>
+      endpoints inside the vendor session, so nothing before its first partial is observable —
+      press space as you stop, or the bar has nothing to start from.</li>
   </ul>
 </footer>
 
@@ -1081,7 +1094,7 @@ function renderWarnings(runs) {
   const sawEndpoint = runs.some((r) => first(r, "utterance_closed"));
   if (sawTranscript && !sawEndpoint) {
     const backend = runs.map((r) => first(r, "chat_in")?.backend).find(Boolean) ?? "realtime";
-    notes.push(`STT backend "${backend}" endpoints inside the vendor session — nothing before the transcript is measurable here.`);
+    notes.push(`STT backend "${backend}" endpoints inside the vendor session — nothing before the transcript is measurable here; press space as you stop to time it.`);
   }
   if (runs.some((r) => r.dropped)) notes.push("Some turns were preempted or deactivated; their rows are incomplete by design.");
   el.hidden = !notes.length;
@@ -1360,7 +1373,7 @@ function captureSvg({ runs, span, t1, why, config, zeroAt = null }) {
   const meta = [
     ["brain model", config.llm_model ?? "unknown"],
     ["STT backend", config.stt_backend ?? "unknown"],
-    ["VAD", `${config.stt_vad_engine ?? "?"} · ${config.stt_vad_silence_secs ?? "?"}s silence · threshold ${config.stt_vad_threshold ?? "?"}`],
+    ["VAD", vadSummary(config)],
     ["reply order", config.speak_before_tools ? "speak, then act" : "act, then speak"],
     ["speech out", runs.some(isTopicMode) ? "sim — whole clip to /tts/audio" : "streamed to the speaker"],
     ["window", `${spanLabel(span)} ending ${clock(t1)}${why === "live" ? " (live)" : ""}`],
@@ -1471,7 +1484,7 @@ function download(blob, name) {
 /** A filename that says what it is without opening it. */
 const captureName = (pin, ext) =>
   `latency-${(pin.config.llm_model ?? "model").replace(/[^\w.-]/g, "")}-` +
-  `${(pin.config.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}-` +
+  `${(pin.config.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}${vendorEndpointed(pin.config) ? "-elevenlabsvad" : ""}-` +
   `${(pin.note || "").trim().replace(/[^\w-]+/g, "_").slice(0, 24) || `pin${pin.id}`}.${ext}`;
 
 // ---- pinned segments -------------------------------------------------------
@@ -1515,13 +1528,31 @@ function pinStats(pin) {
   return out.join(" · ");
 }
 
+/** Which VAD actually cut the utterances: Scribe realtime under "vad" ignores the local knobs. */
+function vendorEndpointed(c) {
+  return c.stt_backend === "elevenlabs" && (c.stt_commit_strategy ?? "vad") === "vad";
+}
+
+function vadSummary(c) {
+  if (vendorEndpointed(c)) {
+    return `ElevenLabs VAD · ${c.stt_realtime_vad_silence_secs ?? "?"}s silence · threshold ${c.stt_realtime_vad_threshold ?? "?"} · min speech ${c.stt_realtime_min_speech_ms ?? "?"}ms · min silence ${c.stt_realtime_min_silence_ms ?? "?"}ms`;
+  }
+  return `${c.stt_vad_engine ?? "?"} · ${c.stt_vad_silence_secs ?? "?"}s silence · threshold ${c.stt_vad_threshold ?? "?"}`;
+}
+
+function vadShort(c) {
+  if (vendorEndpointed(c)) return `ElevenLabs vad · ${c.stt_realtime_vad_silence_secs ?? "?"}s silence`;
+  return [c.stt_vad_engine ? `${c.stt_vad_engine} vad` : null, c.stt_vad_silence_secs != null ? `${c.stt_vad_silence_secs}s silence` : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function pinConfigLine(pin) {
   const c = pin.config;
   return [
     c.llm_model ?? "model unknown",
     c.stt_backend ?? "stt unknown",
-    c.stt_vad_engine ? `${c.stt_vad_engine} vad` : null,
-    c.stt_vad_silence_secs != null ? `${c.stt_vad_silence_secs}s silence` : null,
+    vadShort(c) || null,
     c.speak_before_tools != null ? (c.speak_before_tools ? "speak→act" : "act→speak") : null,
   ]
     .filter(Boolean)
@@ -1614,6 +1645,11 @@ const CONFIG_KNOBS = [
   { node: STT_NODE, name: "stt_vad_engine", type: "string", el: "cfg-vad-engine" },
   { node: STT_NODE, name: "stt_vad_silence_secs", type: "float", el: "cfg-silence" },
   { node: STT_NODE, name: "stt_vad_threshold", type: "float", el: "cfg-threshold" },
+  { node: STT_NODE, name: "stt_commit_strategy", type: "string", el: "cfg-commit" },
+  { node: STT_NODE, name: "stt_realtime_vad_silence_secs", type: "float", el: "cfg-rt-silence" },
+  { node: STT_NODE, name: "stt_realtime_vad_threshold", type: "float", el: "cfg-rt-threshold" },
+  { node: STT_NODE, name: "stt_realtime_min_speech_ms", type: "int", el: "cfg-rt-min-speech" },
+  { node: STT_NODE, name: "stt_realtime_min_silence_ms", type: "int", el: "cfg-rt-min-silence" },
   { node: BRAIN_NODE, name: "speak_before_tools", type: "bool", el: "cfg-speak-first" },
   { node: BRAIN_NODE, name: "follow_up_after_silent_call", type: "bool", el: "cfg-follow-up" },
 ];
@@ -1705,8 +1741,8 @@ function renderConfigLine() {
   const parts = [];
   if (c.llm_model) parts.push(c.llm_model);
   if (c.stt_backend) parts.push(c.stt_backend);
-  if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
-  if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
+  const vad = vadShort(c);
+  if (vad) parts.push(vad);
   if (c.speak_before_tools != null) parts.push(c.speak_before_tools ? "speak→act" : "act→speak");
   if (c.follow_up_after_silent_call != null) parts.push(c.follow_up_after_silent_call ? "answer at once" : "answer next interval");
   $("cfg-text").textContent = parts.length ? `on the robot now: ${parts.join(" · ")}` : "";
@@ -1738,8 +1774,9 @@ $("cfg-apply").onclick = async () => {
   // batch is atomic, so a knob this robot lacks would silently drop the rest.
   for (const knob of changed) {
     const raw = knobValue(knob);
-    const value = knob.type === "float" ? Number(raw) : raw;
-    if (knob.type === "float" && !Number.isFinite(value)) continue;
+    const numeric = knob.type === "float" || knob.type === "int";
+    const value = numeric ? Number(raw) : raw;
+    if (numeric && !Number.isFinite(value)) continue;
     try {
       const res = await ros.callService(`${knob.node}/set_parameters`, {
         parameters: [
@@ -1748,7 +1785,7 @@ $("cfg-apply").onclick = async () => {
             value: {
               type: PARAM_TYPE[knob.type],
               bool_value: knob.type === "bool" ? Boolean(value) : false,
-              integer_value: 0,
+              integer_value: knob.type === "int" ? Math.round(value) : 0,
               double_value: knob.type === "float" ? value : 0,
               string_value: knob.type === "string" ? value : "",
             },

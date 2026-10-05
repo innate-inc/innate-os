@@ -60,6 +60,31 @@ def generate_launch_description():
         default_value="silero",
         description="Local voice detector: silero (neural) | energy (RMS threshold)",
     )
+    stt_commit_strategy_arg = DeclareLaunchArgument(
+        "stt_commit_strategy",
+        default_value="vad",
+        description="Who cuts utterances on Scribe realtime: vad (Scribe's own) | manual (local endpointer)",
+    )
+    stt_realtime_vad_threshold_arg = DeclareLaunchArgument(
+        "stt_realtime_vad_threshold",
+        default_value="0.4",
+        description="Scribe VAD speech probability (commit_strategy=vad only)",
+    )
+    stt_realtime_vad_silence_secs_arg = DeclareLaunchArgument(
+        "stt_realtime_vad_silence_secs",
+        default_value="0.5",
+        description="Scribe VAD silence that closes an utterance, 0.3-3.0 s (commit_strategy=vad only)",
+    )
+    stt_realtime_min_speech_ms_arg = DeclareLaunchArgument(
+        "stt_realtime_min_speech_ms",
+        default_value="100",
+        description="Scribe VAD shortest run of speech that opens an utterance (commit_strategy=vad only)",
+    )
+    stt_realtime_min_silence_ms_arg = DeclareLaunchArgument(
+        "stt_realtime_min_silence_ms",
+        default_value="100",
+        description="Scribe VAD shortest gap that counts as silence (commit_strategy=vad only)",
+    )
     elevenlabs_batch_stt_model_arg = DeclareLaunchArgument(
         "elevenlabs_batch_stt_model",
         default_value="scribe_v2",
@@ -93,6 +118,11 @@ def generate_launch_description():
             stt_filter_background_audio_arg,
             stt_energy_threshold_arg,
             stt_vad_engine_arg,
+            stt_commit_strategy_arg,
+            stt_realtime_vad_threshold_arg,
+            stt_realtime_vad_silence_secs_arg,
+            stt_realtime_min_speech_ms_arg,
+            stt_realtime_min_silence_ms_arg,
             elevenlabs_batch_stt_model_arg,
             gemini_stt_model_arg,
             elevenlabs_stt_model_arg,
@@ -120,6 +150,19 @@ def generate_launch_description():
                             LaunchConfiguration("stt_energy_threshold"), value_type=float
                         ),
                         "stt_vad_engine": LaunchConfiguration("stt_vad_engine"),
+                        "stt_commit_strategy": LaunchConfiguration("stt_commit_strategy"),
+                        "stt_realtime_vad_threshold": ParameterValue(
+                            LaunchConfiguration("stt_realtime_vad_threshold"), value_type=float
+                        ),
+                        "stt_realtime_vad_silence_secs": ParameterValue(
+                            LaunchConfiguration("stt_realtime_vad_silence_secs"), value_type=float
+                        ),
+                        "stt_realtime_min_speech_ms": ParameterValue(
+                            LaunchConfiguration("stt_realtime_min_speech_ms"), value_type=int
+                        ),
+                        "stt_realtime_min_silence_ms": ParameterValue(
+                            LaunchConfiguration("stt_realtime_min_silence_ms"), value_type=int
+                        ),
                         "elevenlabs_batch_stt_model": LaunchConfiguration("elevenlabs_batch_stt_model"),
                         "gemini_stt_model": LaunchConfiguration("gemini_stt_model"),
                         "elevenlabs_stt_model": LaunchConfiguration("elevenlabs_stt_model"),
