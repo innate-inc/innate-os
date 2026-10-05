@@ -73,8 +73,8 @@ RecorderNode::RecorderNode()
     topics_received_[leader_command_topic_] = false;
     topics_received_[velocity_topic_] = false;
 
-    // Sensor subscriptions exist only while a task is active (subscribe_sensors):
-    // idle, the two raw image streams alone are 42 MB/s deserialized for nothing.
+    // Sensor subscriptions exist only while an episode records (enter_state): otherwise
+    // the two raw image streams alone are 42 MB/s deserialized for nothing.
 
     // Log subscriptions (debug — detail; the "initialized" line below is the summary)
     RCLCPP_DEBUG(this->get_logger(), "Subscribing to image topics:");
@@ -204,6 +204,15 @@ void RecorderNode::check_all_topics_received() {
     }
 }
 
+void RecorderNode::enter_state(State state) {
+    state_ = state;
+    if (state_ == State::EPISODE_ACTIVE) {
+        subscribe_sensors();
+    } else {
+        unsubscribe_sensors();
+    }
+}
+
 void RecorderNode::subscribe_sensors() {
     if (arm_state_sub_) {
         return;
@@ -220,8 +229,10 @@ void RecorderNode::subscribe_sensors() {
         arm_state_topic_, 10, std::bind(&RecorderNode::arm_state_callback, this, std::placeholders::_1));
     leader_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
         leader_command_topic_, 10, std::bind(&RecorderNode::leader_command_callback, this, std::placeholders::_1));
+    // Latched: the head publishes on change, and the episode's first frame needs the standing angle.
     head_position_sub_ = this->create_subscription<std_msgs::msg::String>(
-        head_position_topic_, 10, std::bind(&RecorderNode::head_position_callback, this, std::placeholders::_1));
+        head_position_topic_, rclcpp::QoS(1).transient_local(),
+        std::bind(&RecorderNode::head_position_callback, this, std::placeholders::_1));
     cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
         velocity_topic_, 10, std::bind(&RecorderNode::cmd_vel_callback, this, std::placeholders::_1));
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -246,6 +257,9 @@ std::string RecorderNode::missing_required_sensors() {
 }
 
 void RecorderNode::unsubscribe_sensors() {
+    if (!arm_state_sub_) {
+        return;
+    }
     // Safe mid-spin only because every entity shares the default mutually exclusive group, so no sensor
     // callback is in flight here; rclcpp then skips ready handles whose subscription expired.
     image_subs_.clear();
@@ -329,22 +343,12 @@ void RecorderNode::timer_callback() {
         return;
     }
 
-    // Check for required sensor data
-    for (const auto& topic : image_topics_) {
-        if (!latest_images_[topic]) {
-            RCLCPP_WARN(this->get_logger(), "Incomplete sensor data; missing image from topic %s. Skipping timestep.",
-                        topic.c_str());
-            return;
+    if (const std::string missing = missing_required_sensors(); !missing.empty()) {
+        // The subscriptions open with the episode, so its first ticks always wait here.
+        if (std::chrono::steady_clock::now() - episode_start_time_ > std::chrono::seconds(1)) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                 "Incomplete sensor data; no data yet on %s. Skipping timestep.", missing.c_str());
         }
-    }
-
-    if (!latest_arm_state_) {
-        RCLCPP_WARN(this->get_logger(), "Incomplete sensor data; missing arm state. Skipping timestep.");
-        return;
-    }
-
-    if (!latest_odom_) {
-        RCLCPP_WARN(this->get_logger(), "Incomplete sensor data; missing odom. Skipping timestep.");
         return;
     }
 
@@ -418,7 +422,7 @@ void RecorderNode::timer_callback() {
         if (timestep_count >= static_cast<size_t>(max_timesteps_)) {
             RCLCPP_INFO(this->get_logger(), "Timestep limit (%d) reached. Automatically stopping episode.",
                         max_timesteps_);
-            state_ = State::EPISODE_STOPPED;
+            enter_state(State::EPISODE_STOPPED);
             publish_status("stopped", std::to_string(episode_count_));
             return;
         }
@@ -511,7 +515,11 @@ void RecorderNode::activate_physical_primitive(
             current_episode_->cancel();
         }
         current_episode_.reset();
+        enter_state(State::TASK_ACTIVE);
     }
+
+    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
+    set_head_ai_position();
 
     std::string task_dir = request->task_directory;
     if (task_dir.empty()) {
@@ -535,11 +543,6 @@ void RecorderNode::activate_physical_primitive(
         return;
     }
 
-    // Before the head's 3 s settle, so sensor data is already queued when the caller opens an episode.
-    subscribe_sensors();
-    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
-    set_head_ai_position();
-
     // Derive display name from directory basename
     std::string display_name = fs::path(task_dir).filename().string();
 
@@ -550,9 +553,6 @@ void RecorderNode::activate_physical_primitive(
     } catch (const std::exception& e) {
         response->success = false;
         RCLCPP_ERROR(this->get_logger(), "Failed to activate task '%s': %s", display_name.c_str(), e.what());
-        if (state_ == State::IDLE) {
-            unsubscribe_sensors();
-        }
         return;
     }
 
@@ -564,7 +564,7 @@ void RecorderNode::activate_physical_primitive(
 
     current_task_name_ = display_name;
     current_task_dir_ = task_dir;
-    state_ = State::TASK_ACTIVE;
+    enter_state(State::TASK_ACTIVE);
     RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' started at %s.", display_name.c_str(),
                 task_dir.c_str());
     publish_status("active");
@@ -591,14 +591,6 @@ void RecorderNode::handle_new_episode(const std::shared_ptr<brain_messages::srv:
         return;
     }
 
-    if (const std::string missing = missing_required_sensors(); !missing.empty()) {
-        RCLCPP_WARN(this->get_logger(), "Recorder not ready: no data yet on %s", missing.c_str());
-        publish_status("failed - waiting for sensors");
-        response->success = false;
-        response->message = "Recorder not ready: no data yet on " + missing + ". Try again in a moment.";
-        return;
-    }
-
     current_episode_ = std::make_unique<EpisodeData>();
     try {
         current_episode_->open_file(task_manager_->get_streaming_episode_path());
@@ -612,7 +604,7 @@ void RecorderNode::handle_new_episode(const std::shared_ptr<brain_messages::srv:
     }
     episode_start_time_ = std::chrono::steady_clock::now();
     episode_start_system_time_ = std::chrono::system_clock::now();
-    state_ = State::EPISODE_ACTIVE;
+    enter_state(State::EPISODE_ACTIVE);
     episode_count_++;
 
     // Capture provenance for this episode; written to metadata by add_episode on
@@ -624,18 +616,6 @@ void RecorderNode::handle_new_episode(const std::shared_ptr<brain_messages::srv:
     RCLCPP_INFO(this->get_logger(), "=== RECORDING STARTED ===");
     RCLCPP_INFO(this->get_logger(), "Task: %s, Episode: %s", current_task_name_.c_str(), episode_str.c_str());
     RCLCPP_INFO(this->get_logger(), "Recording at %d Hz", data_frequency_);
-
-    // Surface what's missing rather than what's available: if recording starts
-    // before every topic has produced data, those timesteps will be skipped.
-    if (!all_topics_received_) {
-        std::string missing;
-        for (const auto& [topic, received] : topics_received_) {
-            if (!received) {
-                missing += missing.empty() ? topic : ", " + topic;
-            }
-        }
-        RCLCPP_WARN(this->get_logger(), "Recording started before data arrived on: %s", missing.c_str());
-    }
 
     publish_status("active", episode_str);
     response->success = true;
@@ -691,7 +671,7 @@ void RecorderNode::handle_save_episode(const std::shared_ptr<std_srvs::srv::Trig
         if (episode_count_ > 0) {
             episode_count_--;
         }
-        state_ = State::TASK_ACTIVE;
+        enter_state(State::TASK_ACTIVE);
         publish_status(status_tag, std::to_string(episode_count_));
         response->success = false;
         response->message = message;
@@ -726,7 +706,7 @@ void RecorderNode::handle_save_episode(const std::shared_ptr<std_srvs::srv::Trig
 
     publish_status("saved", std::to_string(episode_count_));
     current_episode_.reset();
-    state_ = State::TASK_ACTIVE;
+    enter_state(State::TASK_ACTIVE);
     response->success = true;
     response->message = "Episode saved.";
 }
@@ -752,7 +732,7 @@ void RecorderNode::handle_cancel_episode(const std::shared_ptr<std_srvs::srv::Tr
     RCLCPP_INFO(this->get_logger(), "Episode canceled; streaming file discarded.");
     publish_status("cancelled", std::to_string(episode_count_));
     current_episode_.reset();
-    state_ = State::TASK_ACTIVE;
+    enter_state(State::TASK_ACTIVE);
     response->success = true;
     response->message = "Episode canceled.";
 }
@@ -760,7 +740,7 @@ void RecorderNode::handle_cancel_episode(const std::shared_ptr<std_srvs::srv::Tr
 void RecorderNode::handle_stop_episode(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     if (state_ == State::EPISODE_ACTIVE) {
-        state_ = State::EPISODE_STOPPED;
+        enter_state(State::EPISODE_STOPPED);
         RCLCPP_INFO(this->get_logger(), "Episode recording stopped. Waiting for save or cancel command.");
         publish_status("stopped", std::to_string(episode_count_));
         response->success = true;
@@ -803,8 +783,7 @@ void RecorderNode::handle_end_task(const std::shared_ptr<std_srvs::srv::Trigger:
     }
 
     task_manager_->end_task();
-    state_ = State::IDLE;
-    unsubscribe_sensors();
+    enter_state(State::IDLE);
     RCLCPP_INFO(this->get_logger(), "Task ended; recorder state set to IDLE.");
     publish_status("idle");
     current_task_name_.clear();
