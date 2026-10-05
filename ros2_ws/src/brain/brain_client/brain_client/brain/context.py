@@ -117,6 +117,12 @@ class ChatContext:
         self._prefix = self._sent = None
         self.last_usage = {}
 
+    def set_history_limits(self, entries: int, image_turns: int) -> None:
+        """Apply agent budgets before a request, including an already populated conversation."""
+        if (entries, image_turns) != (self._max_history, self._max_image_turns):
+            self._max_history, self._max_image_turns = entries, image_turns
+            self._history = self._prune(self._history)
+
     @property
     def history(self) -> History:
         return self._history

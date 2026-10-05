@@ -15,6 +15,7 @@ several agents per file.
 from __future__ import annotations
 
 import base64
+import json
 import math
 from pathlib import Path
 
@@ -104,6 +105,17 @@ def build_agent_instances(
                 if not isinstance(agent.model, str) or not agent.model.strip():
                     raise ValueError("model must be a 'vendor:name' string or None")
                 agent.model = agent.model.strip()
+            if agent.model_extra_body is not None:
+                if not isinstance(agent.model_extra_body, str) or not isinstance(json.loads(agent.model_extra_body), dict):
+                    raise ValueError("model_extra_body must be a JSON object string or None")
+            for name, minimum in (("history_max_entries", 6), ("history_max_image_turns", 0)):
+                value = getattr(agent, name)
+                if value is not None and (type(value) is not int or value < minimum):
+                    raise ValueError(f"{name} must be an integer >= {minimum} or None")
+            if type(agent.minimal_system_prompt) is not bool:
+                raise ValueError("minimal_system_prompt must be a boolean")
+            if type(agent.wait_for_skill_completion) is not bool:
+                raise ValueError("wait_for_skill_completion must be a boolean")
             agent.uses_gaze()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster

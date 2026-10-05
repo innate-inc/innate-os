@@ -43,6 +43,17 @@ class Agent(ABC):
     # The model this agent thinks with, as "vendor:name"; None uses the robot's
     # llm_model setting. Activating the agent switches the brain to it.
     model: str | None = None
+    # JSON object replacing global request extras for this agent only.
+    model_extra_body: str | None = None
+
+    # Use the directive as the whole system prompt for a specialized agent.
+    minimal_system_prompt: bool = False
+    # Wake for user instructions/results, without polling the model during skills.
+    wait_for_skill_completion: bool = False
+
+    # Optional per-agent conversation budgets; None inherits robot settings.
+    history_max_entries: int | None = None
+    history_max_image_turns: int | None = None
 
     # Validated once by the loader; the brain never evaluates workspace getters.
     _turn_intervals: tuple[float | None, float | None] = (None, None)

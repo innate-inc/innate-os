@@ -137,6 +137,7 @@ class BrainAgent:
         # so a LAN server's URL takes effect the same turn its model name does.
         self._default_spec = config.llm_model  # the robot's setting; an agent may name its own
         self._agent_spec: str | None = None
+        self._agent_extra_body: str | None = None
         self._thinking = config.llm_thinking
         self._base_url = config.llm_base_url
         self._extra_body = config.llm_extra_body
@@ -178,7 +179,8 @@ class BrainAgent:
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
-        self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
+        self._user_spoke = asyncio.Event()  # urgent wake: user speech or skill completion
+        self._skill_finished = asyncio.Event()
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -247,7 +249,7 @@ class BrainAgent:
         self._events.clear()
         return unwound
 
-    def use_model(self, spec: str | None, *, agent: bool) -> tuple[bool, str]:
+    def use_model(self, spec: str | None, *, agent: bool, model_extra_body: str | None = None) -> tuple[bool, str]:
         """Switch to ``spec`` — the active agent's model (``agent``) or the robot's setting.
 
         A switch starts a fresh conversation: history is a transcript of parts the previous
@@ -258,9 +260,14 @@ class BrainAgent:
         """
         wanted_agent = spec if agent else self._agent_spec
         wanted_default = self._default_spec if agent else (spec or DEFAULT_MODEL)
-        ok, detail = self._reconfigure(wanted_agent or wanted_default)
+        previous_extra = self._agent_extra_body
+        if agent:
+            self._agent_extra_body = model_extra_body
+        ok, detail = self._reconfigure(wanted_agent or wanted_default, force=previous_extra != self._agent_extra_body)
         if ok:
             self._agent_spec, self._default_spec = wanted_agent, wanted_default
+        else:
+            self._agent_extra_body = previous_extra
         return ok, detail
 
     def use_llm_setting(self, name: str, value: str) -> tuple[bool, str]:
@@ -289,7 +296,12 @@ class BrainAgent:
         wanted = wanted or self._agent_spec or self._default_spec
         refresh_keys()
         try:
-            llm = configure(wanted, self._proxy, base_url=self._base_url, extra_body=self._extra_body)
+            llm = configure(
+                wanted,
+                self._proxy,
+                base_url=self._base_url,
+                extra_body=self._agent_extra_body if self._agent_extra_body is not None else self._extra_body,
+            )
         except ValueError as error:  # an unknown vendor prefix, or extra_body that is not JSON
             return False, str(error)
         if not force and llm.spec == self.model and self._context is not None:
@@ -343,13 +355,15 @@ class BrainAgent:
         reruns = 0
         try:
             while True:
+                await self._await_skill_completion()
                 await self._await_camera()
                 self._user_spoke.clear()
+                self._skill_finished.clear()
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
                 await asyncio.wait((turn, spoke), return_when=asyncio.FIRST_COMPLETED)
                 spoke.cancel()
-                if reruns < _MAX_RERUNS and self._abandon(turn):
+                if (self._skill_finished.is_set() or reruns < _MAX_RERUNS) and self._abandon(turn):
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
                     reruns += 1
                     continue
@@ -376,7 +390,13 @@ class BrainAgent:
         check-then-mute could let the first sentence slip out after the decision.
         """
         speaker = self._speaker  # _turn publishes it before its first await
-        if turn.done() or speaker is None or not speaker.try_abandon():
+        if turn.done() or speaker is None:
+            return False
+        if self._skill_finished.is_set():
+            # A supervision answer based on a running skill is obsolete once
+            # its terminal result arrives, even if it already started speaking.
+            speaker.mute()
+        elif not speaker.try_abandon():
             return False
         self._trace(TraceEvent.TURN_PREEMPTED, turn=self._turn_count, after=self._elapsed())
         turn.cancel()
@@ -409,10 +429,17 @@ class BrainAgent:
         message = ChatContext.user_message(text, [jpeg for _, jpeg in frames])
         tools = self._build_tools(events)
         directive = self._state.current_directive
+        entries = getattr(directive, "history_max_entries", None)
+        image_turns = getattr(directive, "history_max_image_turns", None)
+        context.set_history_limits(
+            self._config.history_max_entries if entries is None else entries,
+            self._config.history_max_image_turns if image_turns is None else image_turns,
+        )
         system = build_system_prompt(
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            minimal=getattr(directive, "minimal_system_prompt", False),
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
@@ -426,6 +453,11 @@ class BrainAgent:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=latency)
             return
 
+        if any(event.kind == EventKind.SKILL_RESULT for event in self._events[len(events):]):
+            # Result and response may become ready in the same loop tick.
+            # Never commit stale supervision tools/history in that race.
+            speaker.mute()
+            return
         decision = context.absorb(message, reply, latest_only_images=wrist_frames)
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
@@ -473,7 +505,7 @@ class BrainAgent:
     async def _back_off(self, error: Exception, seen: int) -> None:
         """Inference failures and turn-level bugs alike: retry, never die.
 
-        Events stay queued; only the user speaking ends the backoff early
+        Events stay queued; user speech or a new skill result ends backoff early
         (motion and feedback chatter must not turn a failing API into a hot
         retry loop).
         """
@@ -493,6 +525,19 @@ class BrainAgent:
         )
         await self._pause(backoff, seen=seen, user_only=True)
 
+    async def _await_skill_completion(self) -> None:
+        """Specialized agents skip routine supervision inference, not user/result events."""
+        while (
+            getattr(self._state.current_directive, "wait_for_skill_completion", False)
+            and self._state.primitive_running is not None
+        ):
+            self._user_spoke.clear()
+            if any(event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events):
+                return
+            # Feedback/motion remain queued, but cannot start model requests.
+            # stop() cancels this await; terminal results and user input wake it.
+            await self._user_spoke.wait()
+
     async def _await_camera(self) -> None:
         """Hold turns while the camera feed is down; tell the user if it stays down."""
         for _ in range(25):  # brief grace: the feed may just be starting up
@@ -509,11 +554,11 @@ class BrainAgent:
     async def _pause(self, seconds: float, *, seen: int = 0, user_only: bool = False) -> None:
         """Sleep up to ``seconds``; the queue growing past ``seen`` events ends it early.
 
-        ``user_only`` narrows the early wake to user speech (the error backoff).
+        ``user_only`` limits waking to user speech or a terminal skill result.
         """
         wake = self._user_spoke if user_only else self._new_event
         wake.clear()
-        if any(not user_only or event.kind == EventKind.USER for event in self._events[seen:]):
+        if any(not user_only or event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events[seen:]):
             return
         self._pause_until = time.monotonic() + seconds
         try:
@@ -739,9 +784,11 @@ class BrainAgent:
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
 
     def _wake(self, kind: EventKind) -> None:
-        """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
+        """Loop thread: wake on events; speech and skill results can preempt a turn."""
         self._new_event.set()
-        if kind == EventKind.USER:
+        if kind == EventKind.SKILL_RESULT:
+            self._skill_finished.set()
+        if kind in (EventKind.USER, EventKind.SKILL_RESULT):
             self._user_spoke.set()
 
     def on_user_message(self, text: str) -> None:
@@ -757,7 +804,7 @@ class BrainAgent:
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
-        self.add_event(line, image=image)
+        self.add_event(line, image=image, kind=EventKind.SKILL_RESULT)
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)

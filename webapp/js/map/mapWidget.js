@@ -8,6 +8,8 @@
 // that reparents between a small thumbnail and the full stage. No three.js —
 // a canvas + putImageData is all a 2D map needs.
 
+import { parseSockLayout, drawSockLayout, drawLocalSockLayout, projectSockPoint } from "./sockLayout.js";
+
 import { ros } from "../rosClient.js";
 import {
   AMCL_POSE_TOPIC,
@@ -328,6 +330,7 @@ export function createMap(root, opts = {}) {
   let odomAtAmcl = null;
   /** @type {{ x: number, y: number, yaw: number } | null} latest raw odom */
   let odomPose = null;
+  let sockLayout = null;
 
   // While the robot is building a map (SLAM), the only pose that's valid
   // against the growing grid is mode_manager's /mapping_pose (map frame, from
@@ -1289,6 +1292,7 @@ export function createMap(root, opts = {}) {
     }
 
     if (!grid) {
+      if (sockLayout) { drawLocalSockLayout(ctx, canvas, sockLayout, odomPose, dpr()); return; }
       const d = dpr();
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
@@ -1381,6 +1385,10 @@ export function createMap(root, opts = {}) {
     }
 
     drawMemories();
+    drawSockLayout(ctx, sockLayout, (p) => {
+      const mapped = projectSockPoint(p, mapFromOdom());
+      return worldToCanvas(mapped.x, mapped.y);
+    }, dpr());
 
     if (layers.trail && trail.length >= 2) {
       ctx.strokeStyle = MAP_COLORS.trail;
@@ -2181,6 +2189,7 @@ export function createMap(root, opts = {}) {
     gridIp = ip;
     if (!switched) return;
     grid = null;
+    sockLayout = null;
     gridCells = null;
     gridRev++;
     costGrid = null;
@@ -2211,6 +2220,10 @@ export function createMap(root, opts = {}) {
     dropFrameState();
     draw();
   });
+  const unsubSockLayout = ros.subscribe("/brain/sock_layout", (msg) => {
+    const next = parseSockLayout(msg);
+    if (next) { sockLayout = next; draw(); }
+  }, 0, "std_msgs/msg/String");
   const unsubOdom = ros.subscribe(ODOM_TOPIC, onOdom, 100, "nav_msgs/msg/Odometry");
   const unsubAmcl = ros.subscribe(AMCL_POSE_TOPIC, onAmcl, 0, "geometry_msgs/msg/PoseWithCovarianceStamped");
   const unsubPlans = PLAN_TOPICS.map((topic) => ros.subscribe(topic, (msg) => onPlan(topic, msg), 250, "nav_msgs/msg/Path"));
@@ -2356,6 +2369,7 @@ export function createMap(root, opts = {}) {
       unsubMap();
       unsubConn();
       unsubOdom();
+      unsubSockLayout();
       unsubAmcl();
       for (const unsub of unsubPlans) unsub();
       unsubGoal();

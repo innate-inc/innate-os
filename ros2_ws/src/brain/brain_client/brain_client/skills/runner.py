@@ -289,6 +289,7 @@ class PrimitiveRunner:
         if not accepted:
             reason = "Goal rejected by action server" if goal_handle is not None else "No response from action server"
             self._logger.info(f"Primitive execution goal not accepted: {reason}")
+            self._on_task_finished()
             if running is not None:
                 self._chat.publish_task_status(
                     primitive_name=running.primitive_name,
@@ -298,7 +299,6 @@ class PrimitiveRunner:
                     reason=reason,
                 )
                 self.on_event("failed", running.primitive_name, reason)
-            self._on_task_finished()
             return
         self._logger.info("Primitive execution goal accepted.")
         goal_handle.get_result_async().add_done_callback(lambda f: self._on_result(f, generation))
@@ -336,9 +336,9 @@ class PrimitiveRunner:
             return
         self._stop_robot()
         if result is None:
+            self._on_task_finished()
             if running is not None:
                 self.on_event("failed", running.primitive_name, "the skill's result was lost")
-            self._on_task_finished()
             return
 
         skill_id = result.skill_type
