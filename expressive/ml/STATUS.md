@@ -1,5 +1,12 @@
 # ml workstream status (running log)
 
+**SPEECH PLANNER (2026-10-04 evening): `runs/planner-08b-speech/served` (+ `planner-4b-speech/served`)**: the
+planners now also perform each spoken sentence from `speech_prompt` (3,210 Codex-written replies, 8,730 rows, teacher
+size policy + a visibility gain), mixed with the talk SFT so emotion prompts keep working (0.8B probes 0.63 vs 0.62).
+The server is async (AsyncLLM + batched generator): 8 concurrent requests on the speech 0.8B at 330 / 413 ms p50 / p95,
+vs 2.5 / 3.0 s on the old sync server. Everything, incl. the judge disagreement (line level 3:1 for the sized planner,
+whole replies still lean to the busy talk 4B), is in `eval/SPEECH_PLANNER.md`. `PLANNERS=speech serve.sh` serves them.
+
 **ROUND 2 (04:05 box time): conversational boost + MTP head — swapped in, server RUNNING** at
 http://192.168.0.156:8000 with `medium` = `runs/planner-4b-talk/served` (boosted 4B, FP8, fine-tuned MTP head) and
 `low` = `runs/planner-08b-talk/merged`; the round-1 dirs are kept (`runs/planner-4b/{merged,served}`,

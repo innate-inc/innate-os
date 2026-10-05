@@ -62,6 +62,26 @@ GRADE_TASK = (
     "0 = a different reading. One sentence of reasoning first."
 )
 
+LINE_TASK = (
+    "The robot made this motion while saying the line below out loud (its voice also adds a gentle sway, not shown). "
+    "Rate how well the body language fits the line, 1-5: 1 = contradicts or distracts from it (the wrong feeling, a "
+    "big gesture on a plain line, frantic), 3 = neutral filler that neither helps nor hurts, 5 = what a good actor's "
+    "body would do while saying it (the right feeling at the right size: a small beat for a plain line, a full "
+    "gesture for an emotional peak, the physical cue the words call for, such as a nod, a head shake by turning the "
+    "base, a wave, turning toward what it points at). One sentence of reasoning first."
+)
+LINE_PAIR_TASK = (
+    "You will see two different motions, ONE then TWO, each made while the robot said the same line below out loud "
+    "(its voice also adds a gentle sway, not shown). Which one fits the line better: the right feeling at the right "
+    "size (a small beat for a plain line, a full gesture for an emotional peak) and the physical cue the words call "
+    "for? Give one sentence of reasoning, the winner, and whether the difference is clear or slight."
+)
+IDENTIFY_TASK = (
+    "The robot was saying ONE of the lines below while making this motion; its body language was meant to match "
+    "what it said. Which line was it? Judge from the body language only. Give one sentence of reasoning, then the "
+    "letter."
+)
+
 READING_SCHEMA: Json = {
     "type": "object",
     "properties": {
@@ -93,6 +113,20 @@ GRADE_SCHEMA: Json = {
     "type": "object",
     "properties": {"reason": {"type": "string"}, "score": {"type": "integer", "enum": [0, 1, 2]}},
     "required": ["reason", "score"],
+    "additionalProperties": False,
+}
+
+
+FIT_SCHEMA: Json = {
+    "type": "object",
+    "properties": {"reason": {"type": "string"}, "fit": {"type": "integer", "enum": [1, 2, 3, 4, 5]}},
+    "required": ["reason", "fit"],
+    "additionalProperties": False,
+}
+IDENTIFY_SCHEMA: Json = {
+    "type": "object",
+    "properties": {"reason": {"type": "string"}, "answer": {"type": "string", "enum": list("ABCD")}},
+    "required": ["reason", "answer"],
     "additionalProperties": False,
 }
 
@@ -208,6 +242,36 @@ class Judge:
         winner = shown[0][0] if raw.get("winner") == "ONE" else shown[1][0]
         margin = "clear" if raw.get("margin") == "clear" else "slight"
         return {"winner": winner, "margin": margin, "reason": str(raw.get("reason", "")), "shown_first": shown[0][0]}
+
+    def fit(self, media: Media, line: str) -> tuple[int, str]:
+        """1-5: how well a motion fits a spoken ``line`` (which may carry its context), and why."""
+        task = f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{LINE_TASK}\n\n{line}"
+        raw = self._ask([("text", task), self._show(media)], FIT_SCHEMA, 0.3)
+        return int(raw.get("fit", 0)), str(raw.get("reason", ""))
+
+    def fit_pair(self, first: tuple[str, Media], second: tuple[str, Media], line: str) -> Verdict:
+        """Which of two arms' motions fits the spoken ``line`` better, shown in exactly this order."""
+        raw = self._ask(
+            [
+                ("text", f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{LINE_PAIR_TASK}\n\n{line}"),
+                ("text", "Motion ONE:"),
+                self._show(first[1]),
+                ("text", "Motion TWO:"),
+                self._show(second[1]),
+            ],
+            PAIR_SCHEMA,
+            0.3,
+        )
+        winner = first[0] if raw.get("winner") == "ONE" else second[0]
+        margin = "clear" if raw.get("margin") == "clear" else "slight"
+        return {"winner": winner, "margin": margin, "reason": str(raw.get("reason", "")), "shown_first": first[0]}
+
+    def identify(self, media: Media, options: list[str]) -> int:
+        """Index into ``options`` (up to four lines) of the one the judge thinks the robot was saying."""
+        listing = "\n".join(f'{"ABCD"[n]}. "{line}"' for n, line in enumerate(options))
+        task = f"{CONTEXT}\n{MEDIA[self.kind]}\n\n{IDENTIFY_TASK}\n\n{listing}"
+        raw = self._ask([("text", task), self._show(media)], IDENTIFY_SCHEMA, 0.3)
+        return "ABCD".index(str(raw.get("answer", "A")))
 
     def grade(self, prompt: str, description: str) -> int:
         """0/1/2: does a blind description match the prompt (text only, the grader sees both)."""

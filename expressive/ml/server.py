@@ -11,25 +11,41 @@
        -d '{"prompt": "proud. You finally solved the puzzle.", "n": 2}'
 
 ``plans`` are the keyframe plans behind each clip (keys every 0.25 s, all 9 channels); ``clips`` are Clip JSON in plan
-space (8 channels at 25 Hz), mapped through the basis on the robot at play time.
+space (8 channels at 25 Hz), mapped through the basis on the robot at play time. Requests are served concurrently:
+the planners decode together (vLLM AsyncLLM) and the generator batches whatever is waiting (engine.py).
 """
 
 from __future__ import annotations
 
 import argparse
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .engine import MotionEngine, Planner, PlannerError
+from .engine import MAX_TOKENS, AsyncPlanner, MotionEngine, PlannerError
 from .generator.sample import Generator
 
-app = FastAPI(title="mars-expressive", docs_url=None, redoc_url=None)
+ENGINE: list[MotionEngine] = []
+BUILD: list[Callable[[], MotionEngine]] = []
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    engine = BUILD[0]()  # inside the server's event loop: the AsyncLLM engines are bound to it
+    await engine.warm_up()
+    ENGINE.append(engine)
+    print(f"ready: /generate-dense (effort: {', '.join(sorted(engine.planners))})", flush=True)
+    yield
+    engine.shutdown()
+
+
+app = FastAPI(title="mars-expressive", docs_url=None, redoc_url=None, lifespan=lifespan)
 # the Expression Studio page calls the service straight from the browser
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["content-type"])
-ENGINE: list[MotionEngine] = []
 
 # Fraction of GPU memory each tier's vLLM engine may take (weights + KV/state cache); the generator needs < 1 GB.
 GPU_SHARE = {"high": 0.5, "medium": 0.4, "low": 0.15}
@@ -57,17 +73,17 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/generate-sparse")
-def generate_sparse(req: Request) -> dict[str, Any]:
+async def generate_sparse(req: Request) -> dict[str, Any]:
     try:
-        return _engine().sparse(req.prompt, req.n, req.seed, req.effort, req.retries)
+        return await _engine().sparse(req.prompt, req.n, req.seed, req.effort, req.retries)
     except PlannerError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.post("/generate-dense")
-def generate_dense(req: Request) -> dict[str, Any]:
+async def generate_dense(req: Request) -> dict[str, Any]:
     try:
-        return _engine().dense(req.prompt, req.n, req.seed, req.effort, req.retries)
+        return await _engine().dense(req.prompt, req.n, req.seed, req.effort, req.retries)
     except PlannerError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -82,6 +98,7 @@ def main() -> None:
     ap.add_argument("--generator", required=True)
     ap.add_argument("--fp8", action="store_true", help="FP8 planner weights (default bf16)")
     ap.add_argument("--spec-tokens", type=int, default=0, help="MTP draft tokens per step (0 = off)")
+    ap.add_argument("--max-tokens", type=int, default=MAX_TOKENS, help="cap on a planner answer's tokens")
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--cfg", type=float, default=1.5)
     ap.add_argument("--gpu-share", type=float, help="GPU memory fraction per planner (default: by tier and precision)")
@@ -89,17 +106,21 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
     specs = [b.split("=", 1) for b in a.bundle]
-    planners = {
-        effort: Planner(
-            path,
-            a.gpu_share or (GPU_SHARE_FP8 if a.fp8 else GPU_SHARE).get(effort, 0.3),
-            fp8=a.fp8,
-            spec_tokens=a.spec_tokens,
-        )
-        for effort, path in specs
-    }
-    ENGINE.append(MotionEngine(planners, Generator(a.generator, "cuda"), steps=a.steps, cfg=a.cfg))
-    print(f"ready: http://{a.host}:{a.port}/generate-dense (effort: {', '.join(sorted(planners))})", flush=True)
+
+    def build() -> MotionEngine:
+        planners = {
+            effort: AsyncPlanner(
+                path,
+                a.gpu_share or (GPU_SHARE_FP8 if a.fp8 else GPU_SHARE).get(effort, 0.3),
+                fp8=a.fp8,
+                spec_tokens=a.spec_tokens,
+                max_tokens=a.max_tokens,
+            )
+            for effort, path in specs
+        }
+        return MotionEngine(planners, Generator(a.generator, "cuda"), steps=a.steps, cfg=a.cfg)
+
+    BUILD.append(build)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 
