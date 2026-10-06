@@ -186,8 +186,9 @@ class GridLocalizerSim(LifecycleNode):
     def on_activate(self, state) -> TransitionCallbackReturn:
         self._reset_pending = False
         self._reset_drift_guard()
+        result = super().on_activate(state)  # a lifecycle publisher drops what is published before it is activated
         self._begin_localization()
-        return super().on_activate(state)
+        return result
 
     def on_deactivate(self, state) -> TransitionCallbackReturn:
         self._reset_pending = False
