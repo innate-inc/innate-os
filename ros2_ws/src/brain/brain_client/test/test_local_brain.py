@@ -1041,6 +1041,31 @@ def test_a_turn_waits_out_an_utterance_begun_before_the_last_transcript_landed(a
     agent.stop()
 
 
+def test_talk_that_keeps_reopening_cannot_hold_the_turn_forever(agent_factory, monkeypatch):
+    # Review-found: every reopening inside the transcript grace restarted the per-utterance cap.
+    monkeypatch.setattr("brain_client.brain.agent._MAX_HOLD_SEC", 1.0)
+    agent, state = agent_factory()
+    turn_inputs = []
+    answers(agent, Replay(script=lambda request: turn_inputs.append(request.messages[-1].text()) or [call_reply(WAIT)]))
+    stop = threading.Event()
+
+    def chatter():
+        while not stop.is_set():
+            agent.on_user_speaking(True)
+            time.sleep(0.3)
+            agent.on_user_speaking(False)
+            time.sleep(0.2)  # reopens inside every grace window
+
+    threading.Thread(target=chatter, daemon=True).start()
+    agent.start()
+    deadline = time.time() + 4
+    while not turn_inputs and time.time() < deadline:
+        time.sleep(0.02)
+    stop.set()
+    assert turn_inputs
+    agent.stop()
+
+
 def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     traces = []
     agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))

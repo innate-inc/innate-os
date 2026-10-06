@@ -521,7 +521,8 @@ class BrainAgent:
         """Hold the next turn while the user is mid-utterance, then briefly for its transcript, and
         again if they resumed meanwhile: a turn started in between would only be abandoned once
         the words land."""
-        while self._user_holds_floor():
+        give_up = time.monotonic() + _MAX_HOLD_SEC  # each reopening restarts the per-utterance cap
+        while self._user_holds_floor() and time.monotonic() < give_up:
             self._user_spoke.clear()
             while self._user_holds_floor():
                 await asyncio.sleep(_HOLD_POLL_SEC)
