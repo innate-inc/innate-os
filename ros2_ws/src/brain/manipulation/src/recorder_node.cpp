@@ -518,9 +518,6 @@ void RecorderNode::activate_physical_primitive(
         enter_state(State::TASK_ACTIVE);
     }
 
-    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
-    set_head_ai_position();
-
     std::string task_dir = request->task_directory;
     if (task_dir.empty()) {
         response->success = false;
@@ -542,6 +539,9 @@ void RecorderNode::activate_physical_primitive(
                      metadata_path.c_str());
         return;
     }
+
+    RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
+    set_head_ai_position();
 
     // Derive display name from directory basename
     std::string display_name = fs::path(task_dir).filename().string();
