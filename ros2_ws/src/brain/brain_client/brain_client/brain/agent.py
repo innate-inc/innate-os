@@ -518,15 +518,15 @@ class BrainAgent:
         self._chat.emit_system("✅ Camera feed is back.")
 
     async def _await_user_done(self) -> None:
-        """Hold the next turn while the user is mid-utterance, then briefly for its transcript:
-        a turn started in between would only be abandoned once the words land."""
-        if not self._user_holds_floor():
-            return
-        self._user_spoke.clear()
+        """Hold the next turn while the user is mid-utterance, then briefly for its transcript, and
+        again if they resumed meanwhile: a turn started in between would only be abandoned once
+        the words land."""
         while self._user_holds_floor():
-            await asyncio.sleep(_HOLD_POLL_SEC)
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(self._user_spoke.wait(), _TRANSCRIPT_GRACE_SEC)
+            self._user_spoke.clear()
+            while self._user_holds_floor():
+                await asyncio.sleep(_HOLD_POLL_SEC)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._user_spoke.wait(), _TRANSCRIPT_GRACE_SEC)
 
     def _user_holds_floor(self) -> bool:
         now = time.monotonic()

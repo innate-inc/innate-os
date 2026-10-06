@@ -1017,6 +1017,30 @@ def test_a_turn_that_started_speaking_finishes(agent_factory):
     agent.stop()
 
 
+def test_a_turn_waits_out_an_utterance_begun_before_the_last_transcript_landed(agent_factory):
+    # Review-found: the first transcript ended the grace wait and the turn started mid-utterance.
+    agent, state = agent_factory()
+    turn_inputs = []
+    answers(agent, Replay(script=lambda request: turn_inputs.append(request.messages[-1].text()) or [call_reply(WAIT)]))
+    agent.on_user_speaking(True)
+    agent.start()
+    time.sleep(0.2)
+    agent.on_user_speaking(False)  # the loop now waits for this utterance's transcript
+    time.sleep(0.2)
+    agent.on_user_speaking(True)
+    agent.on_user_message("go to the kitchen")
+    time.sleep(0.4)
+    assert turn_inputs == []
+
+    agent.on_user_speaking(False)
+    agent.on_user_message("and pick up the cup")
+    deadline = time.time() + 5
+    while not turn_inputs and time.time() < deadline:
+        time.sleep(0.02)
+    assert "go to the kitchen" in turn_inputs[0] and "pick up the cup" in turn_inputs[0]
+    agent.stop()
+
+
 def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     traces = []
     agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
