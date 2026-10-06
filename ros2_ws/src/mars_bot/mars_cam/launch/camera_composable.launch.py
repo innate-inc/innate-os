@@ -24,7 +24,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 from mars_bringup.config_loader import settings_params
@@ -45,6 +45,12 @@ def generate_launch_description():
         "start_calibration_manager",
         default_value="true",
         description="Start managed stereo calibration action server node",
+    )
+
+    remote_rviz_arg = DeclareLaunchArgument(
+        "remote_rviz",
+        default_value="false",
+        description="Load the 2 Hz /mars/main_camera/remote/* relays for RViz on another machine",
     )
 
     # ── Nodes ─────────────────────────────────────────────────────────────────
@@ -144,9 +150,6 @@ def generate_launch_description():
 
     # ── Container ─────────────────────────────────────────────────────────────
 
-    # ── Remote throttle relays (lazy, intra-process zero-copy input) ────────
-    throttle_nodes = make_remote_throttle_nodes()
-
     # ── Container ─────────────────────────────────────────────────────────────
 
     # Opt-in newer GStreamer: a robot with a parallel build staged at /opt/gst
@@ -181,8 +184,7 @@ def generate_launch_description():
             arm_camera_node,
             webrtc_node,
             depth_estimator_node,
-        ]
-        + throttle_nodes,
+        ],
         output="screen",
         emulate_tty=True,
         # Mute the container's per-node "Found class / Instantiate class / Load
@@ -190,6 +192,14 @@ def generate_launch_description():
         # keep their own loggers, and launch still prints one "Loaded node …"
         # line per component.
         arguments=["--ros-args", "--log-level", "camera_container:=WARN"],
+    )
+
+    # Remote RViz relays: eleven nodes that each poll the graph at 10 Hz, so
+    # they load only when asked for.
+    remote_throttles = LoadComposableNodes(
+        target_container="camera_container",
+        composable_node_descriptions=make_remote_throttle_nodes(),
+        condition=IfCondition(LaunchConfiguration("remote_rviz")),
     )
 
     stereo_calibration_manager = Node(
@@ -212,7 +222,9 @@ def generate_launch_description():
             use_sim_time_arg,
             camera_config_arg,
             start_calibration_manager_arg,
+            remote_rviz_arg,
             camera_container,
+            remote_throttles,
             stereo_calibration_manager,
         ]
     )

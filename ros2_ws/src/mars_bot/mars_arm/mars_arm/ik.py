@@ -115,9 +115,7 @@ class KDLIKNode(Node):
 
         # 6) publisher and subscription
         self.joint_pub = self.create_publisher(JointState, "/ik_solution", 10)
-        self.ik_fk_pub = self.create_publisher(PoseStamped, "/ik_solution_fk", 10)
         self.fk_pub = self.create_publisher(PoseStamped, "/fk_pose", 10)
-        # self.command_pub = self.create_publisher(Float64MultiArray, '/mars_arm/commands', 10)
         self.create_subscription(Twist, "/ik_delta", self.on_delta, 10)
         self.create_subscription(JointState, "/mars/arm/state", self.on_joint_states, 10)
 
@@ -141,7 +139,7 @@ class KDLIKNode(Node):
 
     def publish_fk(self):
         """Timer callback to publish FK result at 10Hz"""
-        if self.latest_joint_states is None:
+        if self.latest_joint_states is None or self.fk_pub.get_subscription_count() == 0:
             return
 
         # Create joint array from received joint states
@@ -288,31 +286,6 @@ class KDLIKNode(Node):
         js.name = self.joint_names
         js.position = [self._normalize_angle(best_solution[i]) for i in range(best_solution.rows())]
         self.joint_pub.publish(js)
-
-        # publish FK of the IK solution (what the commanded joints map to)
-        fk_frame = kdl.Frame()
-        if self.fksolver.JntToCart(best_solution, fk_frame) >= 0:
-            ik_fk_msg = PoseStamped()
-            ik_fk_msg.header.stamp = js.header.stamp
-            ik_fk_msg.header.frame_id = "base_link"
-            ik_fk_msg.pose.position.x = fk_frame.p.x()
-            ik_fk_msg.pose.position.y = fk_frame.p.y()
-            ik_fk_msg.pose.position.z = fk_frame.p.z()
-            quat = fk_frame.M.GetQuaternion()
-            ik_fk_msg.pose.orientation.x = quat[0]
-            ik_fk_msg.pose.orientation.y = quat[1]
-            ik_fk_msg.pose.orientation.z = quat[2]
-            ik_fk_msg.pose.orientation.w = quat[3]
-            self.ik_fk_pub.publish(ik_fk_msg)
-
-        # Publish command for the arm - COMMENTED OUT
-        # cmd_msg = Float64MultiArray()
-        # # Get the 5 joint values from IK solution
-        # ik_positions = [q_out[i] for i in range(q_out.rows())]
-        # # Append 0.0 for the 6th joint (joint6)
-        # ik_positions.append(0.0)
-        # cmd_msg.data = ik_positions
-        # self.command_pub.publish(cmd_msg)
 
 
 def main(args=None):
