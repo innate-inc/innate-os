@@ -601,10 +601,20 @@ class GridLocalizer(Node):
             return response
 
         try:
-            estimate = self._find_pose(self.latest_scan)
+            msg = self.latest_scan
+            estimate = self._find_pose(msg)
+            here = self._amcl_fitted(msg)
+            if here is not None and here.fit >= MIN_FIT and not self._clearly_better(estimate, here):
+                response.success = True
+                response.message = (
+                    f"Kept the current pose: it fits the scan ({here.fit:.0%}) and no place on the map clearly "
+                    f"does better (best: {_describe(estimate)})"
+                )
+                self.get_logger().info(response.message)
+                return response
             pose = estimate.pose
 
-            self._publish_pose(pose.x, pose.y, pose.theta, self.latest_scan.header.stamp)
+            self._publish_pose(pose.x, pose.y, pose.theta, msg.header.stamp)
             self._warn_if_at_map_edge(pose.x, pose.y)
 
             confident = estimate.confident(self.confidence_threshold)
@@ -735,7 +745,7 @@ class GridLocalizer(Node):
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
             self._declare_lost()
             return
-        if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
+        if not self._clearly_better(estimate, here):
             self.get_logger().warn(
                 f"AMCL's pose {lost_at} explains little of the scan, but no place on the map confidently and "
                 f"clearly does better (best: {_describe(estimate)}); lost until one does or the pose fits again. "
@@ -747,6 +757,21 @@ class GridLocalizer(Node):
         pose = estimate.pose
         self._publish_pose(pose.x, pose.y, pose.theta, scan.header.stamp)
         self._publish_status("localized")
+
+    def _clearly_better(self, estimate: Estimate, here: Pose2D) -> bool:
+        return estimate.confident(self.confidence_threshold) and estimate.pose.fit >= here.fit + RECOVERY_MARGIN
+
+    def _amcl_fitted(self, latest: LaserScan) -> Pose2D | None:
+        """AMCL's pose fitted to a scan taken where that pose claims the robot is, or None when there is none.
+        AMCL re-estimates on every scan while the wheels turn, so a driving robot is judged on the scan its
+        estimate came from; it never does while they are still, so a robot carried off is judged on the latest."""
+        if self.grid is None or self._amcl is None:
+            return None
+        paired = self._scan_for_amcl_pose() if self._stalls.wheels_turning(REST_S) else (latest, self._amcl[1])
+        if paired is None:
+            return None
+        msg, believed = paired
+        return refine(self.grid, Scan.from_laser_scan(msg, self.max_range), believed)
 
     def _declare_lost(self) -> None:
         if not self._lost:
