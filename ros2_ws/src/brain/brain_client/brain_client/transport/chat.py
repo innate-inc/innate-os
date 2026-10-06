@@ -144,9 +144,9 @@ class ChatManager:
             performance.start()
             performance.end(True)
 
-    def stream_speech(self, hold: Callable[[], bool] | None = None) -> SpeechStreamer:
+    def stream_speech(self) -> SpeechStreamer:
         """A streamer for the agent's reply: it supersedes stale queued speech, answers what was heard."""
-        return SpeechStreamer(self, hold, on_sentence=self.on_sentence, heard=self.last_heard)
+        return SpeechStreamer(self, on_sentence=self.on_sentence, heard=self.last_heard)
 
     def say_line(self, text: str) -> None:
         """Speak a skill's line sentence by sentence, behind whatever is already queued."""
@@ -174,9 +174,6 @@ class SpeechStreamer:
     without it, a reply could voice its first sentence right after the loop
     decided to abandon it.
 
-    While ``hold`` is true the reply has not started, so sentences queue up
-    unspoken (still abandonable) until :meth:`flush` lets them out in order.
-
     Each sentence goes to ``on_sentence`` with its emote tags as it goes to TTS
     (the body prepares its performance), and the speaker calls the returned
     performance back as the sentence plays; tags after the reply's last
@@ -187,15 +184,12 @@ class SpeechStreamer:
     def __init__(
         self,
         chat: ChatManager,
-        hold: Callable[[], bool] | None = None,
         on_sentence: Cue | None = None,
         *,
         heard: Callable[[], str | None] | None = None,
         supersede: bool = True,
     ):
         self._chat = chat
-        self._hold = hold
-        self._held: list[str] = []
         self._on_sentence = on_sentence
         self._heard = heard
         self._supersede = supersede
@@ -214,12 +208,9 @@ class SpeechStreamer:
             self._say(sentence)
 
     def flush(self) -> None:
-        """Speak what is left: held sentences first, then the unterminated tail."""
+        """Speak the unterminated tail."""
         with self._lock:
-            self._hold = None
-            held, self._held = self._held, []
-            for sentence in (*held, self._buffer):
-                self._say_locked(sentence)
+            self._say_locked(self._buffer)
             self._buffer = ""
             if self._last is not None and not self._muted and self._emotes:
                 self._last.close_with(tuple(self._emotes))  # a tag after the last sentence still belongs to the reply
@@ -230,7 +221,6 @@ class SpeechStreamer:
         with self._lock:
             self._muted = True
             self._buffer = ""
-            self._held = []
 
     def try_abandon(self) -> bool:
         """Mute iff nothing has been spoken yet; True when the reply was abandoned.
@@ -244,7 +234,6 @@ class SpeechStreamer:
                 return False
             self._muted = True
             self._buffer = ""
-            self._held = []
             return True
 
     def _say(self, sentence: str) -> None:
@@ -253,9 +242,6 @@ class SpeechStreamer:
 
     def _say_locked(self, sentence: str) -> None:
         if self._muted:
-            return
-        if self._held or (self._hold is not None and not self.spoke and self._hold()):
-            self._held.append(sentence)  # tags stay inside the held sentence until it is spoken
             return
         sentence, emotes = split_emotes(sentence)
         self._emotes.extend(emotes)

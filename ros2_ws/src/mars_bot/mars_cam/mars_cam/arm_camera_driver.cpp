@@ -291,6 +291,9 @@ void ArmCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
         compressed_frame_counter_++;
         if (compressed_frame_counter_ >= compressed_frame_interval_) {
             compressed_frame_counter_ = 0;
+            if (compressed_pub_->get_subscription_count() == 0) {
+                return;
+            }
 
             auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
             compressed_msg->header.stamp = current_time;

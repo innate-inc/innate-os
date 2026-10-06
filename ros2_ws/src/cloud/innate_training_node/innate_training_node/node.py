@@ -178,12 +178,11 @@ class TrainingNode(Node):
         pub_sec = float(self.get_parameter("status_publish_interval_sec").value)
 
         if not server_url or not service_key:
-            message = (
-                "The server_url ROS parameter and INNATE_SERVICE_KEY environment setting are required; "
-                "set the key in the environment or .env and restart the node"
+            self.get_logger().error(
+                "The server_url ROS parameter and INNATE_SERVICE_KEY are required; cloud training stays off "
+                "until they are configured and the node restarted"
             )
-            self.get_logger().fatal(message)
-            raise RuntimeError(message)
+            return
 
         # ── Shared objects ──────────────────────────────────────────
         config = ClientConfig(
@@ -260,7 +259,9 @@ class TrainingNode(Node):
             self.get_logger().info(f"Registered {n} local skill dir(s) from {root}")
 
     def destroy_node(self) -> None:
-        self._poller.stop()
+        poller = getattr(self, "_poller", None)
+        if poller is not None:
+            poller.stop()
         super().destroy_node()
 
     # ── Periodic publish ────────────────────────────────────────────

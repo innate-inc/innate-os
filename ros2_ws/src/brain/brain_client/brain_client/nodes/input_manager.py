@@ -33,14 +33,8 @@ class InputManagerNode(Node):
         self.chat_in_pub = self.create_publisher(String, "/brain/chat_in", 10)
         self.custom_pub = self.create_publisher(String, "/input_manager/custom", 10)
         self.telemetry_pub = self.create_publisher(String, "/input_manager/telemetry", 10)
-        self.speaking_pub = self.create_publisher(Bool, "/input_manager/user_speaking", 10)
         self.manager = InputDeviceManager(
-            self,
-            proxy,
-            chat_in_pub=self.chat_in_pub,
-            custom_pub=self.custom_pub,
-            telemetry_pub=self.telemetry_pub,
-            speaking_pub=self.speaking_pub,
+            self, proxy, chat_in_pub=self.chat_in_pub, custom_pub=self.custom_pub, telemetry_pub=self.telemetry_pub
         )
 
         self.create_subscription(String, "/input_manager/active_inputs", self._on_active_inputs, 10)

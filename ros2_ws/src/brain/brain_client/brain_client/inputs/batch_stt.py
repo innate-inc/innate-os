@@ -390,9 +390,6 @@ class BatchSttSession:
         self._stopped = False
         self.utterance_count = 0
         self.failure_count = 0
-        # Each written by one thread only (mic / worker), so in_flight needs no lock.
-        self._dropped = 0
-        self._settled = 0
 
     def start(self) -> None:
         self._worker = threading.Thread(target=self._transcribe_loop, daemon=True)
@@ -400,15 +397,6 @@ class BatchSttSession:
 
     def wait_until_connected(self, timeout: float = 10.0) -> bool:
         return True
-
-    @property
-    def in_speech(self) -> bool:
-        return self._endpointer.in_speech
-
-    @property
-    def in_flight(self) -> int:
-        """Closed utterances whose transcription has not settled: the user still has the floor."""
-        return self.utterance_count - self._dropped - self._settled
 
     def feed(self, chunk: bytes) -> None:
         utterance = self._endpointer.feed(chunk)
@@ -424,8 +412,7 @@ class BatchSttSession:
                 return
             except queue.Full:
                 try:
-                    if self._utterances.get_nowait() is not None:
-                        self._dropped += 1
+                    self._utterances.get_nowait()
                     self._logger.error("❌ Transcription backlog full — dropping oldest utterance")
                 except queue.Empty:
                     pass
@@ -459,5 +446,3 @@ class BatchSttSession:
             except Exception as e:  # noqa: BLE001 — one failed call must not kill the mic
                 self.failure_count += 1
                 self._logger.error(f"❌ Batch transcription failed: {e}")
-            finally:
-                self._settled += 1

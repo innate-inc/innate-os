@@ -150,7 +150,7 @@ class VirtualMarsNode(Node):
         self._caminfo_pub = self.create_publisher(CameraInfo, "/mars/main_camera/left/camera_info", 10)
         self._arm_state_pub = self.create_publisher(JointState, "/mars/arm/state", 1)
         self._joint_states_pub = self.create_publisher(JointState, "/joint_states", 1)
-        self._head_pub = self.create_publisher(String, "/mars/head/current_position", 1)
+        self._head_pub = self.create_publisher(String, "/mars/head/current_position", latched)
 
         # Latched robot identity: clients (webapp) pick their camera view
         # implementation from this -- rendered view for sim, WebRTC for real.

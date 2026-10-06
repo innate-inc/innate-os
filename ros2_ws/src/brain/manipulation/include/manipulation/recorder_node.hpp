@@ -92,6 +92,12 @@ class RecorderNode : public rclcpp::Node {
 
     // Helper methods
     void check_all_topics_received();
+    // Every state change goes through here: sensors are subscribed exactly while an episode records.
+    void enter_state(State state);
+    void subscribe_sensors();
+    void unsubscribe_sensors();
+    // Topics the recording timer requires that have produced nothing yet, comma-joined.
+    std::string missing_required_sensors();
     void publish_status(const std::string& status, const std::string& episode_number = "");
     void set_head_ai_position();
     std::string state_to_string(State state);

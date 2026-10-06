@@ -37,7 +37,6 @@ import string
 import subprocess
 import threading
 import time
-from collections import deque
 from collections.abc import Callable
 
 import numpy as np
@@ -106,16 +105,6 @@ RECONNECTS_BEFORE_BATCH_FALLBACK = 3
 # follows it. It is held and prefixed to the next transcript within this window.
 FILLER_WORDS = frozenset({"um", "umm", "uh", "uhh", "uhm", "erm", "er", "hm", "hmm", "hmmm"})
 FILLER_GLUE_SECS = 5.0
-
-# The brain holds a reply while the user has the floor: from the first voiced
-# chunk until the transcript has been sent. "speaking" is repeated at this
-# cadence meanwhile, so a mic that dies mid-utterance reads as gone rather than
-# as the user still talking (brain/agent.py releases the floor when it stops).
-FLOOR_HEARTBEAT_SECS = 1.0
-# A Scribe commit answers in ~0.3-0.5 s; one unanswered this long is lost and
-# must not keep the floor.
-SCRIBE_TRANSCRIPT_WAIT_SECS = 5.0
-MAX_PENDING_COMMITS = 16  # a socket that stays open but stops answering must not grow the queue forever
 
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
@@ -231,14 +220,6 @@ class MicroInput(InputDevice):
         self._scribe_first_chunk = True
         self._last_transcript = ""
         self._pending_filler: tuple[str, float] | None = None  # (text, monotonic time) awaiting the next transcript
-        # One (answer deadline, holds speech) per Scribe commit, oldest first: Scribe
-        # answers commits in order, and one answer must not release a later commit's floor.
-        self._pending_commits: deque[tuple[float, bool]] = deque()
-        self._evicted_commits = 0  # past MAX_PENDING_COMMITS: their answers are still owed, in order
-        self._commits_lock = threading.Lock()  # appended by the mic, retired by the socket thread
-        self._speaking_lock = threading.Lock()  # one decide-and-send at a time, or an edge could arrive out of order
-        self._speaking_reported = False
-        self._speaking_reported_at = 0.0
         self._stop_evt = threading.Event()  # device shutdown only — never cleared mid-session
         self._audio_stop: threading.Event | None = None  # current audio thread's own stop
         self._audio_thread = None
@@ -293,65 +274,8 @@ class MicroInput(InputDevice):
         with self._endpoint_lock:
             if not endpointer.in_speech:
                 return
-            utterance = endpointer.flush()
-        self._commit_scribe(expect_transcript=utterance is not None)
-        self._report_speaking()
-
-    def _user_has_floor(self) -> bool:
-        """An utterance is open, or one closed and its transcript is still on its way."""
-        client, endpointer = self.client, self._endpointer
-        if self._backend in BATCH_BACKENDS:
-            return client is not None and (client.in_speech or client.in_flight > 0)
-        return endpointer is not None and (endpointer.in_speech or self._transcript_owed())
-
-    def _transcript_owed(self) -> bool:
-        now = time.monotonic()
-        with self._commits_lock:
-            self._drop_unanswered_locked()
-            # Each commit holds the floor for its own wait only; a newer one never extends it.
-            return any(holds_speech and now < due for due, holds_speech in self._pending_commits)
-
-    def _retire_commit(self) -> None:
-        with self._commits_lock:
-            self._drop_unanswered_locked()
-            if self._evicted_commits:
-                self._evicted_commits -= 1  # the oldest answers belong to the evicted commits
-            elif self._pending_commits:
-                self._pending_commits.popleft()
-
-    def _queue_commit(self, due: float, holds_speech: bool) -> None:
-        with self._commits_lock:
-            if len(self._pending_commits) >= MAX_PENDING_COMMITS:
-                self._pending_commits.popleft()
-                self._evicted_commits += 1
-            self._pending_commits.append((due, holds_speech))
-
-    def _drop_unanswered_locked(self) -> None:
-        # Answers match commits strictly in order, so a late answer retires its own
-        # commit, never the next. Only once every commit is past its wait is the queue
-        # cleared: an answer Scribe never sent then costs one over-hold, not a session
-        # of answers matched one commit behind.
-        if self._pending_commits and self._pending_commits[-1][0] <= time.monotonic():
-            self._pending_commits.clear()
-            self._evicted_commits = 0
-
-    def _forget_commits(self) -> None:
-        with self._commits_lock:
-            self._pending_commits.clear()
-            self._evicted_commits = 0
-
-    def _report_speaking(self) -> None:
-        """Publish each take and release of the floor, and repeat "taken" every
-        FLOOR_HEARTBEAT_SECS, so the brain holds a reply instead of talking over
-        the user and can tell a dead mic from a long sentence."""
-        with self._speaking_lock:
-            speaking, now = self._user_has_floor(), time.monotonic()
-            if speaking == self._speaking_reported and (
-                not speaking or now - self._speaking_reported_at < FLOOR_HEARTBEAT_SECS
-            ):
-                return
-            self._speaking_reported, self._speaking_reported_at = speaking, now
-            self.send_data({"speaking": speaking}, data_type="speaking")
+            endpointer.flush()
+        self._commit_scribe()
 
     def on_open(self):
         """Start the audio source and connect to the STT backend.
@@ -414,7 +338,6 @@ class MicroInput(InputDevice):
                 self.logger.info(f"🎤 Scribe committed in {latency}: {text[:80]!r}")
             if text and self.is_active():
                 self._on_transcript(text)
-            self._retire_commit()  # released only now, behind the transcript it was held for
         elif etype == "partial_transcript":
             pass  # interim result — only the committed transcript reaches chat
         elif etype == "session_started":
@@ -427,10 +350,9 @@ class MicroInput(InputDevice):
                     f"Scribe — previous_text carries the vocabulary until the relay forwards repeated params"
                 )
         elif etype == "insufficient_audio_activity":
-            self._retire_commit()  # Scribe's answer to a commit of near-silence: no transcript follows
+            pass  # expected whenever the room is quiet — not worth a log line
         elif etype in ELEVENLABS_ERROR_TYPES:
             self._failure_count += 1
-            self._forget_commits()
             self.logger.error(f"❌ ElevenLabs error ({etype}): {event.get('error', event)}")
         else:
             self.logger.info(f"📨 ElevenLabs event: {etype}")
@@ -449,7 +371,6 @@ class MicroInput(InputDevice):
         self.logger.warning("WebSocket closed")
         self._is_connected = False
         self._connect_failures += 1
-        self._forget_commits()  # the vendor buffer died with the session
 
         # Don't reconnect if we're shutting down
         if self._stop_evt.is_set():
@@ -609,7 +530,7 @@ class MicroInput(InputDevice):
         if self._endpointer is None:
             return None
         return {
-            "utterance_open": self._endpointer.in_speech,
+            "utterance_open": self._endpointer.in_speech,  # the brain holds its reply while true
             "utterance_secs": round(self._endpointer.utterance_secs, 2),
             "utterances": self._utterance_count,
             "failures": self._failure_count,
@@ -631,7 +552,6 @@ class MicroInput(InputDevice):
         self._endpointer = Endpointer(sample_rate=DEFAULT_SAMPLE_RATE, is_voiced=is_voiced, silence_secs=silence_secs)
         self._streamed_bytes = 0
         self._commit_at = 0.0
-        self._forget_commits()
         self._sent_keyterms = keyterms
         # previous_text is body content, so it survives the proxy relay that
         # currently collapses the repeated keyterms query params to one.
@@ -744,17 +664,16 @@ class MicroInput(InputDevice):
         with self._endpoint_lock:
             closed = self._endpointer.feed(chunk)
             discarded = self._endpointer.closed_discarded
-            still_open = self._endpointer.in_speech
         # A discarded close (cough, click — under MIN_VOICED_SECS) was still
         # streamed, so commit it out of the vendor buffer too, or it comes back
         # glued to the front of the next real transcript.
         if closed is not None or discarded:
-            self._commit_scribe(expect_transcript=closed is not None)
+            self._commit_scribe()
         elif self._safety_commit_due() and not self._vad_detector.voiced:
             # Any unvoiced chunk will do: waiting for the utterance to close
             # could put the buffer past the vendor's ~36 s force-commit, and a
             # split at a pause cannot cut mid-word.
-            self._commit_scribe(expect_transcript=still_open)
+            self._commit_scribe()
 
     def _send_scribe_audio(self, chunk: bytes, commit: bool) -> bool:
         message = {
@@ -774,19 +693,15 @@ class MicroInput(InputDevice):
         self._streamed_bytes += len(chunk)
         return sent
 
-    def _commit_scribe(self, expect_transcript: bool = False) -> None:
-        """Commit the vendor buffer; ``expect_transcript`` when it holds speech,
-        so the floor stays held until the transcript (or Scribe's refusal) lands."""
+    def _commit_scribe(self) -> None:
         if not self._send_scribe_audio(b"", commit=True):
             # The socket died under us. The vendor buffer dies with the session,
             # so the utterance is unrecoverable — say so instead of losing it
             # silently, and leave the counters for the reconnect to reset.
             self.logger.error("❌ Scribe commit could not be sent (socket down) — utterance lost")
-            self._forget_commits()
             return
         self._commit_at = time.monotonic()
         self._streamed_bytes = 0
-        self._queue_commit(self._commit_at + SCRIBE_TRANSCRIPT_WAIT_SECS, expect_transcript)
 
     def _safety_commit_due(self) -> bool:
         return self._streamed_bytes > SAFETY_COMMIT_SECS * DEFAULT_SAMPLE_RATE * 2
@@ -865,12 +780,10 @@ class MicroInput(InputDevice):
                             self.logger.info("🔇 Ducking active - not sending audio")
                         ducking_logged = True
                         self._keep_warm(len(chunk))
-                        self._report_speaking()  # a transcript settling mid-duck releases the floor
                         continue
                     ducking_logged = False
 
                     self._send_chunk(chunk if self._agc is None else self._agc(chunk))
-                    self._report_speaking()
                     chunks_sent += 1
 
                     # Log periodically (much less frequently)
@@ -911,9 +824,6 @@ class MicroInput(InputDevice):
         if self.client:
             self.client.stop()
             self.client = None
-        self._endpointer = None
-        self._forget_commits()
-        self._report_speaking()
 
     def _detect_audio_device(self):
         """Detect and list available audio capture devices."""
