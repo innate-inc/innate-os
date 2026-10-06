@@ -74,3 +74,12 @@ def marker(sink: LatencySink | None) -> Mark:
         sink({"t": time.time(), "stage": stage, **fields})
 
     return mark
+
+
+def with_fields(mark: Mark, **fixed: object) -> Mark:
+    """`mark` with `fixed` stamped onto every call."""
+
+    def stamped(stage: Stage, **fields: object) -> None:
+        mark(stage, **fixed, **fields)
+
+    return stamped

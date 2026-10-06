@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from brain_client.common.latency import Mark, Stage, marker
+from brain_client.common.latency import Mark, Stage, marker, with_fields
 from brain_client.common.logging import UniversalLogger
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
@@ -35,6 +35,7 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    turn: int | None = None  # the agent turn that said it, so its latency marks stitch to that exchange
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -164,6 +165,7 @@ class TTSHandler:
         text: str,
         voice_config: dict[str, Any] | None = None,
         on_start: Callable[[], None] | None = None,
+        turn: int | None = None,
     ) -> bool:
         """
         Convert text to speech and play it.
@@ -196,7 +198,8 @@ class TTSHandler:
 
         t_start = time.perf_counter()
         text_len = len(text)
-        self._mark(Stage.TTS_START, chars=text_len)
+        mark = self._mark if turn is None else with_fields(self._mark, turn=turn)
+        mark(Stage.TTS_START, chars=text_len)
         try:
             self.logger.info(f"🗣️ TTS start ({text_len} chars): '{text[:60]}{'...' if text_len > 60 else ''}'")
 
@@ -206,9 +209,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start, on_start)
+                success = self._synthesize_to_topic(text, voice, t_start, mark, on_start)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start, on_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, mark, on_start)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -252,6 +255,7 @@ class TTSHandler:
         text: str,
         voice: dict[str, Any],
         t_start: float,
+        mark: Mark,
         on_start: Callable[[], None] | None = None,
     ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
@@ -293,7 +297,7 @@ class TTSHandler:
             t_first_chunk = None
 
             t_api = time.perf_counter()
-            self._mark(Stage.TTS_REQUEST, chars=len(text), mode="aplay")
+            mark(Stage.TTS_REQUEST, chars=len(text), mode="aplay")
             for chunk in self._stream_tts_bytes(text, voice, for_speaker=True):
                 if not chunk:
                     continue
@@ -305,7 +309,7 @@ class TTSHandler:
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
                     # aplay is already draining the pipe, so this is also when
                     # the speaker starts making sound.
-                    self._mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="aplay")
+                    mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="aplay")
                     if on_start is not None:
                         on_start()
 
@@ -330,7 +334,7 @@ class TTSHandler:
                 return False
             if player.returncode == 0:
                 ttfb_ms = (t_first_chunk - t_api) * 1000 if t_first_chunk else 0
-                self._mark(
+                mark(
                     Stage.TTS_PLAY_DONE,
                     ms=round((t_play_done - t_start) * 1000),
                     audio_ms=round(total_bytes / (44100 * 2) * 1000),
@@ -362,6 +366,7 @@ class TTSHandler:
         text: str,
         voice: dict[str, Any],
         t_start: float,
+        mark: Mark,
         on_start: Callable[[], None] | None = None,
     ) -> bool:
         """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
@@ -370,7 +375,7 @@ class TTSHandler:
         collect the whole clip (utterances are short) and publish it once.
         """
         t_api = time.perf_counter()
-        self._mark(Stage.TTS_REQUEST, chars=len(text), mode="topic")
+        mark(Stage.TTS_REQUEST, chars=len(text), mode="topic")
         buf = bytearray()
         t_first_chunk = None
         for chunk in self._stream_tts_bytes(text, voice, for_speaker=False):
@@ -381,7 +386,7 @@ class TTSHandler:
                 self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
                 # Nothing is audible yet, unlike the aplay path: the sim holds
                 # the whole clip back until the stream ends.
-                self._mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="topic")
+                mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="topic")
             buf.extend(chunk)
 
         if not buf:
@@ -397,7 +402,7 @@ class TTSHandler:
         # the clip's actual duration so completion callbacks match what the
         # operator hears in the browser.
         duration_s = _wav_duration_s(wav)
-        self._mark(
+        mark(
             Stage.TTS_PLAY_DONE,
             ms=round((time.perf_counter() - t_start) * 1000),
             audio_ms=round(duration_s * 1000),
@@ -429,6 +434,7 @@ class TTSHandler:
         on_done: Callable[[bool], None] | None = None,
         reply_id: str | None = None,
         protected: bool = False,
+        turn: int | None = None,
     ) -> bool:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -465,7 +471,7 @@ class TTSHandler:
                 self._speech_queue.extend(kept)
             queued = len(self._speech_queue) < self._speech_queue_maxlen
             if queued:
-                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected))
+                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected, turn))
                 self._speech_cv.notify()
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
@@ -541,12 +547,12 @@ class TTSHandler:
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
-            success = self.speak_text(item.text, item.voice_config, take_floor)
+            success = self.speak_text(item.text, item.voice_config, take_floor, item.turn)
             if not success:
                 self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                success = self.speak_text(item.text, item.voice_config, take_floor)
+                success = self.speak_text(item.text, item.voice_config, take_floor, item.turn)
             if not success:
                 self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)

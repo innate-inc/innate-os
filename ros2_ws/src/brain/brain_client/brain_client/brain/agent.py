@@ -418,7 +418,7 @@ class BrainAgent:
         self._turn_started_at = time.monotonic()
         self._acted_without_speaking = False
         self._mark(Stage.TURN_START, turn=self._turn_count, events=len(events))
-        speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
+        speaker = self._speaker = self._chat.stream_speech(self._turn_count)  # published before the first await, for the racing loop
         try:
             await self._think(context, events, speaker)
         except asyncio.CancelledError:

@@ -103,12 +103,14 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False, reply_id: str | None = None) -> None:
+    def speak(
+        self, text: str, replace_pending: bool = False, reply_id: str | None = None, turn: int | None = None
+    ) -> None:
         if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
+            self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id, turn=turn)
 
-    def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self, self._mark)
+    def stream_speech(self, turn: int | None = None) -> SpeechStreamer:
+        return SpeechStreamer(self, self._mark, turn)
 
 
 class SpeechStreamer:
@@ -122,9 +124,10 @@ class SpeechStreamer:
     decided to abandon it.
     """
 
-    def __init__(self, chat: ChatManager, mark: Mark | None = None):
+    def __init__(self, chat: ChatManager, mark: Mark | None = None, turn: int | None = None):
         self._chat = chat
         self._mark = mark if mark is not None else marker(None)
+        self._turn = turn
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -180,6 +183,6 @@ class SpeechStreamer:
         # The first sentence supersedes stale queued utterances (a reply
         # mid-playback keeps its rest, see _survives_flush in tts.py); the
         # rest of this reply queues in order behind it.
-        self._mark(Stage.SPEECH_QUEUED, chars=len(sentence), first=not self.spoke)
-        self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
+        self._mark(Stage.SPEECH_QUEUED, chars=len(sentence), first=not self.spoke, turn=self._turn)
+        self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id, turn=self._turn)
         self.spoke = True
