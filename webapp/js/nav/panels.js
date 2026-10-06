@@ -140,6 +140,16 @@ export function createNavPanels(root, store) {
   };
   /** grid_localizer's latest verdict; "" until it has spoken */
   let locStatus = "";
+  let inNavigation = true;
+
+  // Outside navigation mode the localizer is deactivated, so its last verdict
+  // is stale: show a dash, and the verdict again once navigation resumes (the
+  // latched topic does not replay on a mode change).
+  function renderLocalization() {
+    if (!inNavigation || !locStatus) return setLocalization(DASH, "", "");
+    const [text, kind, hint] = LOC_STATES[locStatus] ?? [locStatus, "", ""];
+    setLocalization(text, kind, hint);
+  }
 
   /** @param {string} text @param {string} kind @param {string} hint */
   function setLocalization(text, kind, hint) {
@@ -199,7 +209,7 @@ export function createNavPanels(root, store) {
     if (typeof p?.x === "number" && typeof p?.y === "number") mapXY.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)} m`;
     if (yaw !== null) mapYaw.textContent = `${deg(yaw).toFixed(0)}°`;
     const cov = msg?.pose?.covariance;
-    if (locStatus === "localized" && Array.isArray(cov) && cov.length >= 36) {
+    if (inNavigation && locStatus === "localized" && Array.isArray(cov) && cov.length >= 36) {
       const maxVar = Math.max(cov[0], cov[7]); // x/y position variance
       const detail = `position variance ${maxVar.toFixed(2)} m²`;
       if (maxVar > CONFIDENT_VAR) setLocalization("converging", "warn", `${detail} — ${UNCERTAIN_HINT}`);
@@ -242,18 +252,15 @@ export function createNavPanels(root, store) {
     store.onChange((s) => {
       if (s.mode) navMode.textContent = s.mode;
       if (s.currentMap) navMap.textContent = s.currentMap;
-      // Outside navigation mode the localizer is deactivated and stops
-      // publishing — blank the row rather than pin a stale verdict.
-      if (s.mode && s.mode !== "navigation") {
-        locStatus = "";
-        setLocalization(DASH, "", "");
+      if (s.mode) {
+        inNavigation = s.mode === "navigation";
+        renderLocalization();
       }
     }),
     ros.subscribe(LOCALIZATION_STATUS_TOPIC, (msg) => {
       if (typeof msg?.data !== "string" || !msg.data) return;
       locStatus = msg.data;
-      const [text, kind, hint] = LOC_STATES[msg.data] ?? [msg.data, "", ""];
-      setLocalization(text, kind, hint);
+      renderLocalization();
     }, 0, "std_msgs/msg/String"),
     ros.subscribe(BATTERY_STATE_TOPIC, (msg) => {
       const p = msg?.percentage;

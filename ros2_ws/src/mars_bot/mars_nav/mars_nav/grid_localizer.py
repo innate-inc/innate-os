@@ -24,9 +24,9 @@ Key features:
 - Always publishes the best pose to /initialpose with transient_local QoS (latched)
   and seeds AMCL with it; the status says whether it is trustworthy
 - Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
-  but only to a place that clearly fits better; until one is found the robot is 'lost',
-  and it looks again the moment it comes to rest, so a robot carried off finds itself
-  as soon as it is set down (`auto_recover`)
+  but only to a confident match that clearly fits better; until one is found the robot
+  is 'lost', and it looks again the moment it comes to rest (wheels and surroundings
+  still), so a robot carried off finds itself as soon as it is set down (`auto_recover`)
 - Catches stalls, wheels spinning while the lidar shows the robot standing still: stops
   navigation, says why on /nav/stall (JSON: stamp, reason; the brain relays it to the
   agent and the chat) and pulls AMCL back to where the scan puts the robot
@@ -73,7 +73,9 @@ WATCH_PERIOD_S = 1.0
 LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map-wide search
 SETTLE_S = 5.0  # a new seed or map gets this long to take before AMCL's pose is judged
 RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner, unless the robot comes to rest
-REST_S = 0.5  # wheels still this long: set down, or stopped somewhere new
+REST_S = 0.5  # wheels and surroundings still this long: set down, or stopped somewhere new
+SCENE_STILL_M = 0.05  # a beam's range changing less than this between consecutive scans is noise, not motion
+SCENE_STILL_SHARE = 0.8  # that many beams unchanged and the surroundings stand still; a passer-by moves fewer
 RECOVERY_MARGIN = 0.15  # a jump must put this much more of the scan on walls than AMCL's own pose
 SCAN_HISTORY = 32  # ~4 s of /scan_fast: the scan AMCL's latest estimate came from
 SAME_SCAN_S = 0.02  # AMCL's /scan is every other /scan_fast message, same stamps
@@ -126,6 +128,7 @@ class GridLocalizer(Node):
     _lost: bool = False  # AMCL's pose fails the scan and no place on the map clearly fits better
     _search_after: float = 0.0  # the next search while lost, unless the robot comes to rest first
     _searched_at_rest: bool = False
+    _scene_moving_at: float = 0.0  # when consecutive scans last disagreed (monotonic)
     _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
     _confirm_progress: float = 0.0  # metres driven with a doubted pose fitting the scan the whole way
     _confirm_from: Pose2D | None = None  # AMCL's pose at the last fitting watch tick
@@ -386,7 +389,8 @@ class GridLocalizer(Node):
         self.map_received = True
 
     def _scan_cb(self, msg: LaserScan):
-        """Store latest scan."""
+        if self.latest_scan is not None and _scene_moved(self.latest_scan, msg):
+            self._scene_moving_at = time.monotonic()
         self.latest_scan = msg
         self._scans.append(msg)
         self._scan_received_at = time.monotonic()
@@ -674,10 +678,11 @@ class GridLocalizer(Node):
 
     def _may_search(self) -> bool:
         """Search as soon as the robot is judged lost; while it stays lost, again the moment it comes to
-        rest (set down after being carried, or parked somewhere new) and otherwise every RETRY_S."""
+        rest (set down after being carried, or parked somewhere new) and otherwise every RETRY_S. Rest is
+        wheels and surroundings both still: a carry with still wheels shows only in the scan."""
         if not self._lost:
             return True
-        at_rest = not self._stalls.wheels_turning(REST_S)
+        at_rest = not self._stalls.wheels_turning(REST_S) and time.monotonic() - self._scene_moving_at >= REST_S
         fresh_rest = at_rest and not self._searched_at_rest
         self._searched_at_rest = at_rest
         return fresh_rest or time.monotonic() >= self._search_after
@@ -714,9 +719,10 @@ class GridLocalizer(Node):
         return (match, believed) if abs(stamp(match) - at) < SAME_SCAN_S else None
 
     def _recover(self, here: Pose2D) -> None:
-        """Move AMCL only to a place that explains clearly more of the scan than where it is: a crowd around
-        the robot or moved furniture lowers every pose's fit alike. Until one is found the robot is lost, and
-        says so; the memory recorder stops saving views and the UIs show it."""
+        """Move AMCL only to a confident match that explains clearly more of the scan than where it is: a
+        crowd around the robot or moved furniture lowers every pose's fit alike, and a look-alike place must
+        not become the pose navigation steers by. Until one is found the robot is lost, and says so; the
+        memory recorder stops saving views and the UIs show it."""
         self._search_after = time.monotonic() + RETRY_S
         lost_at = f"{_pose_text(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         scan = self.latest_scan
@@ -728,20 +734,18 @@ class GridLocalizer(Node):
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
             self._declare_lost()
             return
-        pose = estimate.pose
-        if pose.fit < MIN_FIT or pose.fit < here.fit + RECOVERY_MARGIN:
+        if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
             self.get_logger().warn(
-                f"AMCL's pose {lost_at} explains little of the scan, but no place on the map clearly does "
-                f"better (best: {_describe(estimate)}); lost until one does or the pose fits again. Searching "
-                f"again when the robot comes to rest, or in {RETRY_S:.0f} s"
+                f"AMCL's pose {lost_at} explains little of the scan, but no place on the map confidently and "
+                f"clearly does better (best: {_describe(estimate)}); lost until one does or the pose fits again. "
+                f"Searching again when the robot comes to rest, or in {RETRY_S:.0f} s"
             )
             self._declare_lost()
             return
-        confident = estimate.confident(self.confidence_threshold)
-        tie = "" if confident else ", though another place fits nearly as well: driving will tell them apart"
-        self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}{tie}")
+        self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}")
+        pose = estimate.pose
         self._publish_pose(pose.x, pose.y, pose.theta, scan.header.stamp)
-        self._publish_status("localized" if confident else "localized_low_confidence")
+        self._publish_status("localized")
 
     def _declare_lost(self) -> None:
         if self._lost:
@@ -833,6 +837,20 @@ class GridLocalizer(Node):
         if estimate is None:
             raise RuntimeError("No pose on the map fits the scan")
         return estimate
+
+
+def _scene_moved(earlier: LaserScan, later: LaserScan) -> bool:
+    """Whether consecutive scans disagree on more than a passer-by's worth of beams; True too when they
+    cannot be compared, so a covered lidar never vouches for stillness."""
+    if abs(earlier.angle_min - later.angle_min) > 1e-6 or abs(earlier.angle_increment - later.angle_increment) > 1e-6:
+        return True
+    n = min(len(earlier.ranges), len(later.ranges))
+    a, b = np.asarray(earlier.ranges[:n], dtype=np.float32), np.asarray(later.ranges[:n], dtype=np.float32)
+    lo, hi = later.range_min, later.range_max
+    valid = np.isfinite(a) & np.isfinite(b) & (a > lo) & (b > lo) & (a < hi) & (b < hi)
+    if valid.sum() < MIN_SCAN_POINTS:
+        return True
+    return float((np.abs(a[valid] - b[valid]) < SCENE_STILL_M).mean()) < SCENE_STILL_SHARE
 
 
 def _pose_text(x: float, y: float, theta: float) -> str:
