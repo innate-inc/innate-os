@@ -99,11 +99,15 @@ export const COMMANDED_GOAL_TOPIC = "/nav/commanded_goal";
 export const CANCEL_NAVIGATION_SERVICE = "/nav/cancel_navigation";
 // Auto-localization (std_srvs/Trigger on grid_localizer), about half a second.
 export const LOCALIZE_SERVICE = "/localize";
-// grid_localizer's one-shot result (std_msgs/String, published once per
-// localization attempt): processing_map | localized | localized_low_confidence
-// | error, and "localized" after a hand placement (HAND_PLACED_SERVICE). Latched,
-// so a late subscriber gets the latest verdict — steady-state localization health
-// comes from /amcl_pose covariance instead (mobile-app pattern).
+// grid_localizer's word on where the robot stands (std_msgs/String, latched so a
+// late subscriber gets the current verdict): processing_map | localized |
+// localized_low_confidence | lost | error. "lost" means the robot's pose no
+// longer explains the lidar scan and the map-wide search has not yet found a
+// place that clearly does (it searches again the moment the robot comes to
+// rest, so a carried robot is found once set down). This is THE localization
+// indicator: /amcl_pose covariance stays small through a kidnap (the particle
+// filter is confident about a stale place), so it can only refine a
+// "localized" verdict, never contradict this topic.
 export const LOCALIZATION_STATUS_TOPIC = "/localization/status";
 // Tell grid_localizer (std_srvs/Trigger) that a hand placement vouched for the pose.
 export const HAND_PLACED_SERVICE = "/localization/hand_placed";

@@ -24,7 +24,9 @@ Key features:
 - Always publishes the best pose to /initialpose with transient_local QoS (latched)
   and seeds AMCL with it; the status says whether it is trustworthy
 - Watches AMCL's pose against the scan and relocalizes when AMCL has lost the robot,
-  but only to a confident match that clearly fits better (`auto_recover`)
+  but only to a place that clearly fits better; until one is found the robot is 'lost',
+  and it looks again the moment it comes to rest, so a robot carried off finds itself
+  as soon as it is set down (`auto_recover`)
 - Catches stalls, wheels spinning while the lidar shows the robot standing still: stops
   navigation, says why on /nav/stall (JSON: stamp, reason; the brain relays it to the
   agent and the chat) and pulls AMCL back to where the scan puts the robot
@@ -32,9 +34,13 @@ Key features:
 - Runs as a lifecycle node for proper initialization coordination
 
 On startup, automatically localizes once a map and a scan are in.
-Publishes status to /localization/status: 'localized' when the best pose holds at
-least `confidence_threshold` of the evidence (other places that fit the scan nearly
-as well take the rest), else 'localized_low_confidence'.
+/localization/status (latched) is the one word on where the robot stands, for every UI:
+'localized' when the best pose holds at least `confidence_threshold` of the evidence
+(other places that fit the scan nearly as well take the rest), 'localized_low_confidence'
+otherwise, 'lost' while AMCL's pose no longer explains the scan and no place on the map
+clearly does better, 'processing_map' while a new map loads, 'error' when a search failed.
+AMCL's covariance cannot stand in for this: its particles stay tightly converged on a
+stale pose when the robot is carried off.
 Service remains available for manual triggers after auto-localize completes.
 """
 
@@ -66,7 +72,8 @@ MAX_SCAN_AGE_S = 1.0  # /scan_fast runs at ~10 Hz: anything older means the lida
 WATCH_PERIOD_S = 1.0
 LOST_STRIKES = 3  # consecutive watch ticks AMCL's pose must fail before the map-wide search
 SETTLE_S = 5.0  # a new seed or map gets this long to take before AMCL's pose is judged
-RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner
+RETRY_S = 30.0  # a search that found nowhere clearly better is not repeated sooner, unless the robot comes to rest
+REST_S = 0.5  # wheels still this long: set down, or stopped somewhere new
 RECOVERY_MARGIN = 0.15  # a jump must put this much more of the scan on walls than AMCL's own pose
 SCAN_HISTORY = 32  # ~4 s of /scan_fast: the scan AMCL's latest estimate came from
 SAME_SCAN_S = 0.02  # AMCL's /scan is every other /scan_fast message, same stamps
@@ -116,6 +123,9 @@ class GridLocalizer(Node):
     _amcl: tuple[float, Pose2D] | None = None  # (scan stamp, AMCL's pose at that scan)
     _lost_strikes: int = 0
     _watch_quiet_until: float = 0.0
+    _lost: bool = False  # AMCL's pose fails the scan and no place on the map clearly fits better
+    _search_after: float = 0.0  # the next search while lost, unless the robot comes to rest first
+    _searched_at_rest: bool = False
     _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
     _confirm_progress: float = 0.0  # metres driven with a doubted pose fitting the scan the whole way
     _confirm_from: Pose2D | None = None  # AMCL's pose at the last fitting watch tick
@@ -179,7 +189,6 @@ class GridLocalizer(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_cb, map_qos)
         if self._auto_recover or self._stall_detection:  # the stall correction pairs AMCL's pose with its scan too
             self.amcl_sub = self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 1)
-        if self._stall_detection:
             self._stalls.reset()
             self.odom_sub = self.create_subscription(Odometry, "/odom", self._stalls.on_odom, 10)
 
@@ -236,8 +245,7 @@ class GridLocalizer(Node):
                 self._watch_timer = self.create_timer(WATCH_PERIOD_S, self._watch_tick)
             else:
                 self._watch_timer.reset()
-        if self._stall_detection:
-            self._stalls.reset()
+        self._stalls.reset()
 
         # This call automatically activates lifecycle publishers (pose_pub and status_pub)
         return super().on_activate(state)
@@ -628,7 +636,9 @@ class GridLocalizer(Node):
         """A new seed or map: forget AMCL's earlier estimate, give the new one time to take, and drop a
         pending stall correction, which belongs to the pose and map before it."""
         self._amcl = None
+        self._lost = False
         self._lost_strikes = 0
+        self._searched_at_rest = False
         self._confirm_progress, self._confirm_from = 0.0, None
         self._watch_quiet_until = time.monotonic() + SETTLE_S
         self._drop_stall_fix()
@@ -653,12 +663,31 @@ class GridLocalizer(Node):
         if here.fit < MIN_FIT:
             self._confirm_progress, self._confirm_from = 0.0, None
             self._lost_strikes += 1
-            if self._lost_strikes >= LOST_STRIKES:
+            if self._lost_strikes >= LOST_STRIKES and self._may_search():
                 self._recover(here)
             return
         self._lost_strikes = 0
-        if self._verdict == "localized_low_confidence":
+        if self._lost:
+            self._found_again()
+        elif self._verdict == "localized_low_confidence":
             self._confirm(believed)
+
+    def _may_search(self) -> bool:
+        """Search as soon as the robot is judged lost; while it stays lost, again the moment it comes to
+        rest (set down after being carried, or parked somewhere new) and otherwise every RETRY_S."""
+        if not self._lost:
+            return True
+        at_rest = not self._stalls.wheels_turning(REST_S)
+        fresh_rest = at_rest and not self._searched_at_rest
+        self._searched_at_rest = at_rest
+        return fresh_rest or time.monotonic() >= self._search_after
+
+    def _found_again(self) -> None:
+        """AMCL's pose explains the scan again with no new seed: set back down where it was, or whatever
+        hid the surroundings has gone. Doubted until driving confirms it (`_confirm`)."""
+        self._lost = False
+        self.get_logger().info("AMCL's pose fits the scan again")
+        self._publish_status("localized_low_confidence")
 
     def _confirm(self, believed: Pose2D) -> None:
         """A doubted pose that keeps fitting the scan while the robot drives is trusted again: driving
@@ -685,10 +714,10 @@ class GridLocalizer(Node):
         return (match, believed) if abs(stamp(match) - at) < SAME_SCAN_S else None
 
     def _recover(self, here: Pose2D) -> None:
-        """Move AMCL only to a confident match that explains clearly more of the scan than where it is:
-        a crowd around the robot or moved furniture lowers every pose's fit alike."""
-        self._lost_strikes = 0
-        self._watch_quiet_until = time.monotonic() + RETRY_S
+        """Move AMCL only to a place that explains clearly more of the scan than where it is: a crowd around
+        the robot or moved furniture lowers every pose's fit alike. Until one is found the robot is lost, and
+        says so; the memory recorder stops saving views and the UIs show it."""
+        self._search_after = time.monotonic() + RETRY_S
         lost_at = f"{_pose_text(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         scan = self.latest_scan
         if scan is None:
@@ -697,28 +726,28 @@ class GridLocalizer(Node):
             estimate = self._find_pose(scan)
         except (ValueError, RuntimeError) as e:
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
-            self._doubt()
+            self._declare_lost()
             return
-        if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
+        pose = estimate.pose
+        if pose.fit < MIN_FIT or pose.fit < here.fit + RECOVERY_MARGIN:
             self.get_logger().warn(
                 f"AMCL's pose {lost_at} explains little of the scan, but no place on the map clearly does "
-                f"better (best: {_describe(estimate)}); keeping it: the map may be incomplete here or the "
-                f"surroundings changed. Next check in {RETRY_S:.0f} s"
+                f"better (best: {_describe(estimate)}); lost until one does or the pose fits again. Searching "
+                f"again when the robot comes to rest, or in {RETRY_S:.0f} s"
             )
-            self._doubt()
+            self._declare_lost()
             return
-        self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}")
-        pose = estimate.pose
+        confident = estimate.confident(self.confidence_threshold)
+        tie = "" if confident else ", though another place fits nearly as well: driving will tell them apart"
+        self.get_logger().warn(f"AMCL lost the robot at {lost_at}; relocalized at {_describe(estimate)}{tie}")
         self._publish_pose(pose.x, pose.y, pose.theta, scan.header.stamp)
-        self._publish_status("localized")
+        self._publish_status("localized" if confident else "localized_low_confidence")
 
-    def _doubt(self) -> None:
-        """AMCL's pose is judged wrong but nothing better was found: withdraw a 'localized' verdict, so
-        the memory recorder stops saving views under it, until the pose fits again or someone relocalizes."""
-        if self._verdict != "localized":
+    def _declare_lost(self) -> None:
+        if self._lost:
             return
-        self._publish_status("localized_low_confidence")
-        self._confirm_progress, self._confirm_from = 0.0, None
+        self._lost = True
+        self._publish_status("lost")
 
     def _on_stall(self, stall: Stall) -> None:
         claimed = stall.claimed
