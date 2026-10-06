@@ -34,6 +34,7 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    sound: tuple[bytes, int] | None = None  # PCM s16le mono and its rate, played instead of speaking ``text``
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -87,6 +88,11 @@ class TTSHandler:
         self.tts_status_pub = tts_status_pub
         self.tts_audio_pub = tts_audio_pub
         self._simulator_mode = simulator_mode
+        # The robot's own voice as PCM s16le mono, handed over as it reaches the speaker (or the
+        # browser, in the sim), and a call when playback is cut short; set by the composition root.
+        self.on_audio: Callable[[bytes, int], None] | None = None
+        self.on_audio_cut: Callable[[], None] | None = None
+        self._own_voice = True
 
         # Initialize Cartesia client
         self._init_client()
@@ -99,6 +105,7 @@ class TTSHandler:
         # taking the floor for its reply must be one step, or a flush racing
         # the pop judges siblings against the previous reply's id.
         self._speech_cv = threading.Condition()
+        self._in_hand = False  # the worker popped an utterance it has not finished: busy() before is_playing
         self._playing_reply_id: str | None = None
         self._closing = threading.Event()
         threading.Thread(target=self._speech_loop, daemon=True).start()
@@ -219,6 +226,10 @@ class TTSHandler:
     # clip itself is ~10% shorter — the mic un-ducks sooner after each reply.
     SPEAKER_SAMPLE_RATE = 16000
     SPEAKER_SPEED = 1.5
+    # aplay starts the device once its buffer is full (start threshold = buffer size, at most 0.5 s by
+    # default) or at EOF; the voice is heard from then, so the speech-sway tap holds the stream's head
+    # until that point.
+    APLAY_START_S = 0.5
 
     def _stream_tts_bytes(self, text: str, voice: dict[str, Any], for_speaker: bool):
         """Yield audio bytes from Cartesia as they stream in.
@@ -272,6 +283,7 @@ class TTSHandler:
                     break
                 try:
                     player.stdin.write(chunk)
+                    player.stdin.flush()  # else up to 8 KB (a quarter second of voice) waits in Python's buffer
                 except BrokenPipeError:
                     break
             try:
@@ -286,6 +298,8 @@ class TTSHandler:
             total_bytes = 0
             chunk_count = 0
             t_first_chunk = None
+            unheard: bytearray | None = bytearray()
+            start_bytes = int(self.APLAY_START_S * self.SPEAKER_SAMPLE_RATE) * 2
 
             t_api = time.perf_counter()
             for chunk in self._stream_tts_bytes(text, voice, for_speaker=True):
@@ -294,6 +308,13 @@ class TTSHandler:
                 chunk_count += 1
                 total_bytes += len(chunk)
                 q.put(chunk)
+                if unheard is None:
+                    self._tap(chunk, self.SPEAKER_SAMPLE_RATE)
+                else:
+                    unheard += chunk
+                    if len(unheard) >= start_bytes:
+                        self._tap(bytes(unheard), self.SPEAKER_SAMPLE_RATE)
+                        unheard = None
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
@@ -301,6 +322,8 @@ class TTSHandler:
                         on_start()
 
             t_stream_done = time.perf_counter()
+            if unheard:
+                self._tap(bytes(unheard), self.SPEAKER_SAMPLE_RATE)
 
             # Deliberately NOT mirrored to /tts/audio: the robot's own speaker is
             # the voice. A webapp playing the clip too doubles the speech for
@@ -331,9 +354,11 @@ class TTSHandler:
                 return True
             stderr = player.stderr.read().decode(errors="replace").strip() if player.stderr else ""
             self.logger.error(f"❌ aplay failed (rc={player.returncode}): {stderr}")
+            self._cut()
             return False
         except Exception as e:
             self.logger.error(f"❌ Streaming TTS failed: {e}")
+            self._cut()
             q.put(None)
             writer.join(timeout=2)
             try:
@@ -371,6 +396,9 @@ class TTSHandler:
 
         wav = _finalize_wav(bytes(buf))
         self._publish_audio(wav)
+        pcm = _wav_pcm(wav)
+        if pcm is not None:
+            self._tap(*pcm)
         if on_start is not None:
             on_start()
         # Publishing the full clip is the beginning of playback, not the end.
@@ -386,6 +414,14 @@ class TTSHandler:
         )
         return True
 
+    def _tap(self, pcm: bytes, sample_rate: int) -> None:
+        if self.on_audio is not None and self._own_voice:
+            self.on_audio(pcm, sample_rate)
+
+    def _cut(self) -> None:
+        if self.on_audio_cut is not None:
+            self.on_audio_cut()
+
     def _publish_audio(self, wav: bytes) -> None:
         """Publish one already-finalized clip on /tts/audio as base64 WAV."""
         if self.tts_audio_pub is None or not wav:
@@ -394,6 +430,55 @@ class TTSHandler:
 
         payload = base64.b64encode(wav).decode("ascii")
         self.tts_audio_pub.publish(String(data=payload))
+
+    def busy(self) -> bool:
+        """Speaking, or about to: something plays, is being synthesized, or waits in the queue."""
+        return self.is_playing or self._in_hand or bool(self._speech_queue)
+
+    def play_sound_async(self, pcm: bytes, sample_rate: int) -> bool:
+        """Queue a short non-verbal sound (PCM s16le mono) through the voice's own output, so it never
+        overlaps speech; a newer reply's flush drops it like any stale backlog."""
+        with self._speech_cv:
+            if len(self._speech_queue) >= self._speech_queue_maxlen:
+                return False
+            self._speech_queue.append(_Utterance("", None, None, None, None, False, sound=(pcm, sample_rate)))
+            self._speech_cv.notify()
+        return True
+
+    def _play_sound(self, pcm: bytes, sample_rate: int) -> bool:
+        with self.play_lock:
+            if self.is_playing:
+                return False
+            self.is_playing = True
+        self._publish_tts_status("true")  # the microphone ducks for it like for speech
+        seconds = len(pcm) / 2 / sample_rate
+        try:
+            if self._simulator_mode and self.tts_audio_pub is not None:
+                self._tap(pcm, sample_rate)
+                self._publish_audio(_pcm_wav(pcm, sample_rate))
+                self._closing.wait(seconds)
+                return True
+            player = subprocess.Popen(
+                ["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(sample_rate), "-c", "1"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._tap(pcm, sample_rate)  # written whole: aplay starts it at once
+            try:
+                player.communicate(pcm, timeout=seconds + 5.0)
+            except subprocess.TimeoutExpired:
+                player.kill()  # a wedged audio device must not hold the speech queue
+                player.communicate()
+                self.logger.error("❌ Sound playback timed out")
+            return player.returncode == 0
+        except OSError as e:
+            self.logger.error(f"❌ Sound playback failed: {e}")
+            return False
+        finally:
+            with self.play_lock:
+                self.is_playing = False
+            self._publish_tts_status("false")
 
     def speak_text_async(
         self,
@@ -505,9 +590,11 @@ class TTSHandler:
         """Single worker: plays queued utterances in order, retrying each once."""
         while True:
             with self._speech_cv:
+                self._in_hand = False
                 while not self._speech_queue:
                     self._speech_cv.wait()
                 item = self._speech_queue.popleft()
+                self._in_hand = True
             if item is None:
                 break
             # Synthesis runs before a word is audible, and a failed attempt is
@@ -515,7 +602,12 @@ class TTSHandler:
             # only if it takes it when its audio starts -- otherwise a newer
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
+            if item.sound is not None:
+                self._own_voice = True
+                self._play_sound(*item.sound)
+                continue
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
+            self._own_voice = not item.protected  # another character's line is not the robot speaking
             success = self.speak_text(item.text, item.voice_config, take_floor)
             if not success:
                 self._set_playing_reply(None)
@@ -563,6 +655,27 @@ def _finalize_wav(data: bytes) -> bytes:
     struct.pack_into("<I", out, 4, len(out) - 8)  # RIFF chunk size
     struct.pack_into("<I", out, data_idx + 4, len(out) - (data_idx + 8))  # data size
     return bytes(out)
+
+
+def _pcm_wav(pcm: bytes, sample_rate: int) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return buffer.getvalue()
+
+
+def _wav_pcm(data: bytes) -> tuple[bytes, int] | None:
+    """The frames and sample rate of one complete 16-bit mono WAV, or None for anything else."""
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            if wav.getsampwidth() != 2 or wav.getnchannels() != 1:
+                return None
+            return wav.readframes(wav.getnframes()), wav.getframerate()
+    except (EOFError, wave.Error):
+        return None
 
 
 def _wav_duration_s(data: bytes) -> float:

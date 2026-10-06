@@ -1,0 +1,69 @@
+{
+  "doc": "Reachy Mini -> MARS plan-space retargeting. Reachy features are measured relative to `rest` (mm / deg, Reachy +pitch = head DOWN, ear droop 0 = up, 150 = drooped). `linear` rows: MARS channel = sum(coef * feature). Ears: `upness` is piecewise linear in the mean droop (rest -> 0, up_deg -> +1, down_deg -> -1); expand = upness * expand_gain; grip = interp(upness, grip_points) + flick_gain * max(0, flick - flick_deadband_deg) / flick_full_deg, where flick is the larger |ear droop - lowpass(ear droop, flick_hz)| of the two ears (fast ear flicks survive as the mouth). Every channel is then clipped to CONTRACTS \u00a71 ranges. Finally each channel's detail above detail_hz is scaled by detail_gain (posture untouched): Reachy's head and ear detail is several times larger, in units of the core's plan.ENERGY_SCALE, on the arm channels than on attend, which would put Reachy-ear-speed wiggles on MARS's arm; the gains bring every channel's detail to the head's level, except grip, which keeps the ear flicks as mouth chatter.",
+  "rest": {
+    "x_mm": -8.0,
+    "y_mm": 0.0,
+    "z_mm": 3.0,
+    "roll_deg": 0.0,
+    "pitch_deg": 0.0,
+    "yaw_deg": 0.0,
+    "body_deg": 0.0
+  },
+  "linear": {
+    "approach": {
+      "x_mm": 0.0667,
+      "pitch_deg": -0.012
+    },
+    "rise": {
+      "z_mm": 0.04
+    },
+    "attend": {
+      "pitch_deg": -0.04
+    },
+    "askew": {
+      "roll_deg": 0.04
+    },
+    "orient": {
+      "yaw_deg": 1.0,
+      "body_deg": 1.0
+    },
+    "advance": {
+      "x_mm": 0.005
+    }
+  },
+  "ears": {
+    "rest_deg": 15.0,
+    "up_deg": -10.0,
+    "down_deg": 150.0
+  },
+  "expand_gain": 1.0,
+  "grip_points": [
+    [
+      -1.0,
+      0.02
+    ],
+    [
+      0.0,
+      0.15
+    ],
+    [
+      1.0,
+      0.5
+    ]
+  ],
+  "flick_hz": 1.5,
+  "flick_deadband_deg": 3.0,
+  "flick_full_deg": 30.0,
+  "flick_gain": 0.6,
+  "detail_hz": 1.0,
+  "detail_gain": {
+    "approach": 0.25,
+    "expand": 0.25,
+    "rise": 0.5,
+    "attend": 1.0,
+    "askew": 0.65,
+    "orient": 0.3,
+    "advance": 1.0,
+    "grip": 1.0
+  }
+}

@@ -55,6 +55,11 @@ class ArmRestPose:
         self._grip: float | None = None
         node.create_subscription(JointState, COMMAND_STATE_TOPIC, self._on_command_state, _LATCHED_QOS)
 
+    @property
+    def grip(self) -> float | None:
+        """The arm's last commanded j6, the standing grip target; None until the arm reports one."""
+        return self._grip
+
     def fold(self) -> None:
         """Fold to rest, keeping the grip; returns once the goto is sent."""
         if self._state.primitive_running is not None:

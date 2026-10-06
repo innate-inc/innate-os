@@ -37,7 +37,7 @@ def generate_launch_description():
     )
     stt_vad_silence_secs_arg = DeclareLaunchArgument(
         "stt_vad_silence_secs",
-        default_value="0.5",
+        default_value="0.7",
         description="Silence that closes an utterance, in seconds (every backend)",
     )
     stt_agc_max_db_arg = DeclareLaunchArgument(

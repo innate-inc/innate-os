@@ -37,6 +37,7 @@ import string
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 from innate_llm import configure
@@ -100,6 +101,11 @@ SAFETY_COMMIT_SECS = 30.0
 # a robot must keep hearing even when the streaming socket will not come back.
 RECONNECTS_BEFORE_BATCH_FALLBACK = 3
 
+# A bare hesitation is not a turn: answering "Um." talks over the sentence that
+# follows it. It is held and prefixed to the next transcript within this window.
+FILLER_WORDS = frozenset({"um", "umm", "uh", "uhh", "uhm", "erm", "er", "hm", "hmm", "hmmm"})
+FILLER_GLUE_SECS = 5.0
+
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
         "error",
@@ -137,6 +143,14 @@ def strip_leading_punctuation(text: str) -> str:
     if not text.strip(_PUNCTUATION + string.whitespace):
         return ""
     return _LEADING_PUNCTUATION.sub("", text).strip()
+
+
+def is_filler(text: str) -> bool:
+    """Only hesitation words ("Um.", "Uh, hmm") — not a question ("Hm?") or an answer ("Mm-hmm")."""
+    if "?" in text:
+        return False
+    words = re.findall(r"[\w'-]+", text.lower())
+    return bool(words) and all(word in FILLER_WORDS for word in words)
 
 
 class SlowAgc:
@@ -205,6 +219,7 @@ class MicroInput(InputDevice):
         self._scribe_context = ""
         self._scribe_first_chunk = True
         self._last_transcript = ""
+        self._pending_filler: tuple[str, float] | None = None  # (text, monotonic time) awaiting the next transcript
         self._stop_evt = threading.Event()  # device shutdown only — never cleared mid-session
         self._audio_stop: threading.Event | None = None  # current audio thread's own stop
         self._audio_thread = None
@@ -300,9 +315,9 @@ class MicroInput(InputDevice):
             mic.start()
             return mic
 
-        self.logger.info(f"🎙️ Using audio device: {device or 'default'}")
-        mic = ArecordStreamer(self.logger)
-        mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
+        self.logger.info(f"🎙️ Using audio device: {device or 'none yet'}")
+        mic = ArecordStreamer(self.logger, detect=self._detect_audio_device)
+        mic.start(device=device, sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
 
     def _on_elevenlabs_message(self, ws, message: str):
@@ -437,7 +452,7 @@ class MicroInput(InputDevice):
 
     def _start_batch_session(self, transcriber: Transcriber, model: str) -> None:
         cfg = self.proxy.config
-        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
+        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.7))
         is_voiced, engine = self._make_vad(cfg)
         self.logger.info(f"📤 Batch STT config: model={model}, vad={engine}, silence={silence_secs}s")
         self.client = BatchSttSession(
@@ -527,7 +542,7 @@ class MicroInput(InputDevice):
 
         cfg = self.proxy.config
         model = cfg.get("elevenlabs_stt_model", "scribe_v2_realtime")
-        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
+        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.7))
         filter_background = bool(cfg.get("stt_filter_background_audio", True))
         keyterms = self._realtime_keyterms()
 
@@ -702,6 +717,15 @@ class MicroInput(InputDevice):
         if self._safety_commit_due() and (self._endpointer is None or not self._endpointer.in_speech):
             self._commit_scribe()
 
+    def _respawn_mic(self):
+        mic = self.mic
+        if mic is None or not hasattr(mic, "restart"):
+            return
+        try:
+            mic.restart()
+        except Exception as e:  # noqa: BLE001 — a dead capture must not take the input device down
+            self.logger.error(f"microphone respawn failed: {e}")
+
     def _start_audio_thread(self):
         """Start the audio streaming thread.
 
@@ -729,8 +753,11 @@ class MicroInput(InputDevice):
                     empty_count = 0  # Reset on successful get
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count == 50:
-                        self.logger.warning("⚠️ No audio chunks received (queue empty for 5s)")
+                    if empty_count >= 20:
+                        # The wrist camera's USB audio dies on a link reset while arecord
+                        # stays alive and blocked, so Scribe would idle out forever.
+                        self._respawn_mic()
+                        empty_count = 0
                     continue
 
                 try:
@@ -817,11 +844,14 @@ class MicroInput(InputDevice):
                     devices.append({"card": card_num, "device": device_num, "name": card_name, "id": device_id})
         except Exception:
             pass
+        # The Jetson's own cards have no microphone: APE drives the speaker's I2S amp and HDA is HDMI.
+        # Capturing from APE yields silence and contends with the speaker on the same card.
+        devices = [d for d in devices if "jetson" not in d["name"].lower()]
 
         # Try to find a suitable microphone device
         preferred_device = None
 
-        self.logger.info(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
+        self.logger.debug(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
 
         # Look for USB microphones (usually better quality)
         for dev in devices:
@@ -874,6 +904,13 @@ class MicroInput(InputDevice):
         text = strip_leading_punctuation(text)
         if not text:
             return
+        if is_filler(text):
+            self._pending_filler = (text, time.monotonic())
+            self.logger.info(f"🎤 Filler held for the next transcript: {text}")
+            return
+        filler, self._pending_filler = self._pending_filler, None
+        if filler is not None and time.monotonic() - filler[1] < FILLER_GLUE_SECS:
+            text = f"{filler[0]} {text}"
         self.logger.info(f"🎤 Transcript: {text}")
 
         self.send_data(text, data_type="chat_in")
@@ -921,8 +958,11 @@ class RosPcmStreamer:
 class ArecordStreamer:
     """Streams audio from ALSA via arecord subprocess."""
 
-    def __init__(self, logger):
+    def __init__(self, logger, detect: Callable[[], str | None] | None = None):
+        """``detect`` finds the microphone again on every restart: a USB mic can re-enumerate, or vanish."""
         self.queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
+        self._detect = detect
+        self._device: str | None = None
         self._proc: subprocess.Popen | None = None
         self.logger = logger
         self.sample_rate = DEFAULT_SAMPLE_RATE
@@ -930,9 +970,16 @@ class ArecordStreamer:
         self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
 
-    def start(self, device: str = "default", sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
+    def start(
+        self, device: str | None = "default", sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS
+    ):
+        """``device`` None opens nothing: no microphone is enumerated yet, and ``restart`` looks again."""
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
+        self._device = device
+        self._stop.clear()
+        if device is None:
+            return
         # arecord raw PCM 16-bit, stdout
         cmd = [
             "arecord",
@@ -1008,3 +1055,22 @@ class ArecordStreamer:
                     self._proc.kill()
         except Exception:
             pass
+
+    def restart(self):
+        """Kill a capture that stopped delivering (a USB audio reset leaves arecord blocked) and reopen it."""
+        self.stop()
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
+        device = self._detect() if self._detect is not None else self._device
+        if device is None:
+            if self._device is not None:
+                self.logger.warning("⚠️ The microphone is gone: waiting for it to enumerate again")
+            self._device = None
+            return
+        if self._device is not None:
+            self.logger.warning(f"⚠️ No audio chunks for 2 s: respawning the microphone capture on {device}")
+        self.start(device=device, sample_rate=self.sample_rate, channels=self.channels)
+        self.logger.info(f"🎙️ arecord respawned on {self._device} (pid: {self._proc.pid if self._proc else '?'})")

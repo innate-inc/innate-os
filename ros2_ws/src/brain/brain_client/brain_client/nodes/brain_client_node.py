@@ -47,13 +47,16 @@ from brain_client.agents.studio import (
     studio_fields,
 )
 from brain_client.brain.agent import BrainAgent
+from brain_client.brain.context import split_emotes
 from brain_client.brain.memory_search import MemorySearch
+from brain_client.brain.prompt import Emotes
 from brain_client.brain.search_server import MemorySearchServer
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
+from brain_client.expressive_driver.driver import ExpressionDriver, ExpressiveConfig
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor
@@ -309,6 +312,7 @@ class BrainClientNode(Node):
         self.camera.on_motion = self._on_camera_motion
         self.arm_recovery = ArmRecovery(self, state, runner=self.runner, chat=self.chat, brain=self.brain)
         self.rest_pose = ArmRestPose(self, state)
+        self.expression = self._init_expression()
         self.lifecycle = BrainLifecycle(
             self,
             state,
@@ -323,6 +327,8 @@ class BrainClientNode(Node):
             stop_robot=self._stop_robot,
             publish_status=self.publish_agent_status,
         )
+        if self.expression is not None:
+            self.lifecycle.on_deactivate = self.expression.stop
         self.reload = ReloadCoordinator(
             self,
             state,
@@ -331,6 +337,30 @@ class BrainClientNode(Node):
             self._reload_primitives_client,
             self._reload_skills_client,
         )
+
+    def _init_expression(self) -> ExpressionDriver | None:
+        """The expressive body layer (brain_client/expressive_driver), wired into speech, gaze and the
+        prompt; None, and every path as before, when expressive.enabled is false."""
+        config = ExpressiveConfig.load(self)
+        if config is None:
+            return None
+        driver = ExpressionDriver(
+            self,
+            self.state,
+            config,
+            cmd_vel_pub=self.cmd_vel_pub,
+            provider=lambda: self.brain.llm.provider if self.brain.llm is not None else None,
+            standing_grip=lambda: self.rest_pose.grip,
+            voice=self._tts_handler if self._tts_handler is not None and self._tts_handler.is_available() else None,
+        )
+        self.chat.on_sentence = driver.cue
+        self.gaze.head_sink = driver.set_gaze
+        self.gaze.face_sink = driver.saw_person
+        self.brain.emotes = Emotes.ACCENTS if config.per_sentence else Emotes.EVERY_REPLY
+        if self._tts_handler is not None:
+            self._tts_handler.on_audio = driver.feed_audio
+            self._tts_handler.on_audio_cut = driver.cut_audio
+        return driver
 
     def _create_always_on_subscriptions(self) -> None:
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
@@ -436,12 +466,17 @@ class BrainClientNode(Node):
         )
 
     def _on_camera_motion(self) -> None:
-        if not self.state.is_brain_active:
+        if not self.state.is_brain_active or self.brain.in_conversation() or self._robot_speaking():
+            # Someone moving mid-conversation is the person already talking, not news. Only
+            # the early wake-up is lost: the idle look still sees a newcomer within seconds.
             return
         # MOTION lets the brain dashboard show the wake-up cue.
         self.brain.add_event(
             "Motion detected in the camera view — something or someone is moving nearby.", kind=EventKind.MOTION
         )
+
+    def _robot_speaking(self) -> bool:
+        return self._tts_handler is not None and self._tts_handler.is_playing
 
     # ================= always-on subscription callbacks =================
     def _on_chat_in(self, msg: String) -> None:
@@ -499,12 +534,19 @@ class BrainClientNode(Node):
             self.brain.add_event(text)
 
     def _on_tts(self, msg: String) -> None:
-        """Speak a line a skill sent, and show it — emit, not speak: anything the
-        robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
-        text = msg.data
-        if text and text.strip():
-            self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.emit(Sender.ROBOT, text)
+        """Speak a line a skill sent, and show it: anything the robot says aloud belongs in the
+        transcript, or Skill.say goes unrecorded. It is spoken and performed sentence by sentence
+        like a reply; emote tags are performed, never spoken nor shown, and a line of tags alone
+        plays them at once."""
+        text, emotes = split_emotes(msg.data)
+        if not text.strip():
+            if self.expression is not None:
+                for prompt in emotes:
+                    self.expression.emote(prompt)
+            return
+        self.get_logger().info(f"TTS request received: {text[:50]}...")
+        self.chat.emit(Sender.ROBOT, text, speak=False)
+        self.chat.say_line(msg.data)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice
@@ -856,6 +898,8 @@ class BrainClientNode(Node):
         if self._agent_status_heartbeat is not None and not self._agent_status_heartbeat.is_canceled():
             self._agent_status_heartbeat.cancel()
         self.reload.stop_watcher()
+        if self.expression is not None:
+            self.expression.close()
         if self._tts_handler is not None:
             self._tts_handler.close()
         self._service_call_node.destroy_node()

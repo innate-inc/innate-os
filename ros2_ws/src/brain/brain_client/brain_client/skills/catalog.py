@@ -51,6 +51,7 @@ from brain_client.skills.physical_refs import (
     write_refs,
 )
 from brain_client.skills.replay_conversion import recording_action_to_replay
+from brain_client.skills.types import InterfaceType
 from brain_client.skills.workspace_import import (
     format_load_error,
     import_workspace_packages,
@@ -68,6 +69,30 @@ def _annotation_is_float(annotation) -> bool:
     if annotation is float or annotation == "float":
         return True
     return any(arg is float or arg == "float" for arg in get_args(annotation))
+
+
+BODY_PARTS: tuple[str, ...] = ("arm", "base", "head")
+_INTERFACE_PARTS = {InterfaceType.MANIPULATION: "arm", InterfaceType.MOBILITY: "base", InterfaceType.HEAD: "head"}
+
+
+def declared_body(skill_class: type, _seen: frozenset[type] = frozenset()) -> frozenset[str]:
+    """The body parts a code skill's declarations reach: its interfaces, its sub-skills', and every
+    part for a declared physical skill (a recorded or learned policy drives the whole robot).
+
+    Empty when it declares none, which does not prove it leaves the body alone: a skill can drive
+    the base through its own ROS clients (navigate_to_position does).
+    """
+    if getattr(skill_class, "_feed_physical_skills", None):
+        return frozenset(BODY_PARTS)
+    parts = {
+        _INTERFACE_PARTS[descriptor.interface_type]
+        for descriptor in getattr(skill_class, "_feed_interfaces", {}).values()
+        if descriptor.interface_type in _INTERFACE_PARTS
+    }
+    for descriptor in getattr(skill_class, "_feed_subskills", {}).values():
+        if descriptor.skill_class not in _seen:
+            parts |= declared_body(descriptor.skill_class, _seen | {skill_class})
+    return frozenset(parts)
 
 
 @dataclass(frozen=True)

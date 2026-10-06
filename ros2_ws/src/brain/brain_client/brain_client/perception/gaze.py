@@ -82,7 +82,7 @@ class GazeController:
 
         self._current_tilt = 0.0
         self._target_tilt = 0.0
-        self._last_commanded_tilt = 0
+        self._last_commanded_tilt: int | None = 0
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -102,6 +102,10 @@ class GazeController:
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
+
+    def forget_commanded(self) -> None:
+        """Re-send the tilt on the next tick even if it has not changed."""
+        self._last_commanded_tilt = None
 
     def track_face(self, face: dict, frame_shape: tuple[int, int]):
         """Track a detected face by pointing at its center."""
@@ -165,18 +169,28 @@ class GazeController:
 class ROSPersonTracker:
     """ROS2 person tracker - simple interface for agents."""
 
-    def __init__(self, node, camera_topic: str = "/mars/main_camera/left/image_raw"):
+    def __init__(
+        self,
+        node,
+        camera_topic: str = "/mars/main_camera/left/image_raw",
+        head_sink: Callable[[float | None], None] | None = None,
+        face_sink: Callable[[], None] | None = None,
+    ):
+        """``head_sink`` takes the tilt target instead of the head servo (the expression driver
+        rides on it); it gets ``None`` when tracking stops. ``face_sink`` is called on every frame
+        with a face in it."""
         self._node = node
         self._frame = None
         self._frame_lock = threading.Lock()
+        self._head_sink = head_sink
+        self._face_sink = face_sink
 
         # Hardware interfaces
-        self._head = Head(node, node.get_logger())
         self._mobility = Mobility(node, node.get_logger(), "/cmd_vel")
 
         # Gaze controller
         self._gaze = GazeController(
-            head_command_fn=self._head.set_position,
+            head_command_fn=head_sink or Head(node, node.get_logger()).set_position,
             wheel_rotate_fn=self._mobility.rotate_in_place,
         )
         self._detector: FaceDetector | None = None
@@ -211,6 +225,8 @@ class ROSPersonTracker:
         if self._running:
             return
         self._running = True
+        if self._head_sink is not None:
+            self._gaze.forget_commanded()  # the sink was told None on stop
         self._gaze.start()
         self._thread = threading.Thread(target=self._track_loop, daemon=True)
         self._thread.start()
@@ -232,6 +248,8 @@ class ROSPersonTracker:
             self._thread.join(timeout=1.0)
             self._thread = None
         self._gaze.stop()
+        if self._head_sink is not None:
+            self._head_sink(None)
 
     @property
     def is_running(self) -> bool:
@@ -260,6 +278,8 @@ class ROSPersonTracker:
                     best = max(faces, key=lambda f: f["width"] * f["height"])
                     self._gaze.track_face(best, shape)
                     self._last_face_time = time.time()
+                    if self._face_sink is not None:
+                        self._face_sink()
                 elif time.time() - self._last_face_time > self._face_timeout:
                     # Return to neutral after timeout
                     with self._gaze._lock:
