@@ -1102,6 +1102,33 @@ def test_noise_that_opens_utterances_does_not_spend_the_rerun_budget(agent_facto
     agent.stop()
 
 
+def test_speech_that_cuts_in_spends_the_rerun_budget_once_its_words_land(agent_factory):
+    # Review-found: an onset-cancelled turn whose transcript landed during the hold never counted.
+    traces = []
+    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
+    thinking, release = threading.Event(), threading.Event()
+
+    def script(request: Request):
+        thinking.set()
+        release.wait(timeout=10)
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    agent.on_user_message("one")
+    agent.start()
+    for word in ("two", "three", "four"):
+        assert thinking.wait(5)
+        thinking.clear()
+        agent.on_user_speaking(True)
+        time.sleep(0.1)
+        agent.on_user_message(word)  # lands while the hold is still open
+        agent.on_user_speaking(False)
+    time.sleep(0.3)
+    release.set()
+    assert sum(t["ev"] == "turn_preempted" for t in traces) == 2
+    agent.stop()
+
+
 def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     traces = []
     agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))

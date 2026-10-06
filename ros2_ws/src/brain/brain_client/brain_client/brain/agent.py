@@ -186,6 +186,7 @@ class BrainAgent:
         self._user_started = asyncio.Event()  # the mic heard an utterance open, before any transcript
         self._hearing_until = 0.0  # monotonic; the user is mid-utterance until then
         self._utterance_opened_at = 0.0
+        self._words_heard = 0  # user messages received, ever
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -348,23 +349,26 @@ class BrainAgent:
         heartbeat = asyncio.ensure_future(self._heartbeat())
         turn = spoke = started = None
         reruns = 0
+        abandoned = False
+        words_at_turn = 0
         try:
             while True:
                 await self._await_camera()
                 await self._await_user_done()
+                if abandoned and self._words_heard > words_at_turn:
+                    reruns += 1  # a cough cancels a turn too; only an abandon that words followed counts
                 self._user_spoke.clear()
                 self._user_started.clear()
+                words_at_turn = self._words_heard
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
                 started = asyncio.ensure_future(self._user_started.wait())
                 await asyncio.wait((turn, spoke, started), return_when=asyncio.FIRST_COMPLETED)
-                heard_words = spoke.done()
                 spoke.cancel()
                 started.cancel()
-                if reruns < _MAX_RERUNS and self._abandon(turn):
+                abandoned = reruns < _MAX_RERUNS and self._abandon(turn)
+                if abandoned:
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
-                    if heard_words:  # a cough opens an utterance too; only words spend the budget
-                        reruns += 1
                     continue
                 await turn
                 reruns = 0
@@ -772,6 +776,7 @@ class BrainAgent:
         """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
         self._new_event.set()
         if kind == EventKind.USER:
+            self._words_heard += 1
             self._user_spoke.set()
 
     def on_user_speaking(self, speaking: bool) -> None:
