@@ -1017,6 +1017,39 @@ def test_a_turn_that_started_speaking_finishes(agent_factory):
     agent.stop()
 
 
+def test_noise_that_opens_utterances_does_not_spend_the_rerun_budget(agent_factory):
+    # Found on Mars44: two transcript-less onsets used both reruns, and the next real
+    # transcript could no longer stop an unspoken reply to the previous message.
+    traces = []
+    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
+    thinking, release = threading.Event(), threading.Event()
+    turn_inputs = []
+
+    def script(request: Request):
+        turn_inputs.append(request.messages[-1].text())
+        thinking.set()
+        release.wait(timeout=10)
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    agent.on_user_message("wait, MARS?")
+    agent.start()
+    for _ in range(2):
+        assert thinking.wait(5)
+        thinking.clear()
+        agent.on_user_speaking(True)  # a cough: no transcript follows
+        agent.on_user_speaking(False)
+    assert thinking.wait(5)
+    thinking.clear()
+
+    agent.on_user_message("can you hear us?")
+    assert thinking.wait(5)
+    release.set()
+    assert sum(t["ev"] == "turn_preempted" for t in traces) == 3
+    assert '"can you hear us?"' in turn_inputs[-1] and '"wait, MARS?"' in turn_inputs[-1]
+    agent.stop()
+
+
 def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
     traces = []
     agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))

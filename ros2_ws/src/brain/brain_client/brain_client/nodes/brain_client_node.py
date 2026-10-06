@@ -335,6 +335,7 @@ class BrainClientNode(Node):
     def _create_always_on_subscriptions(self) -> None:
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
+        self.create_subscription(String, "/input_manager/telemetry", self._on_input_telemetry, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
@@ -475,6 +476,14 @@ class BrainClientNode(Node):
             return
         self.get_logger().info(f"Received custom input from {data.get('input_device', 'unknown')}")
         self.brain.on_custom_input(data)
+
+    def _on_input_telemetry(self, msg: String) -> None:
+        try:
+            frame = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if isinstance(frame, dict) and frame.get("kind") == "vad_status" and "utterance_open" in frame:
+            self.brain.on_user_speaking(bool(frame["utterance_open"]))
 
     def _on_nav_stall(self, msg: String) -> None:
         """grid_localizer cancelled navigation because the wheels were spinning in place. The agent must

@@ -515,7 +515,7 @@ class MicroInput(InputDevice):
         if self._endpointer is None:
             return None
         return {
-            "utterance_open": self._endpointer.in_speech,
+            "utterance_open": self._endpointer.in_speech,  # the brain holds its reply while true
             "utterance_secs": round(self._endpointer.utterance_secs, 2),
             "utterances": self._utterance_count,
             "failures": self._failure_count,
