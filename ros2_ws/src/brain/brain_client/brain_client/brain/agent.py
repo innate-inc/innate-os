@@ -358,11 +358,13 @@ class BrainAgent:
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
                 started = asyncio.ensure_future(self._user_started.wait())
                 await asyncio.wait((turn, spoke, started), return_when=asyncio.FIRST_COMPLETED)
+                heard_words = spoke.done()
                 spoke.cancel()
                 started.cancel()
                 if reruns < _MAX_RERUNS and self._abandon(turn):
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
-                    reruns += 1
+                    if heard_words:  # a cough opens an utterance too; only words spend the budget
+                        reruns += 1
                     continue
                 await turn
                 reruns = 0
