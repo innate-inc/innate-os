@@ -239,8 +239,7 @@
   <h2>Live configuration</h2>
   <div class="row">
     <label class="status">brain model
-      <input id="cfg-model" class="mono" size="26" list="model-presets" placeholder="vendor:name">
-      <datalist id="model-presets"></datalist>
+      <select id="cfg-model"></select>
     </label>
     <label class="status">STT
       <select id="cfg-backend">
@@ -412,7 +411,7 @@
 </div>
 
 <script type="module">
-import { MODEL_OPTIONS } from "../js/models.js";
+import { MODEL_OPTIONS, modelLabel, modelVendor, VENDOR_LABEL } from "../js/models.js";
 import { ros } from "/js/rosClient.js";
 import { initTtsAudio } from "/js/ttsAudio.js";
 
@@ -1654,9 +1653,25 @@ const CONFIG_KNOBS = [
   { node: BRAIN_NODE, name: "follow_up_after_silent_call", type: "bool", el: "cfg-follow-up" },
 ];
 
-$("model-presets").replaceChildren(
-  ...MODEL_OPTIONS.map((m) => Object.assign(document.createElement("option"), { value: m.value, label: m.label })),
-);
+/** Every catalog model, grouped by vendor like the agent page's menu — plus the
+ *  robot's own when it is no catalog entry (a Settings pick, a LAN model). */
+function renderModelOptions(current = "") {
+  const options = [...MODEL_OPTIONS];
+  if (current && !options.some((o) => o.value === current)) {
+    options.push({ value: current, label: modelLabel(current), vendor: modelVendor(current) || "custom" });
+  }
+  const groups = new Map();
+  for (const o of options) groups.set(o.vendor, [...(groups.get(o.vendor) ?? []), o]);
+  $("cfg-model").replaceChildren(
+    ...[...groups].map(([vendor, models]) => {
+      const group = document.createElement("optgroup");
+      group.label = VENDOR_LABEL[vendor] || vendor;
+      group.append(...models.map((m) => new Option(m.label, m.value)));
+      return group;
+    }),
+  );
+}
+renderModelOptions();
 
 /** Every control reports a string; a bool knob's is "true"/"false". */
 const knobValue = (knob) => (knob.type === "bool" ? $(knob.el).value === "true" : $(knob.el).value.trim());
@@ -1691,6 +1706,7 @@ async function readConfig() {
       liveConfig[knob.name] = value;
       const el = $(knob.el);
       const text = String(value);
+      if (knob.el === "cfg-model") renderModelOptions(text);
       // Assigning an unlisted value to a <select> blanks it, which reads as
       // "no setting" rather than "a setting I cannot show".
       if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === text)) {
