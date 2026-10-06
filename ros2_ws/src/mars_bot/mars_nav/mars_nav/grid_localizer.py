@@ -602,6 +602,15 @@ class GridLocalizer(Node):
 
         try:
             estimate = self._find_pose(self.latest_scan)
+            here = self._amcl_fitted()
+            if here is not None and here.fit >= MIN_FIT and not self._clearly_better(estimate, here):
+                response.success = True
+                response.message = (
+                    f"Kept the current pose: it fits the scan ({here.fit:.0%}) and no place on the map clearly "
+                    f"does better (best: {_describe(estimate)})"
+                )
+                self.get_logger().info(response.message)
+                return response
             pose = estimate.pose
 
             self._publish_pose(pose.x, pose.y, pose.theta, self.latest_scan.header.stamp)
@@ -735,7 +744,7 @@ class GridLocalizer(Node):
             self.get_logger().warn(f"AMCL looks lost at {lost_at}, and the map-wide search failed: {e}")
             self._declare_lost()
             return
-        if not estimate.confident(self.confidence_threshold) or estimate.pose.fit < here.fit + RECOVERY_MARGIN:
+        if not self._clearly_better(estimate, here):
             self.get_logger().warn(
                 f"AMCL's pose {lost_at} explains little of the scan, but no place on the map confidently and "
                 f"clearly does better (best: {_describe(estimate)}); lost until one does or the pose fits again. "
@@ -747,6 +756,20 @@ class GridLocalizer(Node):
         pose = estimate.pose
         self._publish_pose(pose.x, pose.y, pose.theta, scan.header.stamp)
         self._publish_status("localized")
+
+    def _clearly_better(self, estimate: Estimate, here: Pose2D) -> bool:
+        return estimate.confident(self.confidence_threshold) and estimate.pose.fit >= here.fit + RECOVERY_MARGIN
+
+    def _amcl_fitted(self) -> Pose2D | None:
+        """AMCL's pose fitted to the scan it came from, or None while AMCL has no estimate to judge."""
+        paired = self._scan_for_amcl_pose()
+        if self.grid is None or paired is None:
+            return None
+        msg, believed = paired
+        scan = Scan.from_laser_scan(msg, self.max_range)
+        if len(scan) < MIN_SCAN_POINTS:
+            return None
+        return refine(self.grid, scan, believed)
 
     def _declare_lost(self) -> None:
         if not self._lost:
