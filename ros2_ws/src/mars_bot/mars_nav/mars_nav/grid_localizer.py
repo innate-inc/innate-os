@@ -601,8 +601,9 @@ class GridLocalizer(Node):
             return response
 
         try:
-            estimate = self._find_pose(self.latest_scan)
-            here = self._amcl_fitted()
+            msg = self.latest_scan
+            estimate = self._find_pose(msg)
+            here = self._amcl_fitted(msg)
             if here is not None and here.fit >= MIN_FIT and not self._clearly_better(estimate, here):
                 response.success = True
                 response.message = (
@@ -613,7 +614,7 @@ class GridLocalizer(Node):
                 return response
             pose = estimate.pose
 
-            self._publish_pose(pose.x, pose.y, pose.theta, self.latest_scan.header.stamp)
+            self._publish_pose(pose.x, pose.y, pose.theta, msg.header.stamp)
             self._warn_if_at_map_edge(pose.x, pose.y)
 
             confident = estimate.confident(self.confidence_threshold)
@@ -760,16 +761,13 @@ class GridLocalizer(Node):
     def _clearly_better(self, estimate: Estimate, here: Pose2D) -> bool:
         return estimate.confident(self.confidence_threshold) and estimate.pose.fit >= here.fit + RECOVERY_MARGIN
 
-    def _amcl_fitted(self) -> Pose2D | None:
-        """AMCL's pose fitted to the scan it came from, or None while AMCL has no estimate to judge."""
-        paired = self._scan_for_amcl_pose()
-        if self.grid is None or paired is None:
+    def _amcl_fitted(self, msg: LaserScan) -> Pose2D | None:
+        """AMCL's latest pose fitted to this scan, or None while AMCL has no estimate. Judged on the scan the
+        search used, not the one AMCL's estimate came from: a robot carried with still wheels keeps a stale
+        estimate that still fits its own, older scan."""
+        if self.grid is None or self._amcl is None:
             return None
-        msg, believed = paired
-        scan = Scan.from_laser_scan(msg, self.max_range)
-        if len(scan) < MIN_SCAN_POINTS:
-            return None
-        return refine(self.grid, scan, believed)
+        return refine(self.grid, Scan.from_laser_scan(msg, self.max_range), self._amcl[1])
 
     def _declare_lost(self) -> None:
         if not self._lost:
