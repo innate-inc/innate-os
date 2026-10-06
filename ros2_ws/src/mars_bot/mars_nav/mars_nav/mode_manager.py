@@ -26,17 +26,17 @@ from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
 from nav_msgs.msg import Odometry
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
-from rclpy.serialization import deserialize_message
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_msgs.msg import TFMessage
 
 from mars_nav.map_straightening import straighten_saved_map, turn_pose
 from mars_nav.service_utils import call_service, get_node_state, transition_node
+from mars_nav.subscription_feed import SubscriptionFeed
 
 # TODO: move this into launch file?
 map_server_node = "navigation_map_server"
@@ -240,14 +240,10 @@ class ModeManager(Node):
         # Map persistence file
         self.map_file = os.path.join(state_dir, ".last_map")
 
-        # Raw and gated on mode, never destroyed: a destroy under this multi-threaded
-        # executor races its take (InvalidHandle), and an ignored raw message skips
-        # Python deserialization. map->base_link needs no /tf_static.
+        # /tf and /odom are followed only while mapping or switching (see current_mode).
+        # map->base_link needs no /tf_static.
         self.tf_buffer = tf2_ros.Buffer()
-        self.create_subscription(
-            TFMessage, "/tf", self._on_tf, 100, callback_group=MutuallyExclusiveCallbackGroup(), raw=True
-        )
-        self.create_subscription(Odometry, "/odom", self.odom_callback, 20, raw=True)
+        self._pose_feed: SubscriptionFeed | None = None
         self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
 
         # Discover available maps first (needed for loading last map)
@@ -324,17 +320,31 @@ class ModeManager(Node):
             5.0, self._lifecycle_watchdog, callback_group=self._internal_callbacks_group
         )
 
-    def _on_tf(self, raw: bytes) -> None:
+    @property
+    def current_mode(self) -> str:
+        return self._current_mode
+
+    @current_mode.setter
+    def current_mode(self, mode: str) -> None:
         # /mapping_pose while mapping; the switch into navigation polls map->base_link.
-        if self.current_mode not in ("mapping", "switching"):
-            return
-        for transform in deserialize_message(raw, TFMessage).transforms:
+        self._current_mode = mode
+        following = mode in ("mapping", "switching")
+        if following and self._pose_feed is None:
+            self._pose_feed = SubscriptionFeed(
+                "mode_manager_pose_feed",
+                [(TFMessage, "/tf", self._on_tf, 100), (Odometry, "/odom", self.odom_callback, 20)],
+            )
+        elif not following and self._pose_feed is not None:
+            self._pose_feed.close()
+            self._pose_feed = None
+
+    def _on_tf(self, msg: TFMessage) -> None:
+        for transform in msg.transforms:
             self.tf_buffer.set_transform(transform, "mode_manager")
 
-    def odom_callback(self, raw: bytes) -> None:
+    def odom_callback(self, msg: Odometry) -> None:
         if self.current_mode != "mapping":
             return
-        msg = deserialize_message(raw, Odometry)
         try:
             tf_time = rclpy.time.Time()
             tf: TransformStamped = self.tf_buffer.lookup_transform("map", "base_link", tf_time)
