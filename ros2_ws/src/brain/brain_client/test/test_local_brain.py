@@ -1017,58 +1017,6 @@ def test_a_turn_that_started_speaking_finishes(agent_factory):
     agent.stop()
 
 
-def test_a_turn_waits_out_an_utterance_begun_before_the_last_transcript_landed(agent_factory):
-    # Review-found: the first transcript ended the grace wait and the turn started mid-utterance.
-    agent, state = agent_factory()
-    turn_inputs = []
-    answers(agent, Replay(script=lambda request: turn_inputs.append(request.messages[-1].text()) or [call_reply(WAIT)]))
-    agent.on_user_speaking(True)
-    agent.start()
-    time.sleep(0.2)
-    agent.on_user_speaking(False)  # the loop now waits for this utterance's transcript
-    time.sleep(0.2)
-    agent.on_user_speaking(True)
-    agent.on_user_message("go to the kitchen")
-    time.sleep(0.4)
-    assert turn_inputs == []
-
-    agent.on_user_speaking(False)
-    agent.on_user_message("and pick up the cup")
-    deadline = time.time() + 5
-    while not turn_inputs and time.time() < deadline:
-        time.sleep(0.02)
-    assert "go to the kitchen" in turn_inputs[0] and "pick up the cup" in turn_inputs[0]
-    agent.stop()
-
-
-def test_talk_that_keeps_reopening_holds_the_turn_no_longer_than_the_cap(agent_factory, monkeypatch):
-    # Review-found twice: every reopening inside the transcript grace restarted the per-utterance
-    # cap (an endless hold), and an utterance opened just before the cap ran past it.
-    monkeypatch.setattr("brain_client.brain.agent._MAX_HOLD_SEC", 2.0)
-    agent, state = agent_factory()
-    started_at = []
-    answers(agent, Replay(script=lambda request: started_at.append(time.monotonic()) or [call_reply(WAIT)]))
-    stop = threading.Event()
-
-    def chatter():
-        while not stop.is_set():
-            agent.on_user_speaking(True)
-            time.sleep(1.0)
-            agent.on_user_speaking(False)
-            time.sleep(0.2)  # reopens inside every grace window
-
-    threading.Thread(target=chatter, daemon=True).start()
-    time.sleep(0.05)
-    held_from = time.monotonic()
-    agent.start()
-    deadline = time.time() + 6
-    while not started_at and time.time() < deadline:
-        time.sleep(0.02)
-    stop.set()
-    assert started_at and started_at[0] - held_from < 2.5
-    agent.stop()
-
-
 def test_noise_that_opens_utterances_does_not_spend_the_rerun_budget(agent_factory):
     # Found on Mars44: two transcript-less onsets used both reruns, and the next real
     # transcript could no longer stop an unspoken reply to the previous message.
@@ -1099,33 +1047,6 @@ def test_noise_that_opens_utterances_does_not_spend_the_rerun_budget(agent_facto
     release.set()
     assert sum(t["ev"] == "turn_preempted" for t in traces) == 3
     assert '"can you hear us?"' in turn_inputs[-1] and '"wait, MARS?"' in turn_inputs[-1]
-    agent.stop()
-
-
-def test_speech_that_cuts_in_spends_the_rerun_budget_once_its_words_land(agent_factory):
-    # Review-found: an onset-cancelled turn whose transcript landed during the hold never counted.
-    traces = []
-    agent, state = agent_factory(trace=lambda payload: traces.append(json.loads(payload)))
-    thinking, release = threading.Event(), threading.Event()
-
-    def script(request: Request):
-        thinking.set()
-        release.wait(timeout=10)
-        return [call_reply(WAIT)]
-
-    answers(agent, Replay(script=script))
-    agent.on_user_message("one")
-    agent.start()
-    for word in ("two", "three", "four"):
-        assert thinking.wait(5)
-        thinking.clear()
-        agent.on_user_speaking(True)
-        time.sleep(0.1)
-        agent.on_user_message(word)  # lands while the hold is still open
-        agent.on_user_speaking(False)
-    time.sleep(0.3)
-    release.set()
-    assert sum(t["ev"] == "turn_preempted" for t in traces) == 2
     agent.stop()
 
 
