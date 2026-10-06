@@ -125,9 +125,9 @@ class GridLocalizer(Node):
     _amcl: tuple[float, Pose2D] | None = None  # (scan stamp, AMCL's pose at that scan)
     _lost_strikes: int = 0
     _watch_quiet_until: float = 0.0
-    _lost: bool = False  # AMCL's pose fails the scan and no place on the map clearly fits better
+    _lost: bool = False  # the latest status published is 'lost' (set by _publish_status only)
     _search_after: float = 0.0  # the next search while lost, unless the robot comes to rest first
-    _searched_at_rest: bool = False
+    _searched_at: float = 0.0  # when the map-wide search last ran (monotonic)
     _scene_moving_at: float = 0.0  # when consecutive scans last disagreed (monotonic)
     _verdict: str = ""  # the latest 'localized' / 'localized_low_confidence' published
     _confirm_progress: float = 0.0  # metres driven with a doubted pose fitting the scan the whole way
@@ -178,6 +178,7 @@ class GridLocalizer(Node):
         self._scans.clear()
         self._amcl = None
         self._verdict = ""
+        self._lost = False
 
         # Auto-localize state
         self._auto_done = not auto_localize  # Skip if disabled
@@ -469,6 +470,7 @@ class GridLocalizer(Node):
         self.get_logger().info(f"Published status: {status}")
         if status in ("localized", "localized_low_confidence"):
             self._verdict = status
+        self._lost = status == "lost"
 
     EDGE_MARGIN_M = 0.30  # closer to the border than this and the costmap can't see ahead
 
@@ -640,23 +642,22 @@ class GridLocalizer(Node):
         """A new seed or map: forget AMCL's earlier estimate, give the new one time to take, and drop a
         pending stall correction, which belongs to the pose and map before it."""
         self._amcl = None
-        self._lost = False
         self._lost_strikes = 0
-        self._searched_at_rest = False
         self._confirm_progress, self._confirm_from = 0.0, None
         self._watch_quiet_until = time.monotonic() + SETTLE_S
         self._drop_stall_fix()
 
     def _watch_tick(self) -> None:
         """Count AMCL as lost when even the best pose near its own leaves the scan unexplained.
-        Not judged on unexplored floor (the planner crosses it): the surroundings there are not on the map."""
+        Not judged on unexplored floor (the planner crosses it): the surroundings there are not on the map.
+        Once lost, AMCL's pose says nothing about where the robot is, so it is judged anywhere."""
         if self.grid is None or time.monotonic() < self._watch_quiet_until:
             return
         paired = self._scan_for_amcl_pose()
         if paired is None:
             return
         msg, believed = paired
-        if not self.grid.explored(believed.x, believed.y):
+        if not self._lost and not self.grid.explored(believed.x, believed.y):
             self._lost_strikes = 0
             self._confirm_progress, self._confirm_from = 0.0, None
             return
@@ -682,15 +683,14 @@ class GridLocalizer(Node):
         wheels and surroundings both still: a carry with still wheels shows only in the scan."""
         if not self._lost:
             return True
-        at_rest = not self._stalls.wheels_turning(REST_S) and time.monotonic() - self._scene_moving_at >= REST_S
-        fresh_rest = at_rest and not self._searched_at_rest
-        self._searched_at_rest = at_rest
-        return fresh_rest or time.monotonic() >= self._search_after
+        now = time.monotonic()
+        at_rest = not self._stalls.wheels_turning(REST_S) and now - self._scene_moving_at >= REST_S
+        came_to_rest = at_rest and self._scene_moving_at > self._searched_at
+        return came_to_rest or now >= self._search_after
 
     def _found_again(self) -> None:
         """AMCL's pose explains the scan again with no new seed: set back down where it was, or whatever
         hid the surroundings has gone. Doubted until driving confirms it (`_confirm`)."""
-        self._lost = False
         self.get_logger().info("AMCL's pose fits the scan again")
         self._publish_status("localized_low_confidence")
 
@@ -723,7 +723,8 @@ class GridLocalizer(Node):
         crowd around the robot or moved furniture lowers every pose's fit alike, and a look-alike place must
         not become the pose navigation steers by. Until one is found the robot is lost, and says so; the
         memory recorder stops saving views and the UIs show it."""
-        self._search_after = time.monotonic() + RETRY_S
+        self._searched_at = time.monotonic()
+        self._search_after = self._searched_at + RETRY_S
         lost_at = f"{_pose_text(here.x, here.y, here.theta)}, lidar fit {here.fit:.0%}"
         scan = self.latest_scan
         if scan is None:
@@ -748,10 +749,8 @@ class GridLocalizer(Node):
         self._publish_status("localized")
 
     def _declare_lost(self) -> None:
-        if self._lost:
-            return
-        self._lost = True
-        self._publish_status("lost")
+        if not self._lost:
+            self._publish_status("lost")
 
     def _on_stall(self, stall: Stall) -> None:
         claimed = stall.claimed

@@ -119,14 +119,9 @@ export function createNavPanels(root, store) {
   const navLoc = nav.row("localization", `${AMCL_POSE_TOPIC} (covariance) · ${LOCALIZATION_STATUS_TOPIC}`);
   const battery = nav.row("battery", BATTERY_STATE_TOPIC);
 
-  // Localization health: grid_localizer's latched /localization/status is the
-  // verdict (it watches the lidar against the map and says "lost" while the
-  // robot's pose no longer explains the scan). AMCL's pose covariance only
-  // refines a "localized" verdict — the particle filter stays tightly
-  // converged on a stale place when the robot is carried off, so on its own
-  // it reads "confident" exactly when the robot is lost.
-  // A mislocalized robot is exactly what makes goals abort with "start in
-  // lethal space", so this must be visible, not log-only.
+  // Localization health: /localization/status is the verdict; AMCL covariance
+  // only refines "localized" (it stays small through a kidnap, see grid_localizer.py).
+  // A mislocalized robot is what makes goals abort with "start in lethal space".
   const CONFIDENT_VAR = 0.1; // m², same threshold as the mobile app
   const UNCERTAIN_HINT = "The robot may not be where the map thinks — use Locate (or place manually), or remap.";
 

@@ -2291,6 +2291,7 @@ export function createMap(root, opts = {}) {
       if (on) {
         amclPose = null;
         odomAtAmcl = null;
+        lostEl.hidden = true; // the localizer is torn down with the map, so it cannot withdraw its 'lost'
         // The tour records its own memories, in the very frame being built, so
         // the marks stay — but everything tied to the *previous* map goes: its
         // recall verdict and any open card point into a frame that just died.

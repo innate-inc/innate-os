@@ -1,8 +1,8 @@
 """Sim stand-in for mars_nav's grid_localizer. Same contract: lifecycle node named
-navigation_grid_localizer, latched /initialpose, `localize` and
-`localization/hand_placed` Triggers -- but
-"localization" is just the driver's ground-truth odom pose (map == odom in
-sim until AMCL refines it)."""
+navigation_grid_localizer, latched /initialpose and /localization/status, `localize`
+and `localization/hand_placed` Triggers -- but "localization" is just the driver's
+ground-truth odom pose (map == odom in sim until AMCL refines it), so the status is
+always 'localized'."""
 
 import math
 import time
@@ -12,7 +12,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile
-from std_msgs.msg import Int64
+from std_msgs.msg import Int64, String
 from std_srvs.srv import Trigger
 
 POSITION_MATCH_TOLERANCE_M = 0.35
@@ -52,6 +52,7 @@ class GridLocalizerSim(LifecycleNode):
         super().__init__("navigation_grid_localizer")
         self._last_odom = None
         self._pose_pub = None
+        self._status_pub = None
         self._retry_timer = None
         self._localization_started_ns = None
         self._reset_pending = False
@@ -179,6 +180,7 @@ class GridLocalizerSim(LifecycleNode):
     def on_configure(self, state) -> TransitionCallbackReturn:
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._pose_pub = self.create_lifecycle_publisher(PoseWithCovarianceStamped, "/initialpose", latched)
+        self._status_pub = self.create_lifecycle_publisher(String, "/localization/status", latched)
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state) -> TransitionCallbackReturn:
@@ -199,6 +201,7 @@ class GridLocalizerSim(LifecycleNode):
         return response
 
     def _on_hand_placed(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
+        self._publish_status("localized")
         response.success = True
         response.message = "ground truth needs no vouching"
         return response
@@ -210,7 +213,12 @@ class GridLocalizerSim(LifecycleNode):
             return False
         if self._retry_timer is None:
             self._retry_timer = self.create_timer(2.0, self._publish_pose)
+        self._publish_status("localized")
         return True
+
+    def _publish_status(self, status: str) -> None:
+        if self._status_pub is not None and self._status_pub.is_activated:
+            self._status_pub.publish(String(data=status))
 
     def _publish_pose(self) -> bool:
         if self._last_odom is None or self._pose_pub is None:
