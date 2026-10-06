@@ -1041,28 +1041,31 @@ def test_a_turn_waits_out_an_utterance_begun_before_the_last_transcript_landed(a
     agent.stop()
 
 
-def test_talk_that_keeps_reopening_cannot_hold_the_turn_forever(agent_factory, monkeypatch):
-    # Review-found: every reopening inside the transcript grace restarted the per-utterance cap.
-    monkeypatch.setattr("brain_client.brain.agent._MAX_HOLD_SEC", 1.0)
+def test_talk_that_keeps_reopening_holds_the_turn_no_longer_than_the_cap(agent_factory, monkeypatch):
+    # Review-found twice: every reopening inside the transcript grace restarted the per-utterance
+    # cap (an endless hold), and an utterance opened just before the cap ran past it.
+    monkeypatch.setattr("brain_client.brain.agent._MAX_HOLD_SEC", 2.0)
     agent, state = agent_factory()
-    turn_inputs = []
-    answers(agent, Replay(script=lambda request: turn_inputs.append(request.messages[-1].text()) or [call_reply(WAIT)]))
+    started_at = []
+    answers(agent, Replay(script=lambda request: started_at.append(time.monotonic()) or [call_reply(WAIT)]))
     stop = threading.Event()
 
     def chatter():
         while not stop.is_set():
             agent.on_user_speaking(True)
-            time.sleep(0.3)
+            time.sleep(1.0)
             agent.on_user_speaking(False)
             time.sleep(0.2)  # reopens inside every grace window
 
     threading.Thread(target=chatter, daemon=True).start()
+    time.sleep(0.05)
+    held_from = time.monotonic()
     agent.start()
-    deadline = time.time() + 4
-    while not turn_inputs and time.time() < deadline:
+    deadline = time.time() + 6
+    while not started_at and time.time() < deadline:
         time.sleep(0.02)
     stop.set()
-    assert turn_inputs
+    assert started_at and started_at[0] - held_from < 2.5
     agent.stop()
 
 

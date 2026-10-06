@@ -522,16 +522,17 @@ class BrainAgent:
         again if they resumed meanwhile: a turn started in between would only be abandoned once
         the words land."""
         give_up = time.monotonic() + _MAX_HOLD_SEC  # each reopening restarts the per-utterance cap
-        while self._user_holds_floor() and time.monotonic() < give_up:
+        while self._user_holds_floor(give_up):
             self._user_spoke.clear()
-            while self._user_holds_floor():
+            while self._user_holds_floor(give_up):
                 await asyncio.sleep(_HOLD_POLL_SEC)
+            grace = min(_TRANSCRIPT_GRACE_SEC, give_up - time.monotonic())
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._user_spoke.wait(), _TRANSCRIPT_GRACE_SEC)
+                await asyncio.wait_for(self._user_spoke.wait(), grace)
 
-    def _user_holds_floor(self) -> bool:
+    def _user_holds_floor(self, give_up: float) -> bool:
         now = time.monotonic()
-        return now < self._hearing_until and now < self._utterance_opened_at + _MAX_HOLD_SEC
+        return now < self._hearing_until and now < min(self._utterance_opened_at + _MAX_HOLD_SEC, give_up)
 
     async def _pause(self, seconds: float, *, seen: int = 0, user_only: bool = False) -> None:
         """Sleep up to ``seconds``; the queue growing past ``seen`` events ends it early.
