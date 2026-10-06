@@ -761,13 +761,17 @@ class GridLocalizer(Node):
     def _clearly_better(self, estimate: Estimate, here: Pose2D) -> bool:
         return estimate.confident(self.confidence_threshold) and estimate.pose.fit >= here.fit + RECOVERY_MARGIN
 
-    def _amcl_fitted(self, msg: LaserScan) -> Pose2D | None:
-        """AMCL's latest pose fitted to this scan, or None while AMCL has no estimate. Judged on the scan the
-        search used, not the one AMCL's estimate came from: a robot carried with still wheels keeps a stale
-        estimate that still fits its own, older scan."""
+    def _amcl_fitted(self, latest: LaserScan) -> Pose2D | None:
+        """AMCL's pose fitted to a scan taken where that pose claims the robot is, or None when there is none.
+        AMCL re-estimates on every scan while the wheels turn, so a driving robot is judged on the scan its
+        estimate came from; it never does while they are still, so a robot carried off is judged on the latest."""
         if self.grid is None or self._amcl is None:
             return None
-        return refine(self.grid, Scan.from_laser_scan(msg, self.max_range), self._amcl[1])
+        paired = self._scan_for_amcl_pose() if self._stalls.wheels_turning(REST_S) else (latest, self._amcl[1])
+        if paired is None:
+            return None
+        msg, believed = paired
+        return refine(self.grid, Scan.from_laser_scan(msg, self.max_range), believed)
 
     def _declare_lost(self) -> None:
         if not self._lost:
