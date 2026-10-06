@@ -29,6 +29,7 @@ from std_srvs.srv import Trigger
 
 # Pure (ROS-free) auto-stop logic, kept in its own module.
 from manipulation.auto_stop import LearnedStopDetector, StepSignals  # noqa: E402
+from manipulation.subscription_feed import SubscriptionFeed  # noqa: E402
 
 if TYPE_CHECKING:
     from manipulation.lerobot_bridge import LeRobotBridge
@@ -127,15 +128,10 @@ class ManipulationServer(Node):
         self.latest_image2_timestamp = None
         self.latest_joint_timestamp = None
 
-        # Sensor subscriptions are created once on the first behavior or LeRobot client and then kept for
-        # the node's lifetime. They are deliberately NEVER destroyed: under the
-        # MultiThreadedExecutor, destroying a subscription that the executor has already
-        # selected as "ready" races _take_subscription and crashes the process
-        # (InvalidHandle: "destruction was requested"). Idle CPU is instead bounded by
-        # early-returning in the image callbacks when no behavior is running.
-        self._image1_sub = None
-        self._image2_sub = None
-        self._joint_sub = None
+        # Open only while a behavior runs or a LeRobot client is connected: idle, the two raw
+        # camera streams cost the camera container ~0.7 core of serialization for this process.
+        self._sensor_feed: SubscriptionFeed | None = None
+        self._sensor_feed_lock = threading.Lock()
 
         # Publishers
         # Skills input of the cmd_vel priority mux (teleop can override).
@@ -309,8 +305,8 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error executing behavior {skill_dir}: {e}")
             return "FAILURE", f"Exception during execution: {str(e)}"
         finally:
-            self._stop_sensor_subscriptions()
             self.execution_running = False
+            self._stop_sensor_subscriptions()
             self.current_goal_handle = None
             # Drop the jerk reference so the next behavior's first step isn't compared
             # against this one's final action.
@@ -835,26 +831,28 @@ class ManipulationServer(Node):
             return False
 
     def _start_sensor_subscriptions(self):
-        """Create sensor subscriptions once; they live for the node's lifetime.
-
-        They are never destroyed (see __init__) -- destroying a subscription under the
-        MultiThreadedExecutor races _take_subscription and crashes the process. When no
-        behavior is running the image callbacks early-return, so the only idle cost is
-        message deserialization, not the cv_bridge conversion.
-        """
-        if self._image1_sub is not None:
-            return
-        image_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
-        self._image1_sub = self.create_subscription(
-            Image, "/mars/main_camera/left/image_raw", self.image1_callback, image_qos
-        )
-        self._image2_sub = self.create_subscription(Image, "/mars/arm/image_raw", self.image2_callback, image_qos)
-        self._joint_sub = self.create_subscription(JointState, "/mars/arm/state", self.joint_state_callback, 10)
+        with self._sensor_feed_lock:
+            if self._sensor_feed is not None:
+                return
+            image_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
+            self._sensor_feed = SubscriptionFeed(
+                "manipulation_server_sensors",
+                [
+                    (Image, "/mars/main_camera/left/image_raw", self.image1_callback, image_qos),
+                    (Image, "/mars/arm/image_raw", self.image2_callback, image_qos),
+                    (JointState, "/mars/arm/state", self.joint_state_callback, 10),
+                ],
+            )
         self.get_logger().info("Sensor subscriptions started")
 
     def _stop_sensor_subscriptions(self):
-        """Drop cached sensor data when idle. Subscriptions are kept alive (see __init__);
-        the image callbacks early-return while idle so they cost almost nothing."""
+        """Close the sensor feed and drop cached data, unless a behavior or LeRobot client still needs it."""
+        with self._sensor_feed_lock:
+            if self.execution_running or self._bridge_active or self._sensor_feed is None:
+                return
+            self._sensor_feed.close()
+            self._sensor_feed = None
+        self.get_logger().info("Sensor subscriptions stopped")
         self.latest_image1 = None
         self.latest_image2 = None
         self.latest_joint_state = None
@@ -863,8 +861,6 @@ class ManipulationServer(Node):
         self.latest_joint_timestamp = None
 
     def image1_callback(self, msg: Image):
-        if not (self.execution_running or self._bridge_active):
-            return
         try:
             self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             self.latest_image1_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
@@ -872,8 +868,6 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
-        if not (self.execution_running or self._bridge_active):
-            return
         try:
             self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             self.latest_image2_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
@@ -881,8 +875,6 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error converting image2: {e}")
 
     def joint_state_callback(self, msg: JointState):
-        if not (self.execution_running or self._bridge_active):
-            return
         self.latest_joint_state = msg
         self.latest_joint_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
 
@@ -983,11 +975,14 @@ class ManipulationServer(Node):
         bridge.commands_blocked = self.execution_running
         bridge.poll(now)
         active = bridge.active(now)
-        if active != self._bridge_active:
+        was_active = self._bridge_active
+        if active != was_active:
             self.get_logger().info("LeRobot client connected" if active else "LeRobot client idle")
+        self._bridge_active = active
         if active:
             self._start_sensor_subscriptions()
-        self._bridge_active = active
+        elif was_active:
+            self._stop_sensor_subscriptions()
         joint_state = self.latest_joint_state
         if not self._bridge_active or joint_state is None or len(joint_state.position) < 6:
             return
