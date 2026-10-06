@@ -65,6 +65,7 @@ from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
 from brain_client.robot.rest_pose import ArmRestPose
 from brain_client.skills.hot_reload import ReloadCoordinator
+from brain_client.skills.lifecycle import PRIMITIVE_TERMINAL_STATUSES
 from brain_client.skills.roster import SkillRoster
 from brain_client.skills.runner import PrimitiveRunner
 from brain_client.skills.workspace_import import format_load_error, unique_key
@@ -602,7 +603,8 @@ class BrainClientNode(Node):
         )
         if self.state.is_brain_active:
             detail = reason or "triggered manually from the app"
-            self.brain.add_event(f"The user manually ran skill '{primitive_name}' ({status}): {detail}")
+            kind = EventKind.SKILL_RESULT if status in PRIMITIVE_TERMINAL_STATUSES else EventKind.INFO
+            self.brain.add_event(f"The user manually ran skill '{primitive_name}' ({status}): {detail}", kind=kind)
         self.chat.publish_task_status(
             primitive_name=primitive_name,
             primitive_id=primitive_id,

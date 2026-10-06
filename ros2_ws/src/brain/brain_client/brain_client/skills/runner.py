@@ -4,8 +4,8 @@
 
 Owns the action client and the execution state — the current goal handle and
 the running primitive. Terminal results and feedback are reported to the brain
-through the ``on_event`` / ``on_feedback`` callbacks so they land in the agent's
-next turn.
+through the ``on_event`` / ``on_feedback`` callbacks: a result starts a turn at
+once (abandoning one still thinking), feedback waits for the next.
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ from rclpy.action import ActionClient
 from std_srvs.srv import Trigger
 
 from brain_client.core.state import RunningSkill
-from brain_client.skills.lifecycle import PRIMITIVE_LIFECYCLE_STATUSES, decode_substep_feedback
+from brain_client.skills.lifecycle import (
+    PRIMITIVE_LIFECYCLE_STATUSES,
+    PRIMITIVE_TERMINAL_STATUSES,
+    decode_substep_feedback,
+)
 from brain_client.skills.types import SkillResult
 from brain_client.transport.chat import Sender
 
@@ -112,7 +116,7 @@ class PrimitiveRunner:
                     self._state.primitive_running = RunningSkill(
                         primitive_name=primitive_name, skill_id=skill_id, primitive_id=primitive_id, manual=True
                     )
-            elif status in ("completed", "failed", "interrupted"):
+            elif status in PRIMITIVE_TERMINAL_STATUSES:
                 running = self._state.primitive_running
                 if running is None or not running.manual:
                     return
