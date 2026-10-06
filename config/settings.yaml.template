@@ -197,7 +197,7 @@
 #   ros__parameters:
 #     confidence_threshold: 0.75    # evidence share the best pose needs to count as confidently localized
 #     max_range: 12.0               # max lidar range used for matching (m)
-#     auto_recover: true            # relocalize on its own when AMCL has lost the robot
+#     auto_recover: true            # relocalize on its own when AMCL has lost the robot (reported as 'lost' until found)
 #     stall_detection: false        # stop navigation when the wheels spin but the lidar shows the robot standing still
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────

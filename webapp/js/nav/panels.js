@@ -119,15 +119,10 @@ export function createNavPanels(root, store) {
   const navLoc = nav.row("localization", `${AMCL_POSE_TOPIC} (covariance) · ${LOCALIZATION_STATUS_TOPIC}`);
   const battery = nav.row("battery", BATTERY_STATE_TOPIC);
 
-  // Localization health, the mobile app's approach (LocalizationContext):
-  // AMCL's pose covariance is the continuous truth — it streams with every
-  // pose update, so a page opened at any time converges. grid_localizer's
-  // latched /localization/status seeds the row with the latest verdict, even
-  // on a page opened later; covariance then owns it.
-  // A mislocalized robot is exactly what makes goals abort with "start in
-  // lethal space", so this must be visible, not log-only.
-  const CONFIDENT_VAR = 0.1; // m², same thresholds as the mobile app
-  const UNCERTAIN_VAR = 0.5;
+  // Localization health: /localization/status is the verdict; AMCL covariance
+  // only refines "localized" (it stays small through a kidnap, see grid_localizer.py).
+  // A mislocalized robot is what makes goals abort with "start in lethal space".
+  const CONFIDENT_VAR = 0.1; // m², same threshold as the mobile app
   const UNCERTAIN_HINT = "The robot may not be where the map thinks — use Locate (or place manually), or remap.";
 
   /** @type {Record<string, [string, string, string]>} */
@@ -135,8 +130,21 @@ export function createNavPanels(root, store) {
     processing_map: ["processing map…", "", ""],
     localized: ["localized", "ok", ""],
     localized_low_confidence: ["low confidence", "warn", UNCERTAIN_HINT],
+    lost: ["lost", "fail", "The lidar no longer matches the map at the robot's position — it is searching the map for itself."],
     error: ["error", "fail", "Localization failed — see robot logs, then use Locate or Manual placement."],
   };
+  /** grid_localizer's latest verdict; "" until it has spoken */
+  let locStatus = "";
+  let inNavigation = true;
+
+  // Outside navigation mode the localizer is deactivated, so its last verdict
+  // is stale: show a dash, and the verdict again once navigation resumes (the
+  // latched topic does not replay on a mode change).
+  function renderLocalization() {
+    if (!inNavigation || !locStatus) return setLocalization(DASH, "", "");
+    const [text, kind, hint] = LOC_STATES[locStatus] ?? [locStatus, "", ""];
+    setLocalization(text, kind, hint);
+  }
 
   /** @param {string} text @param {string} kind @param {string} hint */
   function setLocalization(text, kind, hint) {
@@ -196,12 +204,11 @@ export function createNavPanels(root, store) {
     if (typeof p?.x === "number" && typeof p?.y === "number") mapXY.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)} m`;
     if (yaw !== null) mapYaw.textContent = `${deg(yaw).toFixed(0)}°`;
     const cov = msg?.pose?.covariance;
-    if (Array.isArray(cov) && cov.length >= 36) {
+    if (inNavigation && locStatus === "localized" && Array.isArray(cov) && cov.length >= 36) {
       const maxVar = Math.max(cov[0], cov[7]); // x/y position variance
       const detail = `position variance ${maxVar.toFixed(2)} m²`;
-      if (maxVar > UNCERTAIN_VAR) setLocalization("lost", "fail", `${detail} — ${UNCERTAIN_HINT}`);
-      else if (maxVar > CONFIDENT_VAR) setLocalization("uncertain", "warn", `${detail} — ${UNCERTAIN_HINT}`);
-      else setLocalization("confident", "ok", detail);
+      if (maxVar > CONFIDENT_VAR) setLocalization("converging", "warn", `${detail} — ${UNCERTAIN_HINT}`);
+      else setLocalization("localized", "ok", detail);
     }
   }, 0, "geometry_msgs/msg/PoseWithCovarianceStamped");
 
@@ -240,15 +247,16 @@ export function createNavPanels(root, store) {
     store.onChange((s) => {
       if (s.mode) navMode.textContent = s.mode;
       if (s.currentMap) navMap.textContent = s.currentMap;
-      // Outside navigation mode the localizer is deactivated and stops
-      // publishing — blank the row rather than pin a stale verdict.
-      if (s.mode && s.mode !== "navigation") setLocalization(DASH, "", "");
+      if (s.mode) {
+        inNavigation = s.mode === "navigation";
+        renderLocalization();
+      }
     }),
     ros.subscribe(LOCALIZATION_STATUS_TOPIC, (msg) => {
       if (typeof msg?.data !== "string" || !msg.data) return;
-      const [text, kind, hint] = LOC_STATES[msg.data] ?? [msg.data, "", ""];
-      setLocalization(text, kind, hint);
-    }, 1000, "std_msgs/msg/String"),
+      locStatus = msg.data;
+      renderLocalization();
+    }, 0, "std_msgs/msg/String"),
     ros.subscribe(BATTERY_STATE_TOPIC, (msg) => {
       const p = msg?.percentage;
       if (typeof p !== "number" || Number.isNaN(p)) return;

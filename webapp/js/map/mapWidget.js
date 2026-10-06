@@ -19,6 +19,7 @@ import {
   LOCALIZE_SERVICE,
   SET_INITIAL_POSE_SERVICE,
   HAND_PLACED_SERVICE,
+  LOCALIZATION_STATUS_TOPIC,
   SCAN_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
   LOCAL_COSTMAP_TOPIC,
@@ -283,9 +284,17 @@ export function createMap(root, opts = {}) {
   const statusEl = document.createElement("div");
   statusEl.className = "map-status mono";
   statusEl.hidden = true;
+  // grid_localizer's "lost" gets its own line: goal progress keeps writing the
+  // status line, and the robot stays lost until the localizer says otherwise.
+  const lostEl = document.createElement("div");
+  lostEl.className = "map-status mono";
+  lostEl.dataset.kind = "warn";
+  lostEl.textContent = "Robot lost — searching the map for its position…";
+  lostEl.hidden = true;
   const controls = document.createElement("div");
   controls.className = "map-controls";
   controls.appendChild(controlsRow);
+  controls.appendChild(lostEl);
   controls.appendChild(statusEl);
   root.appendChild(controls);
   const unadvertiseKeepoutEdit = opts.keepoutEditing
@@ -1125,6 +1134,19 @@ export function createMap(root, opts = {}) {
       }
     }
     draw();
+  }
+
+  // grid_localizer's verdict, surfaced where the robot is drawn: the lost line
+  // while the robot's pose no longer explains the lidar, then how the search went.
+  /** @param {{ data?: unknown }} msg */
+  function onLocalizationStatus(msg) {
+    const status = msg?.data;
+    if (typeof status !== "string") return;
+    const wasLost = !lostEl.hidden;
+    lostEl.hidden = status !== "lost";
+    if (!wasLost || !status.startsWith("localized")) return;
+    if (status === "localized") setStatus("ok", "Relocalized", true);
+    else setStatus("warn", "Relocalized with low confidence — check the robot's position on the map", true);
   }
 
   /** @param {any} msg geometry_msgs/PoseWithCovarianceStamped (map frame) */
@@ -2218,6 +2240,7 @@ export function createMap(root, opts = {}) {
   // Always on (a tiny 1 Hz JSON), not layer-gated: highlightMemory/focusMemory
   // must keep working from the sidebar reel while the layer chip is off.
   const unsubMemories = ros.subscribe(MEMORY_POSITIONS_TOPIC, onMemories, 0, "std_msgs/msg/String");
+  const unsubLocalization = ros.subscribe(LOCALIZATION_STATUS_TOPIC, onLocalizationStatus, 0, "std_msgs/msg/String");
 
   return {
     /** Re-measure and redraw. The host reparents between the thumbnail and the
@@ -2268,6 +2291,7 @@ export function createMap(root, opts = {}) {
       if (on) {
         amclPose = null;
         odomAtAmcl = null;
+        lostEl.hidden = true; // the localizer is torn down with the map, so it cannot withdraw its 'lost'
         // The tour records its own memories, in the very frame being built, so
         // the marks stay — but everything tied to the *previous* map goes: its
         // recall verdict and any open card point into a frame that just died.
@@ -2360,6 +2384,7 @@ export function createMap(root, opts = {}) {
       for (const unsub of unsubPlans) unsub();
       unsubGoal();
       unsubMemories();
+      unsubLocalization();
       unsubMappingPose?.();
       unadvertiseKeepoutEdit?.();
       for (const unsub of Object.values(layerUnsubs)) unsub();
