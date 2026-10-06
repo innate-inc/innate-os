@@ -377,7 +377,11 @@ class BrainClientNode(Node):
         # is the swap at its cheapest. A model it cannot reach leaves the robot's setting in
         # place and says so, rather than booting a brain that cannot think.
         if self.state.current_directive is not None:
-            ok, detail = self.brain.use_model(self.state.current_directive.model, agent=True)
+            ok, detail = self.brain.use_model(
+                self.state.current_directive.model,
+                agent=True,
+                model_extra_body=self.state.current_directive.model_extra_body,
+            )
             if not ok:
                 self.get_logger().error(f"[Brain] {self.state.current_directive.id}: {detail}")
         self.gaze.update()

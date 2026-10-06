@@ -84,7 +84,12 @@ class Llm:
             from innate_proxy import ProxyClient
 
             refresh_keys()
-            self._route = configure(self.model, ProxyClient(), base_url=self._base_url, extra_body=self._extra_body)
+            # Pinned OpenAI-compatible skills share the server selected in robot
+            # settings, unless they explicitly name a different endpoint.
+            base_url = self._base_url
+            if not base_url and self.model.startswith("openai-chat:"):
+                base_url = robot_default()._base_url
+            self._route = configure(self.model, ProxyClient(), base_url=base_url, extra_body=self._extra_body)
         return self._route.provider
 
 

@@ -1292,3 +1292,152 @@ def test_a_key_saved_in_settings_reaches_the_process_and_a_cleared_one_leaves_it
     robot_llm.refresh_keys()
     assert "ANTHROPIC_API_KEY" not in os.environ
     assert os.environ["OPENAI_API_KEY"] == "from-the-container"
+
+
+def test_agent_request_extras_are_isolated_and_rolled_back(agent_factory, monkeypatch):
+    agent, _ = agent_factory()
+    from brain_client.brain import agent as agent_module
+
+    seen = []
+
+    def configure(spec, proxy, **kwargs):
+        seen.append(kwargs["extra_body"])
+        provider = None if spec == "openai-chat:unavailable" else Replay([reply(Text("ok"))])
+        return Llm(spec, provider, Backend.DIRECT)
+
+    monkeypatch.setattr(agent_module, "configure", configure)
+    agent._extra_body = '{"service_tier":"ultrafast"}'
+    extra = '{"chat_template_kwargs":{"enable_thinking":false}}'
+    assert agent.use_model("openai-chat:qwen", agent=True, model_extra_body=extra)[0]
+    original = agent._context
+    assert seen[-1] == extra
+    assert agent.use_model("openai-chat:qwen", agent=True, model_extra_body="{}")[0]
+    assert agent._context is not original  # same model, changed request settings
+    assert not agent.use_model("openai-chat:unavailable", agent=True, model_extra_body=extra)[0]
+    assert agent._agent_extra_body == "{}"
+    assert agent.use_model(None, agent=True)[0]
+    assert seen[-1] == agent._extra_body
+    assert agent._agent_extra_body is None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_skill_result_preempts_inflight_supervision(agent_factory, status):
+    agent, state = agent_factory()
+    first, fresh, release = threading.Event(), threading.Event(), threading.Event()
+    inputs = []
+
+    def script(request):
+        inputs.append(request.messages[-1].text())
+        if len(inputs) == 1:
+            first.set()
+            release.wait(timeout=5)
+        else:
+            fresh.set()
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    agent.start()
+    try:
+        assert first.wait(timeout=3)
+        agent.on_skill_event(status, "pickup", "terminal result")
+        assert fresh.wait(timeout=0.8)  # no one-second feedback debounce
+        assert f"Skill pickup {status}: terminal result" in inputs[1]
+    finally:
+        release.set()
+        agent.stop()
+
+
+def test_skill_result_wakes_feedback_debounce(agent_factory):
+    agent, state = agent_factory()
+    future = asyncio.run_coroutine_threadsafe(agent._pause(10, user_only=True), agent._runtime.loop)
+    time.sleep(0.05)
+    agent.on_skill_feedback("pickup", "working")
+    time.sleep(0.05)
+    assert not future.done()
+    agent.on_skill_event("completed", "pickup")
+    future.result(timeout=0.5)
+
+
+def test_completion_response_race_cannot_commit_stale_tools(agent_factory):
+    agent, state = agent_factory()
+
+    def script(request):
+        agent._events.append(Event("Skill pickup completed", kind=EventKind.SKILL_RESULT))
+        return [call_reply(WAIT)]
+
+    answers(agent, Replay(script=script))
+    run_turn(agent)
+    assert agent._context.history == ()
+    assert agent._events[-1].kind == EventKind.SKILL_RESULT
+
+
+def test_short_agent_history_keeps_results_but_only_current_images():
+    replay = Replay([reply(Text("ok"))])
+    context = make_context(replay, max_history=100, max_image_turns=20)
+    for i in range(20):
+        context.absorb(ChatContext.user_message(f"observation {i}", [JPEG]), call_reply("wait", call_id=str(i)))
+        context.add_tool_outcomes([(ToolCall(str(i), "wait", {}), "waiting")])
+    context.set_history_limits(12, 0)
+    assert context.history_len <= 12
+    assert context.history[0].role == Role.USER
+    assert context.image_turn_count == 0
+    current = ChatContext.user_message("Skill pick_sock_qwen completed: held", [JPEG, JPEG])
+    context.generate(current, [], "S")
+    assert sum(images_in(m) for m in replay.last.messages) == 2
+    assert list(replay.last.messages[-1].texts()) == ["Skill pick_sock_qwen completed: held"]
+    calls = {c.id for m in replay.last.messages for c in m.calls()}
+    for m in replay.last.messages:
+        for part in m.parts:
+            if isinstance(part, ToolResult):
+                assert part.call_id in calls
+    context.absorb(current, reply(Text("ok")))
+    assert context.image_turn_count == 0
+    context.set_history_limits(60, 2)
+    context.absorb(ChatContext.user_message("other agent", [JPEG]), reply(Text("ok")))
+    assert context.image_turn_count == 1
+
+
+
+def test_minimal_system_prompt_omits_generic_identity_and_running_boilerplate():
+    directive = "Pick socks silently; wait for skill results."
+    assert build_system_prompt(directive, running_guidance="generic guidance", minimal=True) == directive
+    normal = build_system_prompt(directive, running_guidance="generic guidance")
+    assert directive in normal
+    assert "Your hardware" in normal
+    assert "generic guidance" in normal
+
+
+@pytest.mark.parametrize("wake", ["completed", "failed", "cancelled", "user"])
+def test_completion_only_agent_skips_feedback_inference_and_wakes(agent_factory, wake):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(
+        wait_for_skill_completion=True, _turn_intervals=(None, None), get_prompt=lambda: "Collect socks."
+    )
+    state.primitive_running = RunningSkill("pickup", "innate-os/pickup")
+    called = threading.Event()
+    answers(agent, Replay(script=lambda _: (called.set(), [call_reply(WAIT)])[1]))
+    agent.start()
+    try:
+        agent.on_skill_feedback("pickup", "working")
+        agent.add_event("motion nearby")
+        assert not called.wait(timeout=0.15)
+        if wake == "user":
+            agent.on_user_message("stop picking")
+        else:
+            state.primitive_running = None
+            agent.on_skill_event(wake, "pickup", "result")
+        assert called.wait(timeout=0.8)
+    finally:
+        agent.stop()
+
+
+def test_completion_wait_is_cancellable_and_opt_in(agent_factory):
+    agent, state = agent_factory()
+    state.primitive_running = RunningSkill("pickup", "innate-os/pickup")
+    # Default agents keep ordinary supervision.
+    asyncio.run_coroutine_threadsafe(agent._await_skill_completion(), agent._runtime.loop).result(timeout=0.5)
+    state.current_directive = SimpleNamespace(wait_for_skill_completion=True)
+    future = asyncio.run_coroutine_threadsafe(agent._await_skill_completion(), agent._runtime.loop)
+    time.sleep(0.05)
+    assert not future.done()
+    assert future.cancel()
