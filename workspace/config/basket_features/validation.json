@@ -401,5 +401,536 @@
     "Pose is in camera coordinates; transform to base/arm and closed-loop integration not implemented.",
     "No deployment or performance benchmark on the larger API computer yet.",
     "Diagnostic HTTP service was started for checks and shut down afterward."
-  ]
+  ],
+  "calibrated_reference_plane_fix": {
+    "date": "2026-10-07",
+    "root_cause": "Free four-corner homography encoded annotation inconsistency as non-metric physical feature coordinates.",
+    "change": "Fit calibrated rigid reference plane, then intersect undistorted feature rays with that plane.",
+    "pose_rms_limit_px": 4,
+    "focused_tests_passed": 51,
+    "physical_drop_verified": false,
+    "saved_frame_comparison": [
+      {
+        "group": "final-close-regression",
+        "frame": "20261007T155350_060496053_000_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 69,
+          "rms": 2.331203087897138,
+          "center": [
+            0.03195283937956555,
+            0.21159803274898673,
+            0.22587003537036507
+          ],
+          "yaw_camera_deg": 6.795785102545862
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 69,
+          "rms": 1.5164492722899865,
+          "center": [
+            0.02833324361314904,
+            0.20688702068231923,
+            0.21905384199031505
+          ],
+          "yaw_camera_deg": 8.0497717008846
+        }
+      },
+      {
+        "group": "live-api-rootsift-angle",
+        "frame": "20261007T155032_695101105_000_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 18,
+          "rms": 1.873297115716895,
+          "center": [
+            -0.034907671585861944,
+            0.23641722052852374,
+            0.5524106853698382
+          ],
+          "yaw_camera_deg": 30.74993496881559
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "opposite-diagonal-long",
+          "inliers": 16,
+          "rms": 1.6808664862374956,
+          "center": [
+            -0.011450675062149635,
+            0.23956823030436697,
+            0.5470348470003511
+          ],
+          "yaw_camera_deg": 32.48939668260064
+        }
+      },
+      {
+        "group": "live-api-rootsift-angle",
+        "frame": "20261007T155034_671665187_001_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "opposite-diagonal-long",
+          "inliers": 14,
+          "rms": 3.838133382758252,
+          "center": [
+            -0.02475027153903211,
+            0.22870006823893663,
+            0.530865072218168
+          ],
+          "yaw_camera_deg": 28.637268799371085
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "opposite-diagonal-long",
+          "inliers": 14,
+          "rms": 1.7462640079661365,
+          "center": [
+            -0.011655496206072659,
+            0.24053331257211324,
+            0.5490524891814299
+          ],
+          "yaw_camera_deg": 29.97675453083269
+        }
+      },
+      {
+        "group": "live-api-rootsift-angle",
+        "frame": "20261007T155038_179795186_002_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 21,
+          "rms": 2.0463289539097436,
+          "center": [
+            -0.035045637318273024,
+            0.23620092169152293,
+            0.5533967206655774
+          ],
+          "yaw_camera_deg": 31.05825549488879
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 21,
+          "rms": 1.4668988891104826,
+          "center": [
+            -0.03829461312653997,
+            0.23144675034000414,
+            0.5413415387168261
+          ],
+          "yaw_camera_deg": 33.231097443177646
+        }
+      },
+      {
+        "group": "final-live-checked",
+        "frame": "20261007T155602_502139390_000_input.jpg",
+        "before": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        }
+      },
+      {
+        "group": "final-live-checked",
+        "frame": "20261007T155604_357453140_001_input.jpg",
+        "before": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        }
+      },
+      {
+        "group": "final-live-checked",
+        "frame": "20261007T155607_117901572_002_input.jpg",
+        "before": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": false,
+          "usable_pose": false,
+          "reference": null,
+          "inliers": null,
+          "rms": null,
+          "center": null,
+          "yaw_camera_deg": null
+        }
+      },
+      {
+        "group": "final-earlier-view",
+        "frame": "20261007T155352_403108706_000_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "front",
+          "inliers": 193,
+          "rms": 1.958416529437262,
+          "center": [
+            0.09581625251992426,
+            0.17542523276536454,
+            0.5556042108867209
+          ],
+          "yaw_camera_deg": 3.253955226524801
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "front",
+          "inliers": 193,
+          "rms": 1.0164013812490276,
+          "center": [
+            0.09527635804409978,
+            0.17601267310958207,
+            0.5551227349976345
+          ],
+          "yaw_camera_deg": 2.7457652795143193
+        }
+      },
+      {
+        "group": "recent-failure",
+        "frame": "20261007T163104_314130826_000_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": false,
+          "reference": "close-long",
+          "inliers": 72,
+          "rms": 6.888042740356539,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 72,
+          "rms": 2.2282241122961004,
+          "center": [
+            -0.04330865131349209,
+            0.08614570993148991,
+            0.26054678604601667
+          ],
+          "yaw_camera_deg": -21.361011270299706
+        }
+      },
+      {
+        "group": "recent-failure",
+        "frame": "20261007T162608_334142666_000_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 61,
+          "rms": 2.7138783398768758,
+          "center": [
+            -0.05148359161786659,
+            0.08399246268343308,
+            0.2669667122750742
+          ],
+          "yaw_camera_deg": -24.097565330091427
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 61,
+          "rms": 1.3264596115413159,
+          "center": [
+            -0.05500507074350248,
+            0.08488657155900736,
+            0.26256620158467436
+          ],
+          "yaw_camera_deg": -23.96912094447273
+        }
+      },
+      {
+        "group": "recent-failure",
+        "frame": "20261007T162613_060550957_001_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": false,
+          "reference": "close-long",
+          "inliers": 77,
+          "rms": 6.440579641578119,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 77,
+          "rms": 2.0286733832240786,
+          "center": [
+            -0.054382570786581146,
+            0.08548084991080919,
+            0.2616037146541862
+          ],
+          "yaw_camera_deg": -24.289843949354154
+        }
+      },
+      {
+        "group": "recent-failure",
+        "frame": "20261007T162621_397299996_002_input.jpg",
+        "before": {
+          "detected": true,
+          "usable_pose": false,
+          "reference": "close-long",
+          "inliers": 73,
+          "rms": 4.831883415548654,
+          "center": null,
+          "yaw_camera_deg": null
+        },
+        "after": {
+          "detected": true,
+          "usable_pose": true,
+          "reference": "close-long",
+          "inliers": 73,
+          "rms": 1.6309765543431431,
+          "center": [
+            -0.05424841098761336,
+            0.08497443178528719,
+            0.26241430812106625
+          ],
+          "yaw_camera_deg": -23.94825188765532
+        }
+      }
+    ],
+    "fresh_stationary_results": [
+      {
+        "frame": "20261007T164235_976856552_000.json",
+        "detected": true,
+        "pose_ambiguous": false,
+        "pose": {
+          "reprojection_rms_px": 2.1456174437994364,
+          "face_center_camera_m": [
+            -0.035663661369856825,
+            0.08583299845732173,
+            0.258765751855133
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.035468039732816266,
+            0.013375741164015867,
+            0.22485546436436119
+          ],
+          "rim_forward_depth_m": 0.22485546436436119,
+          "rim_range_m": 0.22802822664900038,
+          "rim_right_offset_m": -0.035468039732816266,
+          "face_normal_yaw_camera_deg": -19.425946428177372,
+          "face_normal_camera": [
+            -0.3041691202093521,
+            -0.40446913623432923,
+            0.8624881820320347
+          ],
+          "rotation_vector": [
+            0.4345901494126312,
+            -0.30463570684256186,
+            -0.06525375286534266
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.27362176726025694,
+              0.04508118167031905,
+              0.1557355171198298
+            ],
+            [
+              0.20268568779462443,
+              -0.018329699342287314,
+              0.29397541160889257
+            ],
+            [
+              0.1114349517318188,
+              -0.13967044021258607,
+              0.5527218662185029
+            ],
+            [
+              -0.3648725033230626,
+              -0.0762595591999797,
+              0.41448197172944024
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            -0.0608878758612236,
+            0.0167598876580334,
+            0.21747780225341354
+          ],
+          "nearest_outer_rim_range_m": 0.226461523738971,
+          "basket_center_camera_m": [
+            -0.08128902940125965,
+            0.025162628022172347,
+            0.3881389791599382
+          ]
+        }
+      },
+      {
+        "frame": "20261007T164240_931871825_001.json",
+        "detected": true,
+        "pose_ambiguous": false,
+        "pose": {
+          "reprojection_rms_px": 2.1561475588227323,
+          "face_center_camera_m": [
+            -0.03531951798712733,
+            0.08549699827825388,
+            0.25855608294406424
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.03515628399443004,
+            0.013215057737878025,
+            0.2242735155609
+          ],
+          "rim_forward_depth_m": 0.2242735155609,
+          "rim_range_m": 0.2273965959229771,
+          "rim_right_offset_m": -0.03515628399443004,
+          "face_normal_yaw_camera_deg": -19.322103889720655,
+          "face_normal_camera": [
+            -0.30192453487072984,
+            -0.40909067060711235,
+            0.8610960448552278
+          ],
+          "rotation_vector": [
+            0.4396812077601689,
+            -0.3021179727359412,
+            -0.06592252946173147
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.2734886952278381,
+              0.04512189544362412,
+              0.15586580062107142
+            ],
+            [
+              0.20317612723897804,
+              -0.018691779967868083,
+              0.2926812305007286
+            ],
+            [
+              0.11259876677775908,
+              -0.1414189811500018,
+              0.5510100439572969
+            ],
+            [
+              -0.3640660556890571,
+              -0.07760530573850957,
+              0.41419461407763974
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            -0.06010113068448841,
+            0.01655455810551767,
+            0.21711368382521518
+          ],
+          "nearest_outer_rim_range_m": 0.22588614611741556,
+          "basket_center_camera_m": [
+            -0.0806081982177368,
+            0.02413339768718703,
+            0.3877204896723484
+          ]
+        }
+      },
+      {
+        "frame": "20261007T164250_822321717_002.json",
+        "detected": true,
+        "pose_ambiguous": false,
+        "pose": {
+          "reprojection_rms_px": 2.1646192090822605,
+          "face_center_camera_m": [
+            -0.03569771819899378,
+            0.0857032654340894,
+            0.2586075850054354
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.035197236306760644,
+            0.013599692353892703,
+            0.22395467362782848
+          ],
+          "rim_forward_depth_m": 0.22395467362782848,
+          "rim_range_m": 0.2271111906434856,
+          "rim_right_offset_m": -0.035197236306760644,
+          "face_normal_yaw_camera_deg": -19.347308580068002,
+          "face_normal_camera": [
+            -0.3014606903442495,
+            -0.41471725375815627,
+            0.8585633649373013
+          ],
+          "rotation_vector": [
+            0.4454330491300167,
+            -0.3024755611500194,
+            -0.06249244009423262
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.2735617568348301,
+              0.044902177256535225,
+              0.155379825524873
+            ],
+            [
+              0.20316728422130878,
+              -0.017702792548749832,
+              0.29252952173078395
+            ],
+            [
+              0.11272907711803393,
+              -0.14211796867619672,
+              0.5500985312119744
+            ],
+            [
+              -0.36399996393810485,
+              -0.07951299887091165,
+              0.4129488350060634
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            -0.0601480184857735,
+            0.01687627680839712,
+            0.2167766083092768
+          ],
+          "nearest_outer_rim_range_m": 0.22559851674324502,
+          "basket_center_camera_m": [
+            -0.0809168217506312,
+            0.023495677370365967,
+            0.38739208974603057
+          ]
+        }
+      }
+    ]
+  }
 }

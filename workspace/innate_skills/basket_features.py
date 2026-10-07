@@ -144,6 +144,32 @@ def pose_candidates(object_xy, image_xy, k, distortion, width, height):
     return sorted(results, key=lambda p: p["reprojection_rms_px"])
 
 
+def reference_plane_mapping(quad_raw, k, distortion, width, height):
+    """Calibrate the reference plane before assigning physical feature coordinates.
+
+    A free four-corner homography fits annotation error exactly, including
+    non-metric shear/perspective distortion. Use a rigid rectangular pose under
+    the known camera instead, then intersect undistorted feature rays with it.
+    Corner RMS is reported as annotation/model-fit evidence, not hidden.
+    """
+    solutions = pose_candidates(
+        face_corners(width, height), quad_raw, k, distortion, width, height
+    )
+    if not solutions:
+        raise ValueError("Reference corners do not define a forward camera plane")
+    pose = solutions[0]
+    rotation = cv2.Rodrigues(np.asarray(pose["rotation_vector"]))[0]
+    translation = np.asarray(pose["face_center_camera_m"])
+    projection = k @ np.column_stack((rotation[:, :2], translation))
+    try:
+        inverse = np.linalg.inv(projection)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("Reference plane projects to a degenerate image") from exc
+    if not np.isfinite(inverse).all():
+        raise ValueError("Reference plane mapping is nonfinite")
+    return inverse, pose["reprojection_rms_px"]
+
+
 def add_basket_geometry(pose, face_width, height, depth):
     """Extrude the matched exterior face into the user-measured rectangular box.
 
@@ -224,11 +250,8 @@ class BasketDetector:
                 raise ValueError("Reference has too few features: " + ref["name"])
             origin = np.asarray(ref["crop_origin_px"], np.float32)
             ref_k = self.camera.scaled(ref["source_image_size"])
-            corrected_q = cv2.undistortPoints(
-                (q + origin).reshape(-1, 1, 2), ref_k, self.camera.distortion, P=ref_k
-            ).reshape(-1, 2)
-            to_metric = cv2.getPerspectiveTransform(
-                corrected_q.astype(np.float32), corners
+            to_metric, corner_rms = reference_plane_mapping(
+                q + origin, ref_k, self.camera.distortion, width, height
             )
             pts = np.array([p.pt for p in kp], np.float32) + origin
             pts = cv2.undistortPoints(
@@ -238,6 +261,7 @@ class BasketDetector:
                 dict(
                     ref,
                     descriptor=rootsift(desc),
+                    reference_corner_rms_px=corner_rms,
                     metric_xy=transform(pts, to_metric),
                     corners=corners,
                 )
@@ -348,6 +372,7 @@ class BasketDetector:
                     pose = None
                 candidate = {
                     "reference": ref["name"],
+                    "reference_corner_rms_px": ref["reference_corner_rms_px"],
                     "face_width_m": ref["width_m"],
                     "face_height_m": ref["height_m"],
                     "inliers": count,

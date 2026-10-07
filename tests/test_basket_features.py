@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "workspace/innate_skills"))
 from basket_features import (  # noqa: E402 - import from the accompanying checkout/package
     BasketDetector,
+    reference_plane_mapping,
+    transform,
     Camera,
     face_corners,
     pose_candidates,
@@ -59,6 +61,50 @@ class GeometryTests(unittest.TestCase):
                         solutions[0]["face_center_camera_m"], t, atol=1e-5
                     )
                     self.assertLess(solutions[0]["reprojection_rms_px"], 1e-4)
+
+    def test_calibrated_reference_plane_preserves_known_metric_points(self):
+        corners = face_corners(0.5, 0.16)
+        for yaw in (-35, 0, 35):
+            pixels = self.project(self.xy, yaw, [0.04, 0.05, 0.7])
+            quad = self.project(corners, yaw, [0.04, 0.05, 0.7])
+            mapping, rms = reference_plane_mapping(quad, self.k, self.d, 0.5, 0.16)
+            undistorted = cv2.undistortPoints(
+                pixels.reshape(-1, 1, 2), self.k, self.d, P=self.k
+            ).reshape(-1, 2)
+            np.testing.assert_allclose(
+                transform(undistorted, mapping), self.xy, atol=1e-6
+            )
+            self.assertLess(rms, 1e-4)
+
+    def test_failed_live_frame_reference_warp_regression(self):
+        data = json.loads(
+            (ROOT / "tests/fixtures/basket_pose_reference_warp.json").read_text()
+        )
+        rk = np.array(data["reference_camera_matrix"])
+        qk = np.array(data["query_camera_matrix"])
+        dist = np.array(data["distortion"])
+        quad = np.array(data["reference_quad_px"])
+        points = np.array(data["reference_points_px"])
+        query = np.array(data["query_points_px"])
+        undistorted = cv2.undistortPoints(
+            points.reshape(-1, 1, 2), rk, dist, P=rk
+        ).reshape(-1, 2)
+        mapping, reference_rms = reference_plane_mapping(quad, rk, dist, 0.5, 0.16)
+        metric = transform(undistorted, mapping)
+        result = pose_candidates(metric, query, qk, dist, 0.5, 0.16)
+        self.assertGreater(reference_rms, 4)  # annotation inconsistency is visible
+        self.assertLess(result[0]["reprojection_rms_px"], 2.5)
+        self.assertGreater(result[0]["face_center_camera_m"][2], 0.24)
+        self.assertLess(result[0]["face_center_camera_m"][2], 0.28)
+        # Reproduce the exact old defect on the same unchanged matches.
+        uq = cv2.undistortPoints(quad.reshape(-1, 1, 2), rk, dist, P=rk).reshape(-1, 2)
+        free_warp = cv2.getPerspectiveTransform(
+            uq.astype(np.float32), face_corners(0.5, 0.16)
+        )
+        rejected = pose_candidates(
+            transform(undistorted, free_warp), query, qk, dist, 0.5, 0.16
+        )
+        self.assertGreater(rejected[0]["reprojection_rms_px"], 6)
 
     def test_partial_visible_face_still_has_metric_correspondences(self):
         xy = self.xy[self.xy[:, 1] < 0.02]

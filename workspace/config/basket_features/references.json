@@ -287,5 +287,5 @@
       "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
     }
   ],
-  "metric_accuracy": "Unverified: user dimensions plus manually annotated nonplanar woven faces."
+  "metric_accuracy": "Unverified: user dimensions and manually annotated reference corners; calibrated plane mapping removes free-warp metric distortion."
 }

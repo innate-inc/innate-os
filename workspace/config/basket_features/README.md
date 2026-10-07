@@ -78,7 +78,12 @@ freshness checks; physical accuracy and a complete drop still need verification.
 
 Eight manually masked vertical-face references exclude the floor, people,
 background lettering, top opening and contents. Full-resolution RootSIFT
-features use exact descriptor matching in both directions. A 0.8 descriptor
+features use exact descriptor matching in both directions. Reference corners
+are first fitted as a rigid rectangle using the camera calibration. Feature
+rays are then intersected with that fitted plane to obtain metric coordinates;
+a free four-corner warp must not be used for metric coordinates, because it
+bakes annotation inconsistency into their physical geometry.
+`reference_corner_rms_px` exposes the reference annotation fit. A 0.8 descriptor
 ratio proposes correspondences; a homography must retain at least 12 unique
 inliers, 45% of proposed matches and 12% of the reference face area. Planar PnP
 plus nonlinear refinement uses live-calibration lens distortion. Metric output
@@ -87,9 +92,12 @@ confidence score, temporal smoothing or stale-pose reuse is used.
 
 The camera calibration is a snapshot of MARS-47's published left CameraInfo,
 with independent x/y scaling for the native feed. The reference quadrilaterals
-are manually annotated. Real wicker sides taper, curve and deform, so the
-rigid rectangular model introduces metric bias even with a small reprojection
-error. `metric_accuracy_verified` remains false.
+are manually annotated, and their corners are not exact metrology. The previous
+free-warp mapping created a reproducible metric distortion on the failing close
+view; correcting that mapping reduced its fit error from 6.89 to 2.23 px with
+unchanged matches and the unchanged 4 px limit. A small residual does not prove
+physical accuracy; annotation, calibration and measured dimensions still need
+physical validation. `metric_accuracy_verified` remains false.
 
 ## Validation scope
 
