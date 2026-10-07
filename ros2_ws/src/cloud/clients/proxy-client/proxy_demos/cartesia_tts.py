@@ -45,7 +45,7 @@ async def main() -> None:
     print(f'▶ Synthesising: "{text}"')
 
     request_json = {
-        "model_id": "sonic-2",
+        "model_id": "sonic-3.6",
         "transcript": text,
         "voice": {"mode": "id", "id": VOICE_ID},
         "output_format": {
