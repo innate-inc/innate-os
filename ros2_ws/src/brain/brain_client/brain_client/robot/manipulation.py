@@ -144,10 +144,6 @@ class Manipulation:
     # Pose samples arrive slower and less evenly than the slew loop ticks; an
     # unsmoothed loop reaches each target in one tick and then stalls.
     STREAM_POSE_SMOOTHING_S = 0.1
-    # A new IK solution this far from the streamed target is another elbow or
-    # wrist branch, not the hand's motion: recorded phone teleop never moved a
-    # joint more than 0.55 rad per sample; other branches sit a median 1.6 away.
-    STREAM_MAX_JUMP_RAD = 0.8
     # A streamed pose the IK lands further than this from is out of reach.
     STREAM_REACH_TOLERANCE_M = 0.005
 
@@ -599,26 +595,33 @@ class Manipulation:
         joint limits allow, handed to :meth:`stream_joints` with ``grip`` (j6
         radians; None keeps the standing grip). True when the pose itself is
         reached; False when it is out of reach (the arm goes as near as it can)
-        or the IK gave no answer within one stream tick, or only one on another
-        branch (the arm stays)."""
+        or the IK gave no answer within one stream tick (the arm holds, the
+        grip still applies).
+
+        No guard against far answers: /ik_stream descends from the current
+        posture, so it cannot hop IK branches, and the slew loop's speed clamp
+        turns a far answer into a ramp. A guard here froze the arm for good
+        once one fast swing was refused."""
         reply = self._ask_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S, stream=True)
-        if reply is None or self._branch_jump(reply.position):
+        if reply is None:
+            if grip is not None:
+                self._hold_arm_with_grip(grip)
             return False
         joints = list(reply.position)
         self.stream_joints(joints if grip is None else [*joints, grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
         return bool(reply.effort) and reply.effort[0] <= self.STREAM_REACH_TOLERANCE_M  # effort[0]: the miss (m)
 
-    def _branch_jump(self, joints: Sequence[float]) -> bool:
-        """Whether ``joints`` lie more than STREAM_MAX_JUMP_RAD from where the
-        stream is heading (or, with no stream running, from where the arm is)."""
+    def _hold_arm_with_grip(self, grip: float) -> None:
+        """Stream ``grip`` while the arm holds where the stream is heading (or,
+        with none running, where it is)."""
         with self._stream_lock:
-            reference = self._stream_target
-        if reference is None:
+            heading = self._stream_target
+        if heading is None:
             state = self._arm_state
             if state is None:
-                return False  # stream_joints refuses to start without a measurement
-            reference = list(state.position)
-        return any(abs(a - b) > self.STREAM_MAX_JUMP_RAD for a, b in zip(joints, reference[:5], strict=True))
+                return  # stream_joints refuses to start without a measurement
+            heading = list(state.position)
+        self.stream_joints([*heading[:5], grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
 
     def stream_stop(self) -> None:
         """Stop streaming; the arm holds its current position. Idempotent.
