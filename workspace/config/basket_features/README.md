@@ -71,8 +71,8 @@ Coordinates are optical-camera coordinates: **x right, y down, z forward**.
 
 Do not interpret camera-frame values as wheel clearance or arm coordinates.
 A motion consumer would need the current camera-to-base transform, freshness
-checks at time of use, and physically verified accuracy. That integration is
-not included in this diagnostic.
+checks at time of use, and physically verified accuracy. The separate experimental motion skill below supplies the transform and
+freshness checks; physical accuracy and a complete drop still need verification.
 
 ## How it works
 
@@ -103,3 +103,56 @@ measurement are recorded separately with the session evidence. The initial
 SIFT matcher failed the new angled view; RootSIFT and mutual matching recovered
 it without adding that test image as a reference. Broad lighting, other similar
 baskets, arbitrary views, and robot-motion performance remain unverified.
+
+## Feature-guided sock-drop skill (experimental)
+
+`innate-os/drop_in_box_features` is a separate alternative to
+`innate-os/drop_in_box_aruco`. Start holding a sock, with this basket visible
+in the main camera and a clear approach path. It does not search the room or
+plan around obstacles. The original ArUco skill is unchanged.
+
+The skill uses full-resolution RootSIFT locally by default. To use the same
+HTTP perception service on another computer, set `BASKET_POSE_API_URL` in the
+skills-server process environment to its base URL, for example
+`http://inference-host:9071`. Configure the environment before starting the
+server; this change does not provision a remote service or restart ROS.
+An API error is retried without silently switching backends.
+
+The robot stops and settles before every image. Acquisition checks current
+CameraInfo and requires a frame captured after the stop. Inference runs in a
+cancellable wait; its worker has no hardware handles. Motion during inference
+invalidates the result. API responses must identify the exact input image and
+calibration. Three failed stationary observations stop the skill holding the
+sock. Docking has a 120-second deadline, including odometry control;
+an individual observation has a 45-second limit. A failed head-settle check
+stops before lifting. Existing grip, arm-pose, and clearance safeguards remain.
+
+The visible face centre and inward normal are transformed with measured head
+pitch into base_link. The base approaches a point 16 cm in front of that centre,
+in steps of at most 15 cm at up to 0.15 m/s. Position tolerance is 4.5 cm and
+normal-heading tolerance is 0.13 radians. After checking the held sock, it
+reobserves before calculating release. If another move is needed, it checks
+the held sock again after that move. Wrist release is 13 cm
+inside the face and 8 cm to its right, preserving the rehearsed arm offset.
+Thus docking is centred; release is deliberately offset inside the basket.
+The raised entry, release, and clearance wrist heights are 36, 22, and 30 cm,
+respectively, to account for the 16 cm rim. Existing IK selection and measured
+pose checks precede opening; verified arm clearance precedes retreat.
+
+Validation: hardware-free execution tests exercise success, lost/ambiguous
+pose, grip loss, unreachable target, head timeout, cancellation, and failed
+clearance. The actual KDL model supports the nominal raised/release/clearance
+poses within the inherited tolerances. Catalog registration and live stationary
+camera capture were checked on MARS-47. **No physical approach, release, or
+landing has been tested for this new skill.** Similar baskets, different
+lighting, and the curved basket's metric bias remain unverified.
+
+Run focused tests in the robot's ROS environment:
+
+```sh
+source /opt/ros/humble/setup.bash
+source ros2_ws/install/setup.bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
+  tests/test_drop_in_box_features.py tests/test_basket_features.py \
+  tests/test_basket_pose_api.py
+```
