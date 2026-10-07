@@ -14,6 +14,7 @@ consumes zero CPU when no skill needs camera data.
 """
 
 import threading
+import time
 
 import numpy as np
 import rclpy
@@ -51,6 +52,9 @@ class CameraProvider(Node):
         CameraProvider._instance_count += 1
         super().__init__(f"camera_subscriber_{CameraProvider._instance_count}")
 
+        self._main_highres_raw: bytes | None = None
+        self._main_highres_at = 0.0
+        self._main_highres_sub = None
         self._main_camera_raw: bytes | None = None
         self._wrist_camera_raw: bytes | None = None
         self._depth_msg: Image | None = None
@@ -66,7 +70,7 @@ class CameraProvider(Node):
         self._users = 0
         # per-feed refcounts, so a feed only a nested child declared stops
         # streaming when the child ends instead of for the parent's whole run
-        self._feed_users = {"main": 0, "wrist": 0, "depth": 0}
+        self._feed_users = {"main": 0, "main_highres": 0, "wrist": 0, "depth": 0}
 
     # ---- lifecycle ----
 
@@ -89,6 +93,11 @@ class CameraProvider(Node):
                 "/mars/main_camera/left/image_raw/compressed",
                 self._main_camera_cb,
                 self._IMAGE_QOS,
+            )
+        if "main_highres" in feeds and self._main_highres_sub is None:
+            self._main_highres_sub = self.create_subscription(
+                CompressedImage, "/mars/main_camera/left/image_highres/compressed",
+                self._main_highres_cb, self._IMAGE_QOS,
             )
         if "wrist" in feeds and self._wrist_sub is None:
             self._wrist_sub = self.create_subscription(
@@ -128,13 +137,15 @@ class CameraProvider(Node):
             self._drop_unused_feeds()
             return
         self._stop_spin()
-        for sub in (self._main_sub, self._wrist_sub, self._depth_sub):
+        for sub in (self._main_sub, self._main_highres_sub, self._wrist_sub, self._depth_sub):
             if sub is not None:
                 self.destroy_subscription(sub)
         self._main_sub = None
         self._wrist_sub = None
         self._depth_sub = None
         self._main_camera_raw = None
+        self._main_highres_raw = None
+        self._main_highres_sub = None
         self._wrist_camera_raw = None
         self._depth_msg = None
         self._feed_users = dict.fromkeys(self._feed_users, 0)
@@ -164,7 +175,7 @@ class CameraProvider(Node):
         """
         dead = [
             feed
-            for feed, sub in (("main", self._main_sub), ("wrist", self._wrist_sub), ("depth", self._depth_sub))
+            for feed, sub in (("main", self._main_sub), ("main_highres", self._main_highres_sub), ("wrist", self._wrist_sub), ("depth", self._depth_sub))
             if sub is not None and not self._feed_users[feed]
         ]
         if not dead:
@@ -174,6 +185,10 @@ class CameraProvider(Node):
             self.destroy_subscription(self._main_sub)
             self._main_sub = None
             self._main_camera_raw = None
+        if "main_highres" in dead and self._main_highres_sub is not None:
+            self.destroy_subscription(self._main_highres_sub)
+            self._main_highres_sub = None
+            self._main_highres_raw = None
         if "wrist" in dead and self._wrist_sub is not None:
             self.destroy_subscription(self._wrist_sub)
             self._wrist_sub = None
@@ -197,6 +212,15 @@ class CameraProvider(Node):
 
     def _main_camera_cb(self, msg: CompressedImage):
         self._main_camera_raw = bytes(msg.data)
+
+    def _main_highres_cb(self, msg: CompressedImage):
+        self._main_highres_raw = bytes(msg.data)
+        self._main_highres_at = time.monotonic()
+
+    @property
+    def last_main_highres_jpeg(self) -> bytes | None:
+        # A stalled high-res stream must not override a fresh standard frame.
+        return self._main_highres_raw if time.monotonic() - self._main_highres_at < 0.5 else None
 
     def _wrist_camera_cb(self, msg: CompressedImage):
         self._wrist_camera_raw = bytes(msg.data)

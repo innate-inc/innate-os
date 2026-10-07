@@ -38,6 +38,11 @@ class DropInBoxFast(DropInBox):
         "clearance_s": 0.6,
         "rest_fold_s": 0.9,
     }
+    RIGHT_ROLL_JOINT4 = None
+
+    POSE_TOLERANCE_XY = 0.03
+    POSE_TOLERANCE_Z = 0.01
+
     RELEASE_Z = 0.24  # wrist/ee height; fingertips extend below this
     CLEARANCE_Z = 0.26
     LOWER_RELEASE_Z = None  # optional vertical placement after crossing the rim
@@ -85,6 +90,32 @@ class DropInBoxFast(DropInBox):
         self.overlay.stage("release")
         if self.manipulation.torque_enabled is not True:
             self.manipulation.torque_on()
+        self._reach_over_box(x, y)
+        if self.LOWER_RELEASE_Z is not None:
+            lowered = self.manipulation.move_to(
+                x,
+                y,
+                self.LOWER_RELEASE_Z,
+                pitch=p["arm_pitch"],
+                duration=p["hover_s"],
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+            self._require_pose(lowered, x, y, self.LOWER_RELEASE_Z, stage="lower")
+            self.check_cancelled()
+        self.manipulation.gripper_open(duration=0.6)
+        self._released = True
+        if self.LOWER_RELEASE_Z is not None:
+            # Wide wrist roll belongs above the walls, never inside the box.
+            self._lift_out()
+            self._shake_release()
+        else:
+            self._shake_release()
+            self._lift_out()
+        return x, y, self.LOWER_RELEASE_Z if self.LOWER_RELEASE_Z is not None else self.RELEASE_Z
+
+    def _reach_over_box(self, x, y):
+        p = self._p
         # First raise, then reach across from above. Do not continue from a
         # refused or low approach pose as the generic best-effort helper does.
         raised = self.manipulation.move_to(
@@ -96,7 +127,7 @@ class DropInBoxFast(DropInBox):
             tolerance_xy=None,
             tolerance_z=None,
         )
-        self._require_pose(raised, p["carry_x"], y, 0.28)
+        self._require_pose(raised, p["carry_x"], y, 0.28, stage="raise")
         self.check_cancelled()
         # Latch before entering the footprint, including a failed/partial move.
         self._over_rim = True
@@ -110,33 +141,11 @@ class DropInBoxFast(DropInBox):
             tolerance_xy=None,
             tolerance_z=None,
         )
-        self._require_pose(posed, x, y, self.RELEASE_Z)
+        self._require_pose(posed, x, y, self.RELEASE_Z, stage="overhead")
         self.check_cancelled()
-        if self.LOWER_RELEASE_Z is not None:
-            lowered = self.manipulation.move_to(
-                x,
-                y,
-                self.LOWER_RELEASE_Z,
-                pitch=p["arm_pitch"],
-                duration=p["hover_s"],
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-            self._require_pose(lowered, x, y, self.LOWER_RELEASE_Z)
-            self.check_cancelled()
-        self.manipulation.gripper_open(duration=0.6)
-        self._released = True
-        if self.LOWER_RELEASE_Z is not None:
-            # Wide wrist roll belongs above the walls, never inside the box.
-            self._lift_out()
-            self._shake_release()
-        else:
-            self._shake_release()
-            self._lift_out()
-        return x, y, self.LOWER_RELEASE_Z if self.LOWER_RELEASE_Z is not None else self.RELEASE_Z
 
     def _shake_release(self):
-        """Shake only wrist roll, preserving the overhead arm pose and open claw."""
+        """Roll left then right without changing the gripper."""
         self.check_cancelled()
         joints = self.joint_states
         if joints is None or len(joints.position) < 5:
@@ -144,24 +153,38 @@ class DropInBoxFast(DropInBox):
         target = list(joints.position[:5])
         if not all(math.isfinite(v) for v in target):
             raise SkillFailed("Invalid arm joint state for release shake")
-        # Absolute wrist positions, within joint5's +/-pi/2 limits.
-        # Keep the other four joints fixed; five-value commands preserve OPEN.
+        # Keep the standing grip: release already opened it before this shake.
         for angle in (-math.pi / 2, math.pi / 2):
             self.check_cancelled()
-            duration = max(0.2, abs(angle - target[4]) / 2.0)
+            duration = max(0.2, abs(angle - target[4]) / 6.0)
+            if angle > 0 and self.RIGHT_ROLL_JOINT4 is not None:
+                # Absolute actuator angle, not Cartesian gripper pitch.
+                duration = max(duration, abs(self.RIGHT_ROLL_JOINT4 - target[3]) / 2.0)
+                target[3] = self.RIGHT_ROLL_JOINT4
             target[4] = angle
-            self.manipulation.move_joints(list(target), duration=duration)
-        self.check_cancelled()
+            self.logger.info(
+                f"[DropShake] joint4={math.degrees(target[3]):.1f}deg "
+                f"joint5={math.degrees(target[4]):.1f}deg duration={duration:.3f}s"
+            )
+            self.manipulation.move_joints(target.copy(), duration=duration)
 
-    @staticmethod
-    def _require_pose(pose, x, y, z):
-        if (
-            pose is None
-            or not all(math.isfinite(v) for v in (pose.x, pose.y, pose.z))
-            or math.hypot(pose.x - x, pose.y - y) > 0.03
-            or abs(pose.z - z) > 0.01
-        ):
-            raise SkillFailed("Arm did not reach the overhead drop pose; refusing to release")
+    def _require_pose(self, pose, x, y, z, *, stage="drop"):
+        actual = None if pose is None else (pose.x, pose.y, pose.z)
+        valid = actual is not None and all(math.isfinite(v) for v in actual)
+        error_xy = math.hypot(pose.x - x, pose.y - y) if valid else math.inf
+        error_z = abs(pose.z - z) if valid else math.inf
+        accepted = valid and error_xy <= self.POSE_TOLERANCE_XY and error_z <= self.POSE_TOLERANCE_Z
+        self.logger.info(
+            f"[DropPose] stage={stage} target={(x, y, z)} actual={actual} "
+            f"error_xy={error_xy:.4f} error_z={error_z:.4f} "
+            f"tolerance_xy={self.POSE_TOLERANCE_XY} tolerance_z={self.POSE_TOLERANCE_Z} "
+            f"accepted={accepted}"
+        )
+        if not accepted:
+            raise SkillFailed(
+                f"Arm did not reach the overhead drop pose; refusing to release "
+                f"(stage={stage}, XY error={error_xy:.3f} m, Z error={error_z:.3f} m)"
+            )
 
     def _secure_grip(self):
         if closing_command(self.manipulation):

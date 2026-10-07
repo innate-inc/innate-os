@@ -36,8 +36,19 @@ def detection_candidates(payload, threshold=0.05):
             raise ValueError("Out-of-range detector box")
         if score < threshold:
             continue
+        # The server picks the mask pixel nearest the box center. No center
+        # fallback: an absent/empty mask cannot establish a fabric grasp point.
+        point = item["grasp_point_xy"]
+        if point is None:
+            continue
+        if len(point) != 2:
+            raise ValueError("Invalid mask grasp point")
+        u, v = map(float, point)
+        if not (math.isfinite(u) and math.isfinite(v) and
+                x1 <= u <= x2 and y1 <= v <= y2 and 0 <= u < width and 0 <= v < height):
+            raise ValueError("Mask grasp point outside detection/image")
         box = (x1 * IMG_W / width, y1 * IMG_H / height, x2 * IMG_W / width, y2 * IMG_H / height)
-        found.append((score, ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, None, box)))
+        found.append((score, (u * IMG_W / width, v * IMG_H / height, None, box)))
     return [candidate for _, candidate in sorted(found, key=lambda pair: pair[0], reverse=True)]
 
 
@@ -66,8 +77,18 @@ class PickSockYoloe(PickSockFast):
             raise SkillFailed("No camera image for YOLOE")
         boundary = uuid.uuid4().hex
         jpeg = base64.b64decode(img)
-        body = (
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{self.detection_prompt}\r\n"
+        audit = Path('/tmp/sock-yolo-audit') / f'{time.time_ns()}-{boundary[:8]}'
+        try:
+            audit.parent.mkdir(exist_ok=True)
+            audit.with_suffix('.jpg').write_bytes(jpeg)
+        except OSError as error:
+            self.logger.warning(f"[YOLOE] image audit unavailable: {error}")
+        prompts = getattr(self, "detection_prompts", (self.detection_prompt,))
+        prompt_fields = "".join(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{label}\r\n"
+            for label in prompts
+        )
+        body = (prompt_fields +
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"frame.jpg\"\r\n"
             "Content-Type: image/jpeg\r\n\r\n"
         ).encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
@@ -95,8 +116,14 @@ class PickSockYoloe(PickSockFast):
             candidates = detection_candidates(payload)
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise SkillFailed(f"YOLOE detection failed: {error}") from error
+        try:
+            audit.with_suffix('.json').write_text(json.dumps({'prompts': list(prompts), 'response': payload}))
+        except OSError as error:
+            self.logger.warning(f"[YOLOE] response audit unavailable: {error}")
+        self.logger.info(f"[YOLOE] audit={audit}")
         self.logger.info(
-            f"[YOLOE] prompt={self.detection_prompt!r} elapsed={time.monotonic() - started:.3f}s "
-            f"detections={len(candidates)} boxes={payload['detections']}"
+            f"[YOLOE] prompts={prompts!r} elapsed={time.monotonic() - started:.3f}s "
+            f"detections={len(candidates)} boxes={[{k: v for k, v in d.items() if k != 'mask_png_base64'} for d in payload['detections']]}"
         )
+        self._yolo_payload = payload
         return candidates, img

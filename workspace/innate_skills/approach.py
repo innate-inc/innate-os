@@ -188,6 +188,7 @@ class FloorApproach:
 
     def _remember_visual(self, px):
         from innate_skills.local_target import LocalTarget
+
         raw = getattr(self.host, "_local_detection_image", None)
         box = getattr(self.host, "_local_detection_box", None)
         gray = vision.b64_to_gray(raw) if raw else None
@@ -205,11 +206,11 @@ class FloorApproach:
         world = base_to_odom(self._tracker_odom, xy) if xy is not None else None
         if world is None:
             return None, None
-        deadline = time.monotonic() + .45
+        deadline = time.monotonic() + 0.45
         raw = self.host.main_image
         accepted = []
         while time.monotonic() < deadline:
-            self.host.sleep(.03)
+            self.host.sleep(0.03)
             img = self.host.main_image
             if not img or img is raw:
                 continue
@@ -222,13 +223,13 @@ class FloorApproach:
             gray = vision.b64_to_gray(img)
             px = tracker.track(gray, predicted) if gray is not None else None
             measured = pixel_to_floor(*px, self.p["tilt_deg"]) if px is not None else None
-            if measured is None or math.dist(measured, expected) > .045:
+            if measured is None or math.dist(measured, expected) > 0.045:
                 accepted.clear()
                 continue
             # Compare in world coordinates even if residual wheel motion exists.
             seen = base_to_odom(odom, measured)
             accepted.append(seen)
-            if len(accepted) >= 2 and math.dist(*accepted[-2:]) <= .005:
+            if len(accepted) >= 2 and math.dist(*accepted[-2:]) <= 0.005:
                 self._tracker_odom = odom
                 self.host.logger.info(f"[{self.host.name}] local visual recovery; skipping model re-detection")
                 return measured, px
@@ -322,20 +323,24 @@ class FloorApproach:
                 if now is None:
                     return False
                 if turning:
-                    err = math.atan2(math.sin(start[2] + amount - now[2]),
-                                     math.cos(start[2] + amount - now[2]))
+                    err = math.atan2(math.sin(start[2] + amount - now[2]), math.cos(start[2] + amount - now[2]))
                     kp, top, decel = self.p["rot_kp"], self.p["rot_wz_max"], 1.5
                 else:
-                    travelled = ((now[0]-start[0])*math.cos(start[2])
-                                 + (now[1]-start[1])*math.sin(start[2]))
+                    travelled = (now[0] - start[0]) * math.cos(start[2]) + (now[1] - start[1]) * math.sin(start[2])
                     err = amount - travelled
                     kp, top, decel = self.p["drive_kp"], self.p["drive_v_max"], 0.35
                 if abs(err) <= tolerance:
                     return True
                 # A braking envelope avoids asking the ramp to stop abruptly
                 # from cruising speed right at the arrival threshold.
-                speed = math.copysign(min(top, max(0.025 if not turning else 0.08, kp*abs(err)),
-                                         math.sqrt(2*decel*max(0.0,abs(err)-tolerance))), err)
+                speed = math.copysign(
+                    min(
+                        top,
+                        max(0.025 if not turning else 0.08, kp * abs(err)),
+                        math.sqrt(2 * decel * max(0.0, abs(err) - tolerance)),
+                    ),
+                    err,
+                )
                 vx, wz = ramp.step(0.0 if turning else speed, speed if turning else 0.0)
                 self.host.mobility.send_cmd_vel(vx, wz, 0.15)
                 self.host.sleep(0.03)
@@ -461,8 +466,32 @@ class FloorApproach:
             if metric and (floor_est is None or not all(math.isfinite(q) for q in floor_est)):
                 self.host.mobility.stop()
                 return "lost", None
-            inside = (sock_arrived(floor_est, self.p["sweet_x"]) if metric
-                      else inside_box((u, v), cu, cv, accept[0], accept[1]))
+            inside = (
+                sock_arrived(floor_est, self.p["sweet_x"])
+                if metric
+                else inside_box((u, v), cu, cv, accept[0], accept[1])
+            )
+            refine = getattr(self.host, "_refined_approach_pixel", None)
+            refinement = refine(raw, floor_est, inside) if refine is not None else None
+            if refinement is not None:
+                kind, value = refinement
+                if kind == "wait":
+                    self.host.mobility.stop()
+                    target_vx = target_wz = 0.0
+                    ramp = ApproachRamp() if ramp is not None else None
+                    in_box = 0
+                    self._arrival_samples = []
+                    self.host.sleep(.03)
+                    continue
+                from innate_skills.local_target import LocalTarget
+                (u, v), contact_box = value
+                self._local_tracker = LocalTarget(gray, (u, v), contact_box)
+                self._tracker_odom = self.odom_xyt()
+                grid = vision.grid_pts(u, v)
+                floor_est = pixel_to_floor(u, v, self.p["tilt_deg"])
+                inside = sock_arrived(floor_est, self.p["sweet_x"]) if metric else inside_box((u,v),cu,cv,*accept)
+                in_box = 0
+                self._arrival_samples = []
             self._draw_track((u, v), cu, cv, inside)
             if inside:
                 in_box += 1
@@ -507,17 +536,20 @@ class FloorApproach:
             # Coarse forward travel can be faster; retain the original final
             # positioning speeds within 10 cm or when the target is off-axis.
             gain, v_min, v_max = approach_linear_limits(self.p, floor_est, u - cu)
-            vx = (sock_approach_speed(floor_est, self.p["sweet_x"]) if metric else
-                  self.host.mobility.servo_vel(v - cv, gain, v_min, v_max, accept[1]))
+            vx = (
+                sock_approach_speed(floor_est, self.p["sweet_x"])
+                if metric
+                else self.host.mobility.servo_vel(v - cv, gain, v_min, v_max, accept[1])
+            )
             if metric:
                 wz = sock_approach_turn(floor_est, self.p["sweet_x"])
             if ramp is not None:
                 # Ease out before entering the image deadband. Keep enough
                 # speed to overcome wheel friction until the arrival check.
                 if vx and not metric:
-                    vx = math.copysign(max(0.025, abs(vx)*min(1.0, max(0.0, (abs(v-cv)-accept[1])/40.0))), vx)
+                    vx = math.copysign(max(0.025, abs(vx) * min(1.0, max(0.0, (abs(v - cv) - accept[1]) / 40.0))), vx)
                 if wz and not metric:
-                    wz = math.copysign(max(0.08, abs(wz)*min(1.0, max(0.0, (abs(u-cu)-accept[0])/40.0))), wz)
+                    wz = math.copysign(max(0.08, abs(wz) * min(1.0, max(0.0, (abs(u - cu) - accept[0]) / 40.0))), wz)
                 target_vx, target_wz = vx, wz
                 vx, wz = ramp.step(vx, wz)
             if metric and time.monotonic() - last_motion_log >= 0.5:
@@ -604,8 +636,11 @@ class FloorApproach:
             # Arrival checked BEFORE servoing: a tracker that dies on a
             # parked base must not burn the step budget re-seeding.
             (cu, cv), hold, _accept = self._sweet_box()
-            if xy is not None and (sock_arrived(xy, self.p["sweet_x"]) if self.p.get("metric_sock_approach", False)
-                                   else inside_box(seed, cu, cv, hold[0], hold[1])):
+            if xy is not None and (
+                sock_arrived(xy, self.p["sweet_x"])
+                if self.p.get("metric_sock_approach", False)
+                else inside_box(seed, cu, cv, hold[0], hold[1])
+            ):
                 return xy
             rem = _remaining()
             if rem is not None and rem[0] <= stop_x:
@@ -636,11 +671,18 @@ class FloorApproach:
                 tracked = pixel_to_floor(_pt[0], _pt[1], self.p["tilt_deg"])
                 rem = _remaining()
                 samples = getattr(self, "_arrival_samples", [])
-                stable = (self.p.get("stable_arrival_margin", False) and len(samples) >= 3
-                          and all(s is not None for s in samples[-3:])
-                          and max(math.dist(a, b) for a in samples[-3:] for b in samples[-3:]) <= self.p.get("arrival_tracking_spread_m", .005))
+                stable = (
+                    self.p.get("stable_arrival_margin", False)
+                    and len(samples) >= 3
+                    and all(s is not None for s in samples[-3:])
+                    and max(math.dist(a, b) for a in samples[-3:] for b in samples[-3:])
+                    <= self.p.get("arrival_tracking_spread_m", 0.005)
+                )
                 if tracked_arrival_ok(
-                    tracked, rem, self.p["sweet_x"], stable=stable,
+                    tracked,
+                    rem,
+                    self.p["sweet_x"],
+                    stable=stable,
                     trust_tracking=self.p.get("trust_sock_tracking", False),
                 ):
                     self.host.mobility.stop()
@@ -656,8 +698,11 @@ class FloorApproach:
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)
-            if xy2 is not None and (sock_arrived(xy2, self.p["sweet_x"]) if self.p.get("metric_sock_approach", False)
-                                    else inside_box(px2, cu, cv, hold[0], hold[1])):
+            if xy2 is not None and (
+                sock_arrived(xy2, self.p["sweet_x"])
+                if self.p.get("metric_sock_approach", False)
+                else inside_box(px2, cu, cv, hold[0], hold[1])
+            ):
                 return xy2
             xy, seed = xy2, (px2 if xy2 is not None else None)
             target_odo = base_to_odom(self.odom_xyt(), xy) if xy is not None else None
@@ -734,12 +779,10 @@ def track_floor_anchor(prev_gray, gray, grid, anchor):
     src, dst = src[finite], dst[finite]
     if len(src) < 8:
         return None
-    back, back_status, _ = cv2.calcOpticalFlowPyrLK(
-        gray, prev_gray, dst.reshape(-1, 1, 2), None, **vision.LK_PARAMS)
+    back, back_status, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, dst.reshape(-1, 1, 2), None, **vision.LK_PARAMS)
     if back is None or back_status is None:
         return None
-    good = ((back_status.reshape(-1) == 1)
-            & (np.linalg.norm(back.reshape(-1, 2) - src, axis=1) <= 2.0))
+    good = (back_status.reshape(-1) == 1) & (np.linalg.norm(back.reshape(-1, 2) - src, axis=1) <= 2.0)
     shifts = (dst - src)[good]
     if len(shifts) < 8:
         return None
@@ -752,8 +795,7 @@ def track_floor_anchor(prev_gray, gray, grid, anchor):
 
 
 def sock_arrived(xy, sweet_x):
-    return (xy is not None and all(math.isfinite(v) for v in xy)
-            and abs(xy[0] - sweet_x) <= 0.02 and abs(xy[1]) <= 0.03)
+    return xy is not None and all(math.isfinite(v) for v in xy) and abs(xy[0] - sweet_x) <= 0.02 and abs(xy[1]) <= 0.03
 
 
 def sock_approach_speed(xy, sweet_x):
@@ -769,7 +811,7 @@ def sock_approach_speed(xy, sweet_x):
         return 0.0
     distance = max(0.0, abs(error) - 0.015)
     a, lag = 0.2, 0.4
-    speed = min(0.18, math.sqrt((a * lag)**2 + 2*a*distance) - a*lag)
+    speed = min(0.18, math.sqrt((a * lag) ** 2 + 2 * a * distance) - a * lag)
     # Like FollowAruco, translate and steer together. A fixed sideways
     # offset is harmless far away: reduce speed by bearing, not centimetres.
     heading = abs(math.atan2(xy[1], xy[0]))
@@ -795,9 +837,11 @@ def sock_approach_turn(xy, sweet_x):
 
 
 def approach_linear_limits(p, floor_xy, lateral_error_px):
-    if (p.get("fast_far_approach", False)
-            and floor_xy[0] > p["sweet_x"] + 0.10
-            and abs(lateral_error_px) <= 2 * p["box_half_px"]):
+    if (
+        p.get("fast_far_approach", False)
+        and floor_xy[0] > p["sweet_x"] + 0.10
+        and abs(lateral_error_px) <= 2 * p["box_half_px"]
+    ):
         return p.get("far_gain_lin", 0.14), 0.08, 0.18
     return p["follow_gain_lin"], p["drive_v_min"], p["drive_v_max"]
 
@@ -825,8 +869,8 @@ class ApproachRamp:
             if name == "wz" and abs(target) < abs(current):
                 acceleration, tau = 2.0, 0.08
             alpha = 1.0 - math.exp(-dt / tau)
-            change = (target-current)*alpha
-            change = max(-acceleration*dt, min(acceleration*dt, change))
+            change = (target - current) * alpha
+            change = max(-acceleration * dt, min(acceleration * dt, change))
             value = current + change
             if abs(value) < 0.001 and target == 0.0:
                 value = 0.0

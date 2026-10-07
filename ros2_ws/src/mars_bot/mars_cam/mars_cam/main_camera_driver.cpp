@@ -113,6 +113,9 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
                      publish_stereo_height_);
     }
 
+    highres_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        "/mars/main_camera/left/image_highres/compressed", rclcpp::SensorDataQoS());
+
     // Initialize TurboJPEG encoder
     jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
     RCLCPP_DEBUG(this->get_logger(), "TurboJPEG encoder initialized");
@@ -191,10 +194,10 @@ bool MainCameraDriver::initializeCamera() {
     RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
     RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
-    // cap_ reports the appsink caps, which the pipeline scales to the publish size, not the capture size.
-    if (actual_width != publish_stereo_width_ || actual_height != publish_stereo_height_) {
-        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Expected: %dx%d, Got: %dx%d", publish_stereo_width_,
-                    publish_stereo_height_, actual_width, actual_height);
+    // appsink retains the native capture dimensions.
+    if (actual_width != capture_width_ || actual_height != capture_height_) {
+        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Expected: %dx%d, Got: %dx%d", capture_width_,
+                    capture_height_, actual_width, actual_height);
     }
 
     applyV4L2Controls();
@@ -304,7 +307,7 @@ void MainCameraDriver::reconnectCamera() {
 
 std::string MainCameraDriver::createGStreamerPipeline() {
     // Use MJPG format for better performance with this camera
-    // Pipeline: capture at full resolution, then downscale in GStreamer (hardware accelerated)
+    // Preserve native resolution through decode; resize the standard outputs after splitting.
     // appsink properties:
     //   max-buffers=1  - Only keep 1 frame in queue (always get newest)
     //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
@@ -324,7 +327,7 @@ std::string MainCameraDriver::createGStreamerPipeline() {
                            "nvv4l2decoder mjpeg=true ! "
                            "nvvidconv flip-method=2 interpolation-method=4 ! "
                            "video/x-raw,width=" +
-                           std::to_string(publish_stereo_width_) + ",height=" + std::to_string(publish_stereo_height_) +
+                           std::to_string(capture_width_) + ",height=" + std::to_string(capture_height_) +
                            ",format=BGRx ! "
                            "videoconvert ! video/x-raw,format=BGR ! "
                            "appsink max-buffers=1 drop=true sync=false";
@@ -483,17 +486,35 @@ void MainCameraDriver::frameProcessingLoop() {
     RCLCPP_INFO(this->get_logger(), "Frame processing loop ended");
 }
 
-void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
+void MainCameraDriver::processAndPublishFrame(const cv::Mat& native_frame) {
     auto current_time = this->now();
 
-    // Frame is already rotated and downscaled to publish_stereo_width x publish_stereo_height by GStreamer
-    // Verify dimensions match expected publish resolution
-    if (static_cast<int>(frame.cols) != publish_stereo_width_ ||
-        static_cast<int>(frame.rows) != publish_stereo_height_) {
+    // Preserve native detail for opt-in perception consumers. Existing topics
+    // retain their configured size, FOV and calibration coordinate system.
+    if (native_frame.cols != capture_width_ || native_frame.rows != capture_height_) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                             "Frame size mismatch: got %dx%d, expected %dx%d", frame.cols, frame.rows,
-                             publish_stereo_width_, publish_stereo_height_);
+                            "Native frame size mismatch: %dx%d", native_frame.cols, native_frame.rows);
         return;
+    }
+    if (highres_pub_->get_subscription_count() > 0) {
+        auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+        msg->header.stamp = current_time;
+        msg->header.frame_id = frame_id_;
+        msg->format = "jpeg";
+        try {
+            const cv::Mat native_left = native_frame(cv::Rect(0, 0, capture_width_ / 2, capture_height_));
+            jpeg_encoder_->encodeBGR(native_left, jpeg_quality_, msg->data);
+            highres_pub_->publish(std::move(msg));
+        } catch (const std::exception& e) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                "High-resolution JPEG encode failed: %s", e.what());
+        }
+    }
+    cv::Mat frame;
+    if (native_frame.cols == publish_stereo_width_ && native_frame.rows == publish_stereo_height_) {
+        frame = native_frame;
+    } else {
+        cv::resize(native_frame, frame, cv::Size(publish_stereo_width_, publish_stereo_height_), 0, 0, cv::INTER_AREA);
     }
 
     // Apply auto exposure control (frame is already rotated and downscaled)

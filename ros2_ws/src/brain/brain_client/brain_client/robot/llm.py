@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 from innate_llm import Image, Message, Request, Role, Text, Thinking, configure
 from innate_llm.configure import DEFAULT_MODEL, KEY_ENVS
-from mars_bringup.config_loader import keys_env_path, parse_key_value_env
+from mars_bringup.config_loader import keys_env_path, parse_key_value_env, settings_node_params
 
 from brain_client.skills.types import cancellable_sleep
 
@@ -80,11 +80,18 @@ class Llm:
         return None
 
     def _provider(self) -> Provider | None:
-        if self._route is None:
+        base_url = self._base_url
+        if not base_url and self.model.startswith("openai-chat:"):
+            # Runpod endpoints change without restarting ROS. Saved settings
+            # supersede the launch-time default, including an explicit clear.
+            saved = settings_node_params("brain_client_node", "llm_base_url")
+            base_url = saved.get("llm_base_url", robot_default()._base_url)
+        if self._route is None or getattr(self, "_route_base_url", None) != base_url:
             from innate_proxy import ProxyClient
 
             refresh_keys()
-            self._route = configure(self.model, ProxyClient(), base_url=self._base_url, extra_body=self._extra_body)
+            self._route = configure(self.model, ProxyClient(), base_url=base_url, extra_body=self._extra_body)
+            self._route_base_url = base_url
         return self._route.provider
 
 

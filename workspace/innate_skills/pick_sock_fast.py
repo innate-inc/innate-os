@@ -19,6 +19,9 @@ class PickSockFast(PickAnyObject):
     # Keep the established floor target and pre-close un-press for fabric.
     _p = {
         **PARAMS,
+        "reset_head_after_skill": False,
+        # Use the selected/tracked floor point without the generic pickup bias.
+        "grasp_x_off": 0.0,
         "wrist_steps": 0.0,
         "lock_target_identity": True,
         "mem_gate_m": 0.12,
@@ -28,11 +31,11 @@ class PickSockFast(PickAnyObject):
         "descend_z3": 0.15,
         "descend_s": 1.5,
         "nav_arm_s": 0.8,
-        "hover_s": 0.8,
-        "lift_s": 0.8,
+        "hover_s": 0.55,
+        "lift_s": 0.55,
         "twist_s": 0.6,
         "fallback_lift_s": 1.0,
-        "fold_s": 0.9,
+        "fold_s": 0.65,
         "bearing_go_deg": 12.0,
         "accept_tracked_arrival": True,
         "trust_sock_tracking": True,
@@ -43,7 +46,7 @@ class PickSockFast(PickAnyObject):
         "skip_carry_repeat": True,
         "carry_joints": DEMO_CARRY_JOINTS,
         "close_lift_tolerance_m": 0.0005,
-        "close_lift_s": 0.6,
+        "close_lift_s": 0.4,
         "close_s": 0.7,
         "rot_kp": 2.4,
         "rot_wz_max": 0.9,
@@ -115,7 +118,7 @@ class PickSockFast(PickAnyObject):
         self.manipulation.follow(
             [
                 Waypoint(x, y, z, pitch=self._p["arm_pitch"], duration=self._p["hover_s"]),
-                Waypoint(x, y, end_z, pitch=self._p["arm_pitch"], duration=0.875),
+                Waypoint(x, y, end_z, pitch=self._p["arm_pitch"], duration=0.60),
             ],
             grip=self.manipulation.GRIPPER_OPEN,
         )

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from innate_skills.follow_aruco import LOCK_CONFIRM_FRAMES, LOOP_PERIOD, LOST_GRACE_FRAMES, FollowAruco
+from innate_skills.follow_aruco import LOOP_PERIOD, LOST_GRACE_FRAMES, FollowAruco
 
 from innate import vision
 from innate.exceptions import SkillFailed
@@ -49,7 +49,7 @@ def validate_config(c):
     if not -40 <= float(c["head_tilt_deg"]) <= 0:
         raise ValueError("Invalid taught head angle")
     near = np.asarray(c["near_xy"], dtype=float)
-    if near.shape != (2,) or not np.isfinite(near).all() or not (0.18 <= near[0] <= 0.3 and abs(near[1]) <= 0.1):
+    if near.shape != (2,) or not np.isfinite(near).all() or not (0.14 <= near[0] <= 0.3 and abs(near[1]) <= 0.1):
         raise ValueError("Drop coordinates outside the rehearsed envelope")
     pose = np.asarray(c["base_from_marker"], dtype=float)
     if (
@@ -91,6 +91,11 @@ def front_tag_target(config):
     return validate_config(c)
 
 
+def marker_image(host):
+    """Use opt-in native detail; older drivers and simulation keep their normal feed."""
+    return getattr(host, "main_highres_image", None) or host.main_image
+
+
 class MarkerPose:
     def __init__(self, marker_id, size_m, tilt):
         if type(marker_id) is not int or not 0 <= marker_id < 50 or not 0.025 <= size_m <= 0.3:
@@ -99,15 +104,28 @@ class MarkerPose:
         s = size_m / 2
         # OpenCV IPPE_SQUARE order: top-left, top-right, bottom-right, bottom-left.
         self.object_points = np.array([[-s, s, 0], [s, s, 0], [s, -s, 0], [-s, -s, 0]], dtype=np.float32)
+        parameters = cv2.aruco.DetectorParameters()
+        # AprilTag-based quad extraction handles angled views our default
+        # contour detector misses; the printed tag is still DICT_4X4_50.
+        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
         self.detector = cv2.aruco.ArucoDetector(
-            cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50), cv2.aruco.DetectorParameters()
+            cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50), parameters
         )
 
     def detect_quad(self, gray):
         self.last_diagnostic = {"reason": "invalid_image"}
-        if gray is None or gray.shape != (IMG_H, IMG_W):
+        if gray is None or gray.ndim != 2 or not all(gray.shape):
             return None
+        source_height, source_width = gray.shape
         corners, ids, _ = self.detector.detectMarkers(gray)
+        # More pixels do not always produce a better quad at grazing angles.
+        # Retry the same frame at the established resolution if native decoding
+        # misses the taught ID. Preserve duplicate-ID rejection at either size.
+        used_height, used_width = source_height, source_width
+        if (source_height, source_width) != (IMG_H, IMG_W) and (ids is None or self.marker_id not in ids):
+            standard = cv2.resize(gray, (IMG_W, IMG_H), interpolation=cv2.INTER_AREA)
+            corners, ids, _ = self.detector.detectMarkers(standard)
+            used_height, used_width = IMG_H, IMG_W
         matches = [] if ids is None else [q for q, i in zip(corners, ids.ravel(), strict=False) if i == self.marker_id]
         self.last_diagnostic = {
             "reason": "marker_missing" if not matches else "duplicate_marker" if len(matches) > 1 else "quad_found",
@@ -117,13 +135,21 @@ class MarkerPose:
         # Duplicate IDs cannot establish which box this is.
         if len(matches) != 1:
             return None
-        return matches[0].reshape(4, 2)
+        # Pose, overlays and steering retain the calibrated 640x480 coordinates.
+        quad = matches[0].reshape(4, 2).astype(np.float32)
+        quad *= np.array([IMG_W / used_width, IMG_H / used_height], dtype=np.float32)
+        self.last_diagnostic["input_size"] = [int(source_width), int(source_height)]
+        self.last_diagnostic["detection_size"] = [int(used_width), int(used_height)]
+        return quad
 
     def detect(self, gray):
         quad = self.detect_quad(gray)
-        return self.from_corners(quad) if quad is not None else None
+        if quad is None:
+            return None
+        width, height = self.last_diagnostic["detection_size"]
+        return self.from_corners(quad, detection_scale=(width / IMG_W, height / IMG_H))
 
-    def from_corners(self, corners):
+    def from_corners(self, corners, *, detection_scale=(1.0, 1.0)):
         self.last_diagnostic = {"reason": "invalid_corners"}
         corners = np.asarray(corners, dtype=np.float32)
         if corners.shape != (4, 2) or not np.isfinite(corners).all():
@@ -131,7 +157,10 @@ class MarkerPose:
         self.last_diagnostic.update(corners_px=corners.tolist(), reason="edge_clipped")
         if np.any(corners < 3) or np.any(corners[:, 0] >= IMG_W - 3) or np.any(corners[:, 1] >= IMG_H - 3):
             return None
-        min_side = min(np.linalg.norm(corners[i] - corners[(i + 1) % 4]) for i in range(4))
+        # The resolution gate concerns observed pixels, not the normalized
+        # calibration coordinates used by PnP and steering.
+        observed = corners * np.asarray(detection_scale)
+        min_side = min(np.linalg.norm(observed[i] - observed[(i + 1) % 4]) for i in range(4))
         self.last_diagnostic.update(reason="marker_too_small", min_side_px=float(min_side))
         if min_side < 18:
             return None
@@ -202,71 +231,66 @@ def box_release_target(pose, right_m=0.08, inward_m=0.12):
     return target, math.atan2(inward[1], inward[0])
 
 
-def observe_box_release(host, detector, right_m, inward_m, *, return_heading=False):
-    """Use three agreeing, fresh stationary views; never fall back to robot offsets."""
+def observe_box_release(host, detector, right_m, inward_m, *, return_heading=False, recover_right=False):
+    """Measure a fresh pose; optionally recover arm occlusion before release."""
     host.mobility.stop()
     host.sleep(0.15)
-    raw = host.main_image
-    samples = []
-    counts = {"fresh": 0, "missing_polls": 0, "stale_polls": 0, "valid": 0}
-    rejected = {}
-    best_group = 0
-    host.logger.info("[BoxFrame] estimating: timeout=2.5s required>=3 xy_tol=0.03m yaw_tol=12deg")
-    start = time.monotonic()
-    while time.monotonic() - start < 2.5:
-        host.check_cancelled()
-        image = host.main_image
-        if image and image is not raw:
-            raw = image
-            counts["fresh"] += 1
-            pose = detector.detect(vision.b64_to_gray(image))
-            diagnostic = getattr(detector, "last_diagnostic", {"reason": "unknown"})
-            if pose is None:
-                reason = diagnostic.get("reason", "unknown")
-                rejected[reason] = rejected.get(reason, 0) + 1
-                host.logger.info(f"[BoxFrame] frame={counts['fresh']} rejected: {diagnostic}")
-            if pose is not None:
-                counts["valid"] += 1
-                try:
+    raw = marker_image(host)
+    last_fresh = time.monotonic()
+    recovery = MarkerFollower(host.mobility) if recover_right else None
+    if recovery is not None:
+        recovery.max_angular = 0.4
+        recovery.angular_slew = 6.0
+    turning = False
+    try:
+        while True:
+            host.check_cancelled()
+            image = marker_image(host)
+            if image and image is not raw:
+                raw = image
+                last_fresh = time.monotonic()
+                pose = detector.detect(vision.b64_to_gray(image))
+                if pose is not None:
+                    if recovery is not None:
+                        recovery._stop()
+                    if turning:
+                        host.logger.info("[BoxFrame] release tag reacquired; stopping and discarding moving pose")
+                        # The detected pose belongs to the rotating base. Stop,
+                        # settle, then require a frame newer than the settling
+                        # interval before using robot-relative drop coordinates.
+                        host.sleep(0.20)
+                        raw = marker_image(host)
+                        last_fresh = time.monotonic()
+                        turning = False
+                        continue
                     target, yaw = box_release_target(pose, right_m, inward_m)
-                except SkillFailed as error:
-                    host.logger.info(f"[BoxFrame] invalid box geometry: {error}; pose={pose.tolist()}")
-                    raise
-                host.logger.info(
-                    f"[BoxFrame] frame={counts['fresh']} target=({target[0]:.3f},{target[1]:.3f})m "
-                    f"yaw={math.degrees(yaw):.1f}deg pose_quality={diagnostic}"
-                )
-                samples.append((target, yaw))
-                samples = samples[-7:]
-                # Compare angles with wrapping and select a majority cluster;
-                # an isolated planar-pose flip must not steer the arm.
-                for reference, angle in samples:
-                    group = [
-                        (xy, a)
-                        for xy, a in samples
-                        if np.linalg.norm(xy - reference) <= 0.03
-                        and abs(math.atan2(math.sin(a - angle), math.cos(a - angle))) <= math.radians(12)
-                    ]
-                    best_group = max(best_group, len(group))
-                    if len(group) >= max(3, len(samples) // 2 + 1):
-                        xy = np.median([p for p, _ in group], axis=0)
-                        yaw = math.atan2(sum(math.sin(a) for _, a in group), sum(math.cos(a) for _, a in group))
-                        host.logger.info(
-                            f"[BoxFrame] {len(group)} views, inward yaw={math.degrees(yaw):.1f}deg, "
-                            f"release=({xy[0]:.3f},{xy[1]:.3f})m"
-                        )
-                        if return_heading:
-                            return float(xy[0]), float(xy[1]), yaw
-                        return float(xy[0]), float(xy[1])
-        else:
-            counts["stale_polls" if image else "missing_polls"] += 1
-        host.sleep(0.05)
-    host.logger.info(
-        f"[BoxFrame] timeout elapsed={time.monotonic() - start:.3f}s counts={counts} "
-        f"rejections={rejected} best_group={best_group} window={len(samples)} "
-        f"required={max(3, len(samples) // 2 + 1)}"
-    )
-    raise SkillFailed("Could not estimate a stable box angle after docking; holding socks")
+                    host.logger.info(
+                        f"[BoxFrame] fresh pose target=({target[0]:.3f},{target[1]:.3f})m "
+                        f"yaw={math.degrees(yaw):.1f}deg"
+                    )
+                    if return_heading:
+                        return float(target[0]), float(target[1]), yaw
+                    return float(target[0]), float(target[1])
+                if recovery is not None:
+                    missing = getattr(detector, "last_diagnostic", {}).get("reason") == "marker_missing"
+                    if missing:
+                        if not turning:
+                            host.logger.info("[BoxFrame] release tag missing; recovering right at up to 0.40rad/s, no translation")
+                        recovery._send_cmd(0.0, -0.40)
+                        turning = True
+                    else:
+                        recovery._stop()
+                host.logger.info(f"[BoxFrame] waiting for usable pose: {getattr(detector, 'last_diagnostic', {})}")
+            elif time.monotonic() - last_fresh > 3:
+                raise SkillFailed("Camera stale while estimating box pose")
+            elif recovery is not None and time.monotonic() - last_fresh > 0.3:
+                # Match docking: stop rotation when camera updates stall.
+                recovery._stop()
+            host.sleep(0.05)
+
+    finally:
+        if recovery is not None:
+            recovery._stop()
 
 
 def marker_features(quad):
@@ -297,6 +321,22 @@ class MarkerFollower:
     _stop = FollowAruco._stop
     _drive_toward = FollowAruco._drive_toward
 
+    def fast_approach(self):
+        """Reach approach speeds promptly, keeping independent braking limits."""
+        self.linear_slew = 1.0
+        self.angular_slew = 6.0
+
+    def final_approach(self):
+        """Short, eased docking motion on the slippery demo floor."""
+        self.max_linear = 0.10
+        self.max_reverse = 0.04
+        self.max_angular = 0.60
+        self.min_forward = 0.04
+        self.linear_slew = 0.15
+        self.linear_braking = 0.40
+        self.angular_slew = 1.2
+        self.angular_braking = 2.0
+
     def __init__(self, mobility):
         self.mobility = mobility
         self._frame_width = IMG_W
@@ -306,9 +346,9 @@ class MarkerFollower:
 
 
 class MarkerOvershootRecovery:
-    """A clear side crossing triggers a bounded, raw-image turning correction."""
+    """Large image offsets trigger a brief raw-image turning correction."""
 
-    def __init__(self, center_tolerance=8):
+    def __init__(self, center_tolerance=24):
         self.center_tolerance = center_tolerance
         self.reset()
 
@@ -318,25 +358,20 @@ class MarkerOvershootRecovery:
         self.centered = 0
 
     def update(self, offset, now):
-        side = 1 if offset > 24 else -1 if offset < -24 else 0
-        if self.started is None:
-            if side and self.side and side != self.side:
-                self.started = now
-            elif side:
-                self.side = side
+        if self.started is None and abs(offset) > 64:
+            self.started = now
         if self.started is None:
             return None
-        if now - self.started > 5:
-            raise SkillFailed("Box overshoot recovery timed out; stopped before release")
         if abs(offset) <= self.center_tolerance:
             self.centered += 1
-            if self.centered >= 3:
+            if self.centered >= 1:
                 self.reset()
             return 0.0
         self.centered = 0
         # Positive image error means the box is right: command a right turn.
         # No filtered past-left error may override the observed correction.
-        return max(-0.35, min(0.35, -1.5 * offset / (IMG_W / 2)))
+        speed = max(0.4, min(0.6, 3.0 * abs(offset) / (IMG_W / 2)))
+        return -speed if offset > 0 else speed
 
 
 class MarkerDock:
@@ -353,17 +388,31 @@ class MarkerDock:
     def __init__(self, host, config):
         self.host, self.config = host, validate_config(config)
         self.detector = MarkerPose(config["marker_id"], config["marker_size_m"], config["head_tilt_deg"])
-        # Use teaching only to compute the desired image appearance. During
-        # motion a decoded quadrilateral is sufficient; no PnP rejection gate.
+        # Use the taught geometry for apparent size (distance), not steering.
+        # During motion a decoded quadrilateral is sufficient; no PnP gate.
         camera = np.linalg.inv(camera_in_base(config["head_tilt_deg"])) @ np.array(config["base_from_marker"])
         points = self.detector.object_points @ camera[:3, :3].T + camera[:3, 3]
-        if np.any(points[:, 2] <= 0.05):
-            raise SkillFailed("Taught tag is behind camera; reteach the front tag")
-        pixels = points @ camera_matrix().T
-        self.target_quad = pixels[:, :2] / pixels[:, 2:]
-        self.goal = marker_features(self.target_quad)
-        if self.goal is None:
-            raise SkillFailed("Tag would leave the image at the drop pose; mount it higher and reteach")
+        if np.any(points[:, 2] <= 0):
+            # Teaching no longer vetoes docking through projected visibility.
+            # Fall back to a front-facing metric size at the configured distance.
+            size = float((FX + FY) / 2 * config["marker_size_m"] / config["near_xy"][0])
+            self.target_quad = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]]) * size / 2
+            self.target_quad += [IMG_W / 2, IMG_H / 2]
+        else:
+            pixels = points @ camera_matrix().T
+            self.target_quad = pixels[:, :2] / pixels[:, 2:]
+        q = self.target_quad
+        size = float(np.mean([np.linalg.norm(q[i] - q[(i + 1) % 4]) for i in range(4)]))
+        self.goal = np.array([q[:, 0].mean(), q[:, 1].mean(), size])
+        # Center the tag in the camera image regardless of where it was taught.
+        # Translate the reference quad without changing its size/distance target.
+        # The arm's box-relative release offset is handled separately.
+        self.target_quad[:, 0] += IMG_W / 2 - self.goal[0]
+        self.goal[0] = IMG_W / 2
+
+    def _sleep_cycle(self, started):
+        # Include decoding/detection/control work in the 100 ms cycle budget.
+        self.host.sleep(max(0.0, LOOP_PERIOD - (time.monotonic() - started)))
 
     def _find_marker(self, follower):
         """Look around before driving, using only fresh decoded taught tags."""
@@ -371,73 +420,134 @@ class MarkerDock:
         raw = None
         start = last_frame = last_tick = time.monotonic()
         swept = 0.0
-        lock = 0
         while time.monotonic() - start < self.search_timeout:
+            cycle_started = time.monotonic()
             host.check_cancelled()
             now = time.monotonic()
             swept += abs(follower._cmd_angular) * min(now - last_tick, 0.4)
             last_tick = now
-            image = host.main_image
+            image = marker_image(host)
             if not image or image is raw:
                 if now - last_frame > 0.3:
                     follower._stop()
-                    lock = 0
                 if now - last_frame > 3:
                     raise SkillFailed("Camera stale while searching for box; stopped holding sock")
-                host.sleep(LOOP_PERIOD)
+                self._sleep_cycle(cycle_started)
                 continue
             raw = image
             last_frame = now
             gray = vision.b64_to_gray(image)
             if gray is None:
                 follower._stop()
-                lock = 0
-                host.sleep(LOOP_PERIOD)
+                self._sleep_cycle(cycle_started)
                 continue
             quad = self.detector.detect_quad(gray)
             if quad is not None and marker_features(quad) is not None:
-                lock += 1
-                follower._send_cmd(0.0, 0.0)
-                if lock >= LOCK_CONFIRM_FRAMES and abs(follower._cmd_angular) <= 0.02:
-                    follower._stop()
-                    host.logger.info("[MarkerDock] Box marker found; starting approach")
-                    return
+                follower._stop()
+                host.logger.info("[MarkerDock] Box marker found on first valid detection; starting approach")
+                return
             else:
-                lock = 0
                 if swept >= 2 * math.pi:
                     break
                 # The same acceleration cap used for docking applies here.
                 # Never translate while searching with a sock in the gripper.
                 follower._send_cmd(0.0, self.search_speed)
-            host.sleep(LOOP_PERIOD)
+            self._sleep_cycle(cycle_started)
         raise SkillFailed("Box marker not found after looking around; stopped holding sock")
+
+    def _recover_close_marker(self, follower):
+        """Turn right to clear arm occlusion, without translating toward the box."""
+        host = self.host
+        follower._stop()
+        raw = marker_image(host)
+        started = last_fresh = time.monotonic()
+        old_max, old_slew = follower.max_angular, follower.angular_slew
+        follower.max_angular, follower.angular_slew = 0.4, 6.0
+        host.logger.info("[MarkerDock] close tag lost; recovering right at up to 0.40rad/s, no translation")
+        try:
+            while time.monotonic() - started < self.approach_timeout:
+                cycle_started = time.monotonic()
+                host.check_cancelled()
+                image = marker_image(host)
+                now = time.monotonic()
+                if image and image is not raw:
+                    raw = image
+                    last_fresh = now
+                    if self.detector.detect_quad(vision.b64_to_gray(image)) is not None:
+                        host.logger.info("[MarkerDock] close tag reacquired; stopping right turn")
+                        return
+                    follower._send_cmd(0.0, -0.4)
+                elif now - last_fresh > 0.3:
+                    follower._stop()
+                self._sleep_cycle(cycle_started)
+            raise SkillFailed("Tag still missing after approach recovery timeout; holding position")
+        finally:
+            follower._stop()
+            follower.max_angular, follower.angular_slew = old_max, old_slew
 
     def run(self, follower=None):
         host = self.host
         if follower is None:
             follower = MarkerFollower(host.mobility)
-        raw = host.main_image
+        raw = marker_image(host)
         start = last_seen = time.monotonic()
-        lock = lost = stable = 0
-        recovery = MarkerOvershootRecovery(self.horizontal_tolerance)
+        lock = lost = 0
+        last_offset = None
+        near_box = arrival_latched = False
+        recovery = MarkerOvershootRecovery(24 if not self.stationary else self.horizontal_tolerance)
         try:
             if self.search_before_approach:
                 self._find_marker(follower)
-            raw = host.main_image
+            raw = marker_image(host)
             start = last_seen = time.monotonic()
             while time.monotonic() - start < self.approach_timeout:
+                cycle_started = time.monotonic()
                 host.check_cancelled()
                 now = time.monotonic()
-                image = host.main_image
+                if arrival_latched:
+                    follower._send_cmd(0.0, 0.0)
+                    if abs(follower._cmd_linear) <= 0.005 and abs(follower._cmd_angular) <= 0.02:
+                        follower._stop()
+                        host.logger.info("[MarkerDock] arrival latched and braking complete; ready to drop")
+                        return tuple(self.config["near_xy"])
+                    self._sleep_cycle(cycle_started)
+                    continue
+                image = marker_image(host)
                 quad = None
-                if image and image is not raw:
+                fresh_frame = bool(image and image is not raw)
+                if fresh_frame:
                     raw = image
                     quad = self.detector.detect_quad(vision.b64_to_gray(image))
                 features = marker_features(quad) if quad is not None else None
                 if features is None:
+                    if fresh_frame and last_offset is not None and near_box:
+                        if self.stationary:
+                            follower._stop()
+                            raise SkillFailed("Close tag lost; holding position without rotating")
+                        self._recover_close_marker(follower)
+                        last_seen = time.monotonic()
+                        lock = lost = 0
+                        recovery.reset()
+                        continue
+                    if fresh_frame and last_offset is not None:
+                        # Brake, then reacquire toward the last visible side.
+                        # Reuse the existing search, including camera freshness
+                        # handling, Stop and its bounded full-turn search.
+                        follower._stop()
+                        self._sleep_cycle(cycle_started)
+                        previous_search_speed = self.search_speed
+                        self.search_speed = -min(abs(previous_search_speed), follower.max_angular) if last_offset > 0 else min(abs(previous_search_speed), follower.max_angular)
+                        try:
+                            self._find_marker(follower)
+                        finally:
+                            self.search_speed = previous_search_speed
+                        last_seen = time.monotonic()
+                        lock = lost = 0
+                        last_offset = None
+                        raw = marker_image(host)
+                        continue
                     recovery.reset()
-                    stable = 0
-                    if lock < LOCK_CONFIRM_FRAMES:
+                    if lock < 1:
                         lock = 0
                     lost += 1
                     follower._offset_filtered = follower._size_error_filtered = None
@@ -452,11 +562,16 @@ class MarkerDock:
                     lost = 0
                     lock += 1
                     du, dv = features[:2] - self.goal[:2]
+                    last_offset = float(du)
                     size_error = 1 - features[2] / self.goal[2]
-                    if lock >= LOCK_CONFIRM_FRAMES:
-                        correction = recovery.update(float(du), now)
+                    near_box = near_box or size_error <= 0.25
+                    if lock >= 1:
+                        arrived = (self.stationary and abs(du) <= self.horizontal_tolerance) or (
+                            not self.stationary and size_error <= 0.04
+                        )
+                        # Distance arrival wins over optional centering recovery.
+                        correction = None if arrived else recovery.update(float(du), now)
                         if correction is not None:
-                            stable = 0
                             follower._offset_filtered = follower._size_error_filtered = None
                             # Brake translation first, then turn in place using
                             # the existing gentle acceleration/strong braking.
@@ -466,33 +581,22 @@ class MarkerDock:
                                 f"requested_turn={correction:.3f} cmd=({follower._cmd_linear:.3f},"
                                 f"{follower._cmd_angular:.3f})"
                             )
-                            host.sleep(LOOP_PERIOD)
+                            self._sleep_cycle(cycle_started)
                             continue
-                        if abs(du) <= self.horizontal_tolerance and (
-                            self.stationary or abs(size_error) <= self.size_tolerance
-                        ):
-                            # Brake through the same slew limit before declaring
-                            # arrival. Cancellation and marker loss still stop immediately.
+                        if arrived:
+                            arrival_latched = True
+                            host.logger.info(f"[MarkerDock] arrival latched offset={du:.1f}px size_error={size_error:.3f}; braking")
                             follower._send_cmd(0.0, 0.0)
-                            if abs(follower._cmd_linear) > 0.005 or abs(follower._cmd_angular) > 0.02:
-                                stable = 0
-                                host.sleep(LOOP_PERIOD)
-                                continue
-                            follower._stop()
-                            stable += 1
-                            if stable >= 3:
-                                host.logger.info("[MarkerDock] FollowAruco approach aligned; ready to drop")
-                                return tuple(self.config["near_xy"])
                         else:
-                            stable = 0
                             follower._drive_toward(
                                 quad,
                                 target_center_x=self.goal[0],
                                 target_size_frac=self.goal[2] / IMG_W,
                                 size_deadband=0.04,
+                                min_forward=0.0 if self.stationary else getattr(follower, "min_forward", 0.06),
                             )
                     host.logger.info(f"[MarkerDock] follower offset=({du:.1f},{dv:.1f})px size_error={size_error:.3f}")
-                host.sleep(LOOP_PERIOD)
+                self._sleep_cycle(cycle_started)
             raise SkillFailed("Box tag visible but not aligned before approach timeout")
         finally:
             follower._stop()

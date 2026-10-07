@@ -502,6 +502,7 @@ class SkillsActionServer(Node):
             feed
             for state_type, feed in (
                 (RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64, "main"),
+                (RobotStateType.LAST_MAIN_HIGHRES_IMAGE_B64, "main_highres"),
                 (RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64, "wrist"),
                 (RobotStateType.LAST_DEPTH_IMAGE, "depth"),
             )

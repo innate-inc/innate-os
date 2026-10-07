@@ -7,7 +7,8 @@ from innate_skills.turn_in_place import TurnInPlace
 
 
 class QwenSocksDemo3(QwenSockDemo2):
-    """Collect handfuls from a sock pile, with microphone and wave support."""
+    model = 'openai-chat:Qwen3.8-Flash-Next'
+    """Collect handfuls from a sock pile, with app instructions and wave support."""
 
     @property
     def id(self) -> str:
@@ -16,6 +17,9 @@ class QwenSocksDemo3(QwenSockDemo2):
     @property
     def display_name(self) -> str:
         return "Qwen Socks Demo 3"
+
+    def get_inputs(self):
+        return []
 
     def get_skills(self):
         return [PickSockPileYoloe if skill is PickSockYoloe else skill for skill in super().get_skills()] + [TurnInPlace]
@@ -31,5 +35,5 @@ use turn_in_place to look for floor socks.
 Use turn_in_place when asked to rotate or to look around. Pickup/drop handle their own approach.
 Wait while a skill runs. Trust completion events; sock count is not verified.
 On failure, wait for instructions; never drop after failed pickup.
-Obey spoken/app instructions and stop. Wave when asked after any running skill finishes.
+Obey app instructions and stop. Wave when asked after any running skill finishes.
 No narration."""

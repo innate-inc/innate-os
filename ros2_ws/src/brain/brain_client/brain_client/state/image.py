@@ -35,6 +35,10 @@ class MainImage(Image):
     """A main-camera frame, declared via ``image: MainImage``."""
 
 
+class MainHighResImage(Image):
+    """Native-resolution left frame; opt in with ``main_highres_image: MainHighResImage``."""
+
+
 class WristImage(Image):
     """A wrist-camera frame, declared via ``image: WristImage``."""
 

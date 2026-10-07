@@ -13,8 +13,8 @@ class PickSockQwen(PickSockFast):
     """Pick a floor sock with Qwen detection and the rehearsed fast motion."""
 
     llm: Llm = Llm(
-        "openai-chat:qwen3.8-flash-next-iq4-xs-mtp3",
-        base_url="http://100.107.224.18:8081/v1",
+        "openai-chat:Qwen3.8-Flash-Next",
+        base_url="http://mars-spark-sff.local:8001/v1",
         extra_body=json.dumps(
             {
                 "chat_template_kwargs": {"enable_thinking": False},

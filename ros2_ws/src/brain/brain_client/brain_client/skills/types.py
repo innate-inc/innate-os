@@ -170,6 +170,7 @@ def normalize_skill_result(result, skill_name: str = "Skill", logger=None) -> Sk
 
 
 class RobotStateType(Enum):
+    LAST_MAIN_HIGHRES_IMAGE_B64 = "last_main_highres_image_b64"
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_WRIST_CAMERA_IMAGE_B64 = "last_wrist_camera_image_b64"
     LAST_DEPTH_IMAGE = "last_depth_image"
@@ -515,7 +516,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
     from brain_client.state.arm import Arm
     from brain_client.state.battery import Battery
     from brain_client.state.head import HeadState
-    from brain_client.state.image import DepthMap, MainImage, WristImage
+    from brain_client.state.image import DepthMap, MainHighResImage, MainImage, WristImage
     from brain_client.state.joint_states import JointStates
     from brain_client.state.lidar import Lidar
     from brain_client.state.map import Map
@@ -532,6 +533,8 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
         _FeedSpec(Llm, Interface, InterfaceType.LLM, "Llm", ("llm", "model", "vlm")),
         # cameras start per run (and sim renders on demand) — longer grace
         _FeedSpec(MainImage, Camera, main, "MainImage", ("image", "main_image"), "main camera", grace_s=3.0),
+        _FeedSpec(MainHighResImage, Camera, RobotStateType.LAST_MAIN_HIGHRES_IMAGE_B64,
+                  "MainHighResImage", ("main_highres_image",), "high-resolution main camera", grace_s=3.0),
         _FeedSpec(WristImage, Camera, wrist, "WristImage", ("wrist_image",), "wrist camera", grace_s=3.0),
         _FeedSpec(
             DepthMap,

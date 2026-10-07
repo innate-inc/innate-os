@@ -30,7 +30,7 @@ from brain_client.skills.types import _DEFAULT_STATE_GRACE_S, InterfaceType, Rob
 from brain_client.state.arm import Arm
 from brain_client.state.battery import Battery
 from brain_client.state.head import HeadState
-from brain_client.state.image import DepthMap, MainImage, WristImage
+from brain_client.state.image import DepthMap, MainHighResImage, MainImage, WristImage
 from brain_client.state.joint_states import JointStates
 from brain_client.state.lidar import Lidar
 from brain_client.state.map import Map
@@ -81,6 +81,7 @@ class RobotStateProvider:
         # (jpeg, Image) of the last converted frame per camera — the b64
         # encode is far too expensive to redo at 50 Hz for a ~15 Hz camera
         self._main_image_cache = None
+        self._main_highres_cache = None
         self._wrist_image_cache = None
 
         self._odom_sub = None
@@ -110,6 +111,7 @@ class RobotStateProvider:
 
         # feed enum -> snapshot accessor; see _state_getters
         self._state_getter_map = {
+            RobotStateType.LAST_MAIN_HIGHRES_IMAGE_B64: self.current_main_highres_image,
             RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64: self.current_main_image,
             RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64: self.current_wrist_image,
             RobotStateType.LAST_DEPTH_IMAGE: self.current_depth,
@@ -190,6 +192,7 @@ class RobotStateProvider:
         self._lidar_cache = None
         self._map_cache = None
         self._main_image_cache = None
+        self._main_highres_cache = None
         self._wrist_image_cache = None
 
     def _on_odom(self, msg: OdometryMsg) -> None:
@@ -330,6 +333,17 @@ class RobotStateProvider:
             return cached[1]
         image = MainImage.from_jpeg(jpeg)
         self._main_image_cache = (jpeg, image)
+        return image
+
+    def current_main_highres_image(self) -> MainHighResImage | None:
+        jpeg = self._camera.last_main_highres_jpeg
+        if jpeg is None:
+            return None
+        cached = self._main_highres_cache
+        if cached is not None and cached[0] is jpeg:
+            return cached[1]
+        image = MainHighResImage.from_jpeg(jpeg)
+        self._main_highres_cache = (jpeg, image)
         return image
 
     def current_wrist_image(self) -> WristImage | None:

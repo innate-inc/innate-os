@@ -1,0 +1,20 @@
+{
+    "name": "replace_cactus",
+    "type": "learned",
+    "guidelines": "",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "execution": {
+        "duration": null,
+        "progress_threshold": null,
+        "start_pose": null,
+        "end_pose": null,
+        "n_action_steps": null,
+        "auto_stop": null,
+        "min_duration": null,
+        "progress_ema_alpha": null,
+        "engage_below": null,
+        "stable_min": null,
+        "stable_seconds": null
+    }
+}

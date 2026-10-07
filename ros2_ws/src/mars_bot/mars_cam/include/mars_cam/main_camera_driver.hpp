@@ -269,6 +269,7 @@ class MainCameraDriver : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_pub_;   // Left camera raw
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_pub_;  // Right camera raw
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr highres_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
 
     // Camera info publishers + calibration

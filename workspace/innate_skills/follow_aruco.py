@@ -133,7 +133,8 @@ class FollowAruco(Skill):
         return cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
 
     def _drive_toward(
-        self, quad, *, target_center_x=None, target_size_frac=TARGET_SIZE_FRAC, size_deadband=SIZE_DEADBAND
+        self, quad, *, target_center_x=None, target_size_frac=TARGET_SIZE_FRAC, size_deadband=SIZE_DEADBAND,
+        min_forward=0.0,
     ) -> None:
         center_x = quad[:, 0].mean()
         center_target = self._frame_width / 2 if target_center_x is None else target_center_x
@@ -151,6 +152,11 @@ class FollowAruco(Skill):
         if abs(err) > size_deadband:
             past_deadband = err - np.copysign(size_deadband, err)
             linear = float(np.clip(LINEAR_GAIN * past_deadband, -MAX_REVERSE, MAX_LINEAR))
+
+        # Optional docking floor: use the current measurement so filter lag
+        # cannot leave the base creeping just outside the arrival threshold.
+        if min_forward > 0 and size_error > size_deadband:
+            linear = max(linear, min_forward)
 
         self._send_cmd(linear, angular)
 

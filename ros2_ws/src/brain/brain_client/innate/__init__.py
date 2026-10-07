@@ -88,7 +88,7 @@ from brain_client.skills.types import (
 from brain_client.state.arm import Arm
 from brain_client.state.battery import Battery
 from brain_client.state.head import HeadState
-from brain_client.state.image import DepthMap, Image, MainImage, WristImage
+from brain_client.state.image import DepthMap, Image, MainHighResImage, MainImage, WristImage
 from brain_client.state.joint_states import JointStates
 from brain_client.state.lidar import Lidar
 from brain_client.state.map import Map
@@ -115,6 +115,7 @@ __all__ = [
     "Lidar",
     "Llm",
     "MainImage",
+    "MainHighResImage",
     "Manipulation",
     "Map",
     "Mobility",

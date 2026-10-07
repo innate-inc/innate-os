@@ -1,0 +1,19 @@
+{
+    "data_frequency": 30.0,
+    "dataset_type": "h264",
+    "episodes": [
+        {
+            "end_timestamp": "2026-09-10T10:57:23",
+            "episode_id": 0,
+            "file_name": "episode_0.h5",
+            "source": "teleop",
+            "start_timestamp": "2026-09-10T10:56:47",
+            "video_files": [
+                "episode_0_camera_1.mp4",
+                "episode_0_camera_2.mp4"
+            ],
+            "encoder_version": 1
+        }
+    ],
+    "number_of_episodes": 1
+}
