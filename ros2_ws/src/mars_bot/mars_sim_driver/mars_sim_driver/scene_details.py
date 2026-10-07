@@ -218,3 +218,93 @@ def blaze(room):
     # Closed alarm boxes on walls, away from task props and all door openings.
     for x, y in ((-0.72, 2.22), (2.75, 2.22), (2.75, -2.22)):
         box(room, "fire_alarm", (0.06, 0.013, 0.09), (x, y, 0.91), (0.68, 0.06, 0.04, 1))
+
+
+def _floor(room, name, x0, y0, x1, y1, color, z=0.0025):
+    """A room-sized floor finish between its own walls, under every rug and mat."""
+    box(room, name, ((x1 - x0) / 2, (y1 - y0) / 2, 0.001), ((x0 + x1) / 2, (y0 + y1) / 2, z), color)
+
+
+def _grout(room, name, x0, y0, x1, y1, step, color):
+    """Tile joints over a floor finish, one depth layer above it."""
+    x = x0 + step
+    while x < x1 - 0.01:
+        box(room, name, (0.004, (y1 - y0) / 2, 0.0005), (x, (y0 + y1) / 2, 0.0040), color)
+        x += step
+    y = y0 + step
+    while y < y1 - 0.01:
+        box(room, name, ((x1 - x0) / 2, 0.004, 0.0005), ((x0 + x1) / 2, y, 0.0040), color)
+        y += step
+
+
+def household(room):
+    # Every wall shared one grey and every floor one beige tile, so the four
+    # rooms could be told apart only by their furniture -- from the robot's
+    # camera at the spawn, a grey slab, a black sky and an orange post. The
+    # tour challenge asks for the rooms BY NAME, so each one gets a floor, a
+    # wall feature and furniture detail of its own. All of it is
+    # non-colliding and clear of every route and door opening.
+    recolor(room, (0.84, 0.81, 0.75, 1), (0.52, 0.47, 0.40, 1))
+    room.geoms[:] = [g for g in room.geoms if not g.name.startswith("seam")]
+    for g in room.geoms:
+        # The sofa and duvet were the exact blue of the mug the robot is sent
+        # to find; a fabric green and an indigo keep "the blue mug" unique.
+        if g.name in ("seat", "back", "cush", "arm") and g.pos[1] > 2.0:
+            g.rgba = (0.33, 0.45, 0.42, 1)
+        if g.name == "duvet":
+            g.rgba = (0.30, 0.33, 0.52, 1)
+        if g.name == "top" and g.pos[0] > 0:  # kitchen worktops, not the bedside
+            g.rgba = (0.17, 0.19, 0.21, 1)
+
+    # Floors, each confined to its own room between the walls.
+    _floor(room, "living_floor", -4.44, 0.06, -0.06, 3.44, (0.50, 0.35, 0.21, 1))
+    _floor(room, "kitchen_floor", 0.06, 0.06, 3.94, 3.44, (0.75, 0.73, 0.67, 1))
+    _grout(room, "kitchen_grout", 0.06, 0.06, 3.94, 3.44, 0.6, (0.58, 0.56, 0.51, 1))
+    _floor(room, "bedroom_floor", -4.44, -3.94, -0.56, -0.06, (0.53, 0.48, 0.56, 1))
+    _floor(room, "bathroom_floor", -0.44, -2.14, 1.74, -0.06, (0.72, 0.82, 0.82, 1))
+    _grout(room, "bathroom_grout", -0.44, -2.14, 1.74, -0.06, 0.4, (0.55, 0.66, 0.67, 1))
+    _floor(room, "utility_floor", 1.86, -3.94, 3.94, -0.06, (0.49, 0.49, 0.47, 1))
+    _floor(room, "utility_floor", -0.44, -3.94, 1.74, -2.26, (0.49, 0.49, 0.47, 1))
+
+    # A ceiling, so the robot's camera sees a room rather than black sky. Named
+    # "ceiling" because the browser's overhead view leaves exactly that out.
+    box(room, "ceiling", (4.25, 3.75, 0.025), (-0.25, -0.25, 2.43), (0.93, 0.91, 0.86, 1))
+
+    # Living room: art over the sofa, a rug in front of it, a screen facing it.
+    Panel(room, "living_art", (-3.4, 3.424, 1.42), 1.05, 0.72, yaw=180).artwork()
+    box(room, "picture_light", (0.22, 0.045, 0.02), (-3.4, 3.38, 1.86), BRASS)
+    box(room, "living_rug_border", (0.85, 0.50, 0.001), (-3.4, 1.65, 0.0045), INK)
+    box(room, "living_rug", (0.80, 0.45, 0.001), (-3.4, 1.65, 0.0065), (0.62, 0.30, 0.22, 1))
+    Panel(room, "living_tv", (-3.7, 0.076, 1.12), 1.0, 0.58, (0.10, 0.12, 0.14, 1))
+    # The fetch's delivery mat, in front of where Casey stands. The station's
+    # own pad and post sit north of it (from y=2.325), untouched. Every point
+    # of the mat must satisfy the judge, which wants the mug within 1.0 m of
+    # Casey at (-1.3, 2.95) and 0.45 m of (-1.3, 2.2): at 0.20 m and y=2.1 the
+    # south rim reached 1.05 m from Casey, so a mug set down on the mat failed.
+    pad(room, "casey_delivery_mat", -1.3, 2.12, 0.17, CREAM)
+
+    # Kitchen: door fronts and handles on both runs of units, a hob, a sink
+    # and a window over the worktop.
+    for x in (1.1, 1.7, 2.3, 2.9):  # north run, front face at y = 2.8
+        box(room, "cabinet_front", (0.27, 0.004, 0.30), (x, 2.794, 0.44), TEAL)
+        box(room, "cabinet_handle", (0.09, 0.012, 0.013), (x, 2.781, 0.68), BRASS)
+    for y in (1.05, 1.55, 2.05, 2.55):  # east run, front face at x = 3.3
+        box(room, "cabinet_front", (0.004, 0.22, 0.30), (3.294, y, 0.44), TEAL)
+        box(room, "cabinet_handle", (0.012, 0.09, 0.013), (3.281, y, 0.68), BRASS)
+    for x in (2.4, 2.8):
+        disc(room, "hob", 0.10, (x, 3.1, 0.883), INK)
+    box(room, "sink_well", (0.18, 0.22, 0.002), (3.6, 1.6, 0.883), (0.62, 0.66, 0.68, 1))
+    Panel(room, "kitchen_window", (1.6, 3.424, 1.55), 0.90, 0.62, (0.55, 0.70, 0.78, 1), yaw=180)
+
+    # Bathroom: a mirror over the basin (kept off the doorway), the basin
+    # well, the toilet opening, and a towel on the east wall.
+    Panel(room, "bathroom_mirror", (1.25, -0.076, 1.30), 0.45, 0.62, (0.62, 0.72, 0.75, 1), yaw=180)
+    box(room, "basin_well", (0.18, 0.14, 0.002), (1.2, -0.55, 0.823), (0.48, 0.60, 0.63, 1))
+    box(room, "toilet_opening", (0.15, 0.11, 0.001), (0.24, -1.7, 0.404), INK)
+    box(room, "towel", (0.004, 0.22, 0.30), (1.734, -1.4, 0.95), (0.80, 0.42, 0.36, 1))
+
+    # Bedroom: art over the headboard and a rug beside the bed, clear of the
+    # station pad the tour stops on.
+    Panel(room, "bedroom_art", (-3.0, -3.924, 1.18), 0.95, 0.62).artwork()
+    box(room, "bedroom_rug_border", (0.33, 0.68, 0.001), (-2.05, -2.2, 0.0045), INK)
+    box(room, "bedroom_rug", (0.30, 0.65, 0.001), (-2.05, -2.2, 0.0065), (0.40, 0.48, 0.56, 1))

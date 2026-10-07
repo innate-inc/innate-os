@@ -22,15 +22,19 @@ PROP = Prop(
     solref=(0.02, 1.0),
     margin=0.007,
     rgba=(0.65, 0.6, 0.55, 1.0),
-    rest_z=0.3,
+    # Measured, lying on its back on a bare floor: the scan's origin settles
+    # 0.126 m up (the fallback box, 0.157 m). The old 0.3 was not a height
+    # this body rests at, so a prop placed at rest_z fell, and a check that
+    # it had not sunk below rest_z failed on a body lying correctly.
+    rest_z=0.12,
     # 0.45, not the original 1.5: a 1.7 m rigid convex hull free-falling
     # 1.5 m builds real angular momentum before first contact, and a body
     # authored to LAND lying flat instead tumbled -- verified by rendering
     # the settled result (not just checking rest position/drift, which both
     # looked fine while the body was resting diagonally on a nearby prop).
-    # 0.45 clears the same furniture lips the original height was chosen for
-    # (rest_z=0.3 plus a working margin) while being too short a fall to
-    # accumulate meaningful tumble.
+    # 0.45 still starts the hull's underside ~0.33 m up, clear of the
+    # furniture lips the original height was chosen for, while being too
+    # short a fall to accumulate meaningful tumble.
     drop_z=0.45,
     reach=(1.5, 0.0),
     # The scan's origin is at the FEET; without this a Near() against it would

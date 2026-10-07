@@ -7,6 +7,7 @@ for the axis conversion. 86 collidable geoms plus 12 decor geoms
 Do not hand-edit: rebuild the map and re-run the exporter.
 """
 
+from mars_sim_driver.scene_details import household as finish_room
 from mars_sim_driver.statics import Geom, Room
 
 ROOM = Room(
@@ -114,3 +115,7 @@ ROOM = Room(
     Geom("box", (0.6, 0.06, 0.2), (3.0, -0.0, 2.2), quat=(1.0, 0.0, 0.0, 0.0), rgba=(0.949, 0.9412, 0.9255, 1.0), name="wallspine_hdr"),
     ],
 )
+
+# Shared camera-visible finishes; supports and door clearances remain above.
+
+finish_room(ROOM)

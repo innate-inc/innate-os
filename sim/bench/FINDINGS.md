@@ -161,6 +161,31 @@ things: `innate-sim down` can leave the host world server holding ports 8799
 and 8800 (kill `mars_sim_driver.world_server`), and a container write can
 leave `data/` root-owned (chown it back, or `up` dies on `data/.last_map`).
 
+### Closing the audit's two household items (6 Oct 2026)
+
+`ENVIRONMENT_AUDIT.md` left two Household faults open after the six-world
+refresh: the kitchen fetch named a person nobody spawned, and the fallen
+person was dropped through the wall between the bedroom and living room.
+Both are fixed, and Household has the refresh's finishes (per-room floors, a
+ceiling, wall art, cabinet fronts, a cream delivery mat). Two things in the
+fixing are worth keeping:
+
+- **A checkout without the downloaded `sim/assets` measures the fallback
+  box, not the scan, and says nothing.** The first fix put the person at
+  (-2.0, 1.75) and measured 0.000 m of drift -- on the 0.5 x 1.7 m box that
+  stands in when `casual_man.obj` is absent. On the scan the same drop slides
+  0.17 m in the 1.5 s after a reset. Re-measured on the scan, it now lies at
+  (-2.0, 1.2): 0.02 m, and the oracle scores 3/3.
+  The prop's `rest_z` of 0.3 was not a height the body rests at (the scan
+  rests at 0.126, the box at 0.157), so it is now 0.12. The tests pass on
+  both, but only the scan is a real check of a position.
+- **A visible destination has to satisfy the judge everywhere on it.** The
+  brief says "put it down on the cream mat in front of them", and the judge
+  wants the mug within 1.0 m of Casey. The first mat's near rim was 1.05 m
+  from Casey, so a mug set down on it could fail. The mat is smaller and
+  further north now, and `test_household_scene.py` checks the whole disc
+  against both halves of the judge.
+
 
 ## HARNESS or AGENT -- embodiment is a constraint, not a third verdict
 

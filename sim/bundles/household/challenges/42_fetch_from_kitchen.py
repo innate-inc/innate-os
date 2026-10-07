@@ -37,7 +37,7 @@ CHALLENGE = Challenge(
     category=2,
     brief=(
         "There is a blue mug on the kitchen floor. Casey is waiting in the living room. "
-        "Bring the mug over and put it down on the floor beside them."
+        "Bring the mug over and put it down on the cream mat in front of them."
     ),
     # ON THE FLOOR at 2.75, not on the counter at 2.85. The counter top is
     # 908 mm up; the arm works below ~300 mm and the base cannot climb, so the
@@ -51,7 +51,9 @@ CHALLENGE = Challenge(
     # inflation) and the arm reaches ~0.30 m past the base centre.
     setup=[
         Drop(name="household_mug_kitchen", x=1.4, y=2.75, z=0.033),
-        Drop(name="resident_casey", x=RECIPIENT[0], y=RECIPIENT[1], yaw_deg=180),
+        # yaw 0 faces -y, into the room and toward the mat. 180 had Casey
+        # facing the wall, so the mat "in front of them" was behind them.
+        Drop(name="resident_casey", x=RECIPIENT[0], y=RECIPIENT[1], yaw_deg=0),
     ],
     goals=[
         Goal(label="Reach the mug", predicate=Near(a="robot", b="household_mug_kitchen", radius_m=0.55)),

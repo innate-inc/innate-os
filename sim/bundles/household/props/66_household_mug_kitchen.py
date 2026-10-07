@@ -5,9 +5,8 @@ from mars_sim_driver.props import Prop
 PROP = Prop(
     name="household_mug_kitchen",
     label="☕",
-    title="Mug Kitchen",
-    mesh="../objects/household_mug_kitchen.stl",
-    mesh_scale=0.5882,
+    title="Blue kitchen mug",
+    mesh="../objects/household_mug_kitchen.obj",
     collision="cylinder",
     size=(0.0250, 0.0279),
     # Blue, not near-white (0.969, 0.965, 0.953): a WHITE mug on the white
@@ -20,5 +19,11 @@ PROP = Prop(
     # live run.
     rgba=(0.17, 0.42, 0.78, 1.0),
     rest_z=0.0279,
-    drop_z=0.9375,
+    # A floor drop. 0.9375 was the counter's height, left behind when the mug
+    # moved to the floor; it only went unnoticed because the challenge passes
+    # its own z, and free play would have dropped it from 94 cm.
+    drop_z=0.0379,
+    # Free play shows the mug where the fetch puts it, on the kitchen floor.
+    initial_pose=(1.4, 2.75, 0.0),
+    viewer={"glb": "/models/household/household_mug_kitchen.glb", "preNormalized": True},
 )

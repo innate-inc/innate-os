@@ -16,7 +16,18 @@ from mars_sim_driver.props import load_props
 from navplan import NavMap
 
 SIM = Path(__file__).resolve().parents[1]
-WORLDS = {"rounds": (1, 5), "workshop": (9, 4), "pantry": (9, 4), "counter": (6, 18), "bridge": (0, 3), "blaze": (5, 4)}
+WORLDS = {
+    "rounds": (1, 5),
+    "workshop": (9, 4),
+    "pantry": (9, 4),
+    "counter": (6, 18),
+    "bridge": (0, 3),
+    "blaze": (5, 4),
+    # Household was refreshed afterwards and is held to the same contract.
+    # Gallery is not listed: its challenges keep the whole exhibition on the
+    # floor (populate_world), so test_gallery_environment.py checks it.
+    "household": (1, 3),
+}
 
 
 @pytest.mark.parametrize("name", WORLDS)

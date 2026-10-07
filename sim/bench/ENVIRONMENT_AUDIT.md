@@ -7,6 +7,11 @@ and includes Stocktake’s return instruction. See [the refresh notes](../bundle
 Household’s missing recipient and unstable fallen-person setup are outside
 that refresh and remain open. Original scores do not describe the new layouts.
 
+**Update, 6 October:** both Household items are closed. Casey now stands in
+the living room and the mug is judged against Casey, and the fallen person
+lies wholly inside the living room. See
+[FINDINGS](FINDINGS.md#closing-the-audits-two-household-items-6-oct-2026).
+
 The current suite contains tasks that are unsupported by the live skills, tasks whose instructions omit information needed to satisfy the judge, and a placement check that accepts an object intersecting furniture. A better language model alone will not resolve these mismatches.
 
 This audit covers the working tree in `innate-os-bench`, including the recent pantry assets and sorted counting layout. It adds findings and reproduction evidence; it does not change the tasks or weaken their goals.

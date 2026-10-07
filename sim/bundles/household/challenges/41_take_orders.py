@@ -35,25 +35,28 @@ CHALLENGE = Challenge(
         "where the dog is, and finally the bedroom."
     ),
     setup=[
-        # (-2.0, 1.75) at yaw 0: the WHOLE body inside the living room, and
-        # off the route to the bedroom door.
+        # (-2.0, 1.2) at yaw 0: the WHOLE body inside the living room (the
+        # settled scan spans x -2.36..-1.66, y 1.19..2.92), and off the route
+        # to the bedroom door.
         #
         # The previous (-3.4, -0.5) put the feet in the bedroom and the head
-        # 1.23 m into the living room, straight through the spine wall that
-        # divides them -- the body was spawned inside 2.4 m of masonry.
-        # Measured over the 1.5 s after a reset: it is thrown to a peak of
-        # 2.285 m and lands 1.732 m away, so every run of this challenge began
-        # by hurling the casualty across the flat. Found in
+        # into the living room, straight through the spine wall that divides
+        # them. Measured on the scan over the 1.5 s after a reset, it ends
+        # 0.96 m from where it was dropped, so every run began with the
+        # casualty sliding out of the place the scene put it. Found in
         # sim/bench/ENVIRONMENT_AUDIT.md.
+        #
+        # MEASURE ON THE SCAN, NOT THE FALLBACK. sim/assets is downloaded,
+        # not committed; without it this prop is a 0.5 x 1.7 m box, which
+        # sits still almost anywhere. An earlier fix chose (-2.0, 1.75) on the
+        # box: on the scan it slides 0.17 m in the same 1.5 s. Here it moves
+        # 0.02 m.
         #
         # THE NAV MAP CANNOT SEE THIS BODY. occupancy_grid rasterises static
         # world geometry only, so a prop is invisible to the planner: a route
-        # that plans cleanly is no evidence the robot can drive it. Four
-        # candidate positions all planned perfectly and all ended the episode
-        # "stuck at (-1.63, 0.76) heading for (-2.50, 0.50)", because the
-        # approach to the casualty nudged the body south into the bedroom leg.
-        # Only running the oracle distinguishes them; this position is the one
-        # that scores 3/3.
+        # that plans cleanly is no evidence the robot can drive it. Only
+        # running the oracle distinguishes positions; on the scan this one
+        # scores 3/3.
         #
         # RESIDUAL, DISCLOSED IMPERFECTION: the final rest pose is still not a
         # clean "flat on the back" silhouette. That is a property of
@@ -61,7 +64,7 @@ CHALLENGE = Challenge(
         # resting face, since heels, shoulders and hips are all local high
         # points -- rather than of any one drop position. Filed as a known
         # limitation; see FINDINGS.md.
-        Drop("human", -2.0, 1.75, yaw_deg=0),
+        Drop("human", -2.0, 1.2, yaw_deg=0),
         Drop("labrador", 1.0, 1.65, yaw_deg=90),
     ],
     # The first two checks are anchored to the person and the dog, not to

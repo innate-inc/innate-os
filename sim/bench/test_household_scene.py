@@ -6,11 +6,16 @@ destination coordinates, so it neither looks for the person the brief names
 nor cares that the casualty is launched across the flat before the run starts.
 
 `household_take_orders` dropped its 1.7 m body at (-3.4, -0.5) with the feet
-in the bedroom and the head 1.23 m into the living room, straight through the
-spine wall between them. Measured over the 1.5 s after a reset: a peak of
-2.285 m and 1.732 m of travel. A drop is therefore checked for containment
+in the bedroom and the head in the living room, straight through the spine
+wall between them. Measured on the scan over the 1.5 s after a reset, it ends
+0.96 m from where it was dropped. A drop is therefore checked for containment
 against the settled body the simulator carries, and for motion immediately
 after the reset -- a rest pose says nothing about how it got there.
+
+Both checks hold on the downloaded scan and on the box that stands in for it
+when sim/assets is absent (as in CI). Only the scan is a real test of the
+position: the box sits still almost anywhere, and a position chosen on it
+alone slid 0.17 m on the scan.
 
 `household_fetch_mug` said "bring it to the person in the living room" and
 spawned nobody, judging delivery by a bare circle around a marker pad. The
@@ -31,6 +36,7 @@ import math
 import threading
 from pathlib import Path
 
+import mujoco
 import pytest
 from mars_sim_driver.challenges import AllOf, ChallengeEngine, Hold, InCircle, Near
 from mars_sim_driver.core import VirtualMars
@@ -67,29 +73,38 @@ def test_the_fallen_body_lies_wholly_inside_the_living_room(household):
 
     MuJoCo re-centres a mesh on its own frame, so deriving the footprint from
     the drop point and a quoted height gets the answer wrong in both
-    directions. The geom's bounding sphere is what the simulator itself
-    carries, and it is conservative: if the sphere fits in the room, the body
-    does.
+    directions. The scan is checked vertex by vertex in its settled pose; its
+    bounding sphere is 1.7 m across in every direction and would not fit a
+    body lying along a wall. Any other geom (the fallback box) is checked by
+    its bounding sphere, which is conservative.
     """
     mars, engine = household
     assert engine.start("household_take_orders")
     mars.step(1.5)
-    body = mars.model.body("human").id
+    m, d = mars.model, mars.data
+    body = m.body("human").id
     x0, y0, x1, y1 = LIVING_ROOM
-    for g in range(mars.model.ngeom):
-        if mars.model.geom_bodyid[g] != body:
+    for g in range(m.ngeom):
+        if m.geom_bodyid[g] != body:
             continue
-        cx, cy = (float(v) for v in mars.data.geom_xpos[g][:2])
-        r = float(mars.model.geom_rbound[g])
-        assert x0 <= cx - r and cx + r <= x1, f"the body reaches x {cx - r:.2f}..{cx + r:.2f}, outside the living room"
-        assert y0 <= cy - r and cy + r <= y1, f"the body reaches y {cy - r:.2f}..{cy + r:.2f}, outside the living room"
+        if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH:
+            mesh = m.geom_dataid[g]
+            local = m.mesh_vert[m.mesh_vertadr[mesh] : m.mesh_vertadr[mesh] + m.mesh_vertnum[mesh]]
+            world = local @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g]
+            (lx, ly), (hx, hy) = world[:, :2].min(axis=0), world[:, :2].max(axis=0)
+        else:
+            cx, cy = (float(v) for v in d.geom_xpos[g][:2])
+            r = float(m.geom_rbound[g])
+            lx, ly, hx, hy = cx - r, cy - r, cx + r, cy + r
+        assert x0 <= lx and hx <= x1, f"the body reaches x {lx:.2f}..{hx:.2f}, outside the living room"
+        assert y0 <= ly and hy <= y1, f"the body reaches y {ly:.2f}..{hy:.2f}, outside the living room"
 
 
 def test_the_fallen_body_stays_where_the_scene_puts_it(household):
     """The 1.5 s AFTER the reset, not the eventual rest pose.
 
-    The old drop settled `somewhere` perfectly calmly, a room and 1.7 m away
-    from the casualty the brief describes.
+    The old drop settled `somewhere` perfectly calmly, most of a metre from
+    where the scene put the casualty the brief describes.
     """
     mars, engine = household
     assert engine.start("household_take_orders")
@@ -130,6 +145,20 @@ def test_the_mug_is_delivered_to_someone_who_is_actually_there(household):
     assert near.b == "resident_casey"
     assert math.dist((circle.x, circle.y), (recipient.x, recipient.y)) <= near.radius_m, (
         "the delivery circle has drifted away from the person it represents"
+    )
+    # The brief says "on the cream mat", so anywhere on the mat must pass both
+    # halves of the judge, rim included.
+    # Room geoms are compiled as <room>_<name>_<index>.
+    mat = next(
+        g
+        for g in map(mars.model.geom, range(mars.model.ngeom))
+        if g.name.removeprefix("household_").startswith("casey_delivery_mat_border_")
+    )
+    mx, my = (float(v) for v in mars.data.geom_xpos[mat.id][:2])
+    rim = float(mat.size[0])
+    assert math.dist((mx, my), (circle.x, circle.y)) + rim <= circle.radius_m, "part of the mat is outside the circle"
+    assert math.dist((mx, my), (recipient.x, recipient.y)) + rim <= near.radius_m, (
+        "part of the mat is too far from Casey"
     )
     # And the mug has to be resting on the floor, not held, buried or airborne.
     rest_z = mars.props.props["household_mug_kitchen"].rest_z
