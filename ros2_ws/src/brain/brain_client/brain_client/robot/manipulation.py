@@ -38,7 +38,6 @@ from geometry_msgs.msg import PoseStamped, Twist
 from mars_msgs.msg import ArmStatus
 from mars_msgs.srv import GotoJS, GotoJSTrajectory
 from rclpy.node import Node
-from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
@@ -602,7 +601,7 @@ class Manipulation:
         reached; False when it is out of reach (the arm goes as near as it can)
         or the IK gave no answer within one stream tick, or only one on another
         branch (the arm stays)."""
-        reply = self._ask_ik(self._ik_stream_pub, x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
+        reply = self._ask_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S, stream=True)
         if reply is None or self._branch_jump(reply.position):
             return False
         joints = list(reply.position)
@@ -812,12 +811,11 @@ class Manipulation:
         timeout: float = 2.0,
     ) -> list[float] | None:
         """IK for a cartesian pose: the 5 arm joints, or None on failure."""
-        reply = self._ask_ik(self._ik_target_pub, x, y, z, roll, pitch, yaw, timeout=timeout)
+        reply = self._ask_ik(x, y, z, roll, pitch, yaw, timeout=timeout)
         return None if reply is None else list(reply.position)
 
     def _ask_ik(
         self,
-        publisher: Publisher,
         x: float,
         y: float,
         z: float,
@@ -825,8 +823,10 @@ class Manipulation:
         pitch: float,
         yaw: float,
         timeout: float,
+        stream: bool = False,
     ) -> JointState | None:
-        """The IK node's reply carrying the 5 arm joints, or None on failure.
+        """The IK node's reply carrying the 5 arm joints, or None on failure;
+        ``stream`` asks /ik_stream for the best-effort answer instead.
 
         The IK node speaks topics (/ik_delta or /ik_stream in, /ik_solution
         out) with no correlation id, so requests serialize on _ik_lock and
@@ -835,6 +835,8 @@ class Manipulation:
         with self._ik_lock:
             self._ik_solution = None
             key = f"{x:.4f} {y:.4f} {z:.4f} {roll:.4f} {pitch:.4f} {yaw:.4f}"  # as mars_arm/ik.py echoes it
+            if stream:
+                key = f"stream {key}"
 
             target = Twist()  # an ABSOLUTE pose despite /ik_delta's name
             target.linear.x = x
@@ -843,7 +845,7 @@ class Manipulation:
             target.angular.x = roll
             target.angular.y = pitch
             target.angular.z = yaw
-            publisher.publish(target)
+            (self._ik_stream_pub if stream else self._ik_target_pub).publish(target)
 
             start_time = time.time()
             while time.time() - start_time < timeout:

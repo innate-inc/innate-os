@@ -308,7 +308,7 @@ class KDLIKNode(Node):
         q = self._nearest_in_limits(target)
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
-        js.header.frame_id = _request_key(request)
+        js.header.frame_id = f"stream {_request_key(request)}"  # never mistaken for a strict answer
         js.name = self.joint_names
         js.position = q.tolist()
         js.effort = [(target.p - self._fk(q).p).Norm()]  # JointState has no field for the miss
