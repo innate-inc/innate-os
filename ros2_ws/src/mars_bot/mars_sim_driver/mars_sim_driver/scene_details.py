@@ -1,11 +1,13 @@
 """Authored finishes and landmarks for the primitive benchmark rooms.
 
 These are ordinary room geoms, shared by the robot camera and browser. Details
-are non-colliding; task routes and furniture support surfaces stay explicit in
-the room sidecars. Thin layers have separate depths to avoid z-fighting.
+are non-colliding, except the doors that close doorways which opened onto
+nothing; task routes and furniture support surfaces stay explicit in the room
+sidecars. Thin layers have separate depths to avoid z-fighting.
 """
 
 import math
+from dataclasses import replace
 
 from .statics import Geom
 
@@ -102,8 +104,14 @@ def rounds(room):
     Panel(room, "bathroom_mirror", (4.0, -3.724, 1.20), 0.62, 0.58, (0.49, 0.65, 0.67, 1))
     box(room, "basin_well", (0.18, 0.14, 0.002), (4, -3.4, 0.823), (0.39, 0.55, 0.57, 1))
     box(room, "toilet_opening", (0.12, 0.15, 0.001), (5.4, -3.46, 0.404), INK)
-    pad(room, "book_delivery_mat", 4.0, 2.5, 0.43, (0.18, 0.48, 0.54, 1))
+    # Blue, as the brief calls it. It was teal, the same family as the
+    # corridor runner, beside a door that is a saturated blue.
+    pad(room, "book_delivery_mat", 4.0, 2.5, 0.43, (0.16, 0.36, 0.72, 1))
     Panel(room, "lobby_art", (4, 3.524, 1.52), 0.72, 0.70, yaw=180).artwork()
+    # A ceiling on the 2.4 m wall tops, so the robot's camera sees a building
+    # rather than a black band above every wall. Named "ceiling" because the
+    # browser's overhead view leaves exactly that out.
+    box(room, "ceiling", (6.0, 3.7, 0.025), (0, -0.1, 2.425), (0.93, 0.91, 0.86, 1))
 
 
 def workshop(room):
@@ -129,6 +137,8 @@ def workshop(room):
             box(room, "crate_band", (0.018, 0.002, 0.07), (g.pos[0], g.pos[1] + 0.012, g.pos[2]), INK, g.quat)
     for y in (-2.65, -1.05):
         box(room, "ramp_boundary", (0.65, 0.015, 0.001), (3.2, y, 0.003), BRASS)
+    # Ceiling on the 2.4 m wall tops; see rounds().
+    box(room, "ceiling", (4.0, 3.0, 0.025), (0, 0, 2.425), (0.93, 0.91, 0.86, 1))
 
 
 def pantry(room):
@@ -146,16 +156,49 @@ def pantry(room):
             sign.rect("tape", 0, -0.02, 0.025, 0.13, BRASS, 0.023)
     pad(room, "jar_sorting_pad", -1.68, 0.15, 0.25, (0.76, 0.48, 0.16, 1))
     pad(room, "box_sorting_pad", 0.0, 1.12, 0.25, (0.17, 0.36, 0.60, 1))
-    pad(room, "delivery_pad", -1.18, -0.83, 0.24, CREAM)
+    # Slate, not cream: the delivery carton starts on this pad, and a cream
+    # carton on a cream mat was hard to make out from the spawn.
+    pad(room, "delivery_pad", -1.18, -0.83, 0.24, (0.33, 0.37, 0.37, 1))
+    # A closed door in the south doorway. It was an opening onto unrendered
+    # black, right where the stocktake sends the robot back to, and nothing
+    # stopped a robot driving out of the world through it.
+    _door(room, 0.0, -1.8, 0.4, 1.3)
     # Shelf price rails and a back-wall display give the room a shop identity.
     for x in (-0.9, -0.3, 0.3, 0.9):
         box(room, "shelf_ticket", (0.055, 0.003, 0.025), (x, 1.479, 0.10), WHITE)
+
+
+def _door(room, x, y, half_width, wall_top):
+    """A closed, collidable door filling a doorway in an x-running wall at y,
+    with a lintel up to the wall top. The room side is +y."""
+    room.geoms.append(Geom("box", (half_width, 0.03, 0.55), (x, y, 0.55), rgba=OAK, name="door"))
+    box(room, "door_lintel", (half_width, 0.06, (wall_top - 1.1) / 2), (x, y, (wall_top + 1.1) / 2), WHITE)
+    box(room, "door_panel", (half_width - 0.08, 0.002, 0.40), (x, y + 0.032, 0.58), (0.36, 0.21, 0.10, 1))
+    box(room, "door_handle", (0.012, 0.010, 0.055), (x + half_width - 0.10, y + 0.042, 0.55), BRASS)
 
 
 def counter(room):
     # Replace the original square outlines with one clear delivery marker.
     room.geoms[:] = [g for g in room.geoms if g.name not in {"edge", "spot"}]
     recolor(room, (0.79, 0.75, 0.66, 1), (0.37, 0.22, 0.12, 1))
+    # Warm white wainscot, not green: the green cup stands on the pass in
+    # front of the north wainscot, and green on green made a 5 px cup easy to
+    # miss in "how many cups are on the counter". The south run stops at the
+    # doorway now that it has a door.
+    split = []
+    for g in room.geoms:
+        if g.name in ("wainn", "wains", "waine", "wainw"):
+            g.rgba = WHITE
+        if g.name in ("wains", "wainsr"):
+            for x0, x1 in ((g.pos[0] - g.size[0], -0.5), (0.5, g.pos[0] + g.size[0])):
+                split.append(replace(g, size=((x1 - x0) / 2, *g.size[1:]), pos=((x0 + x1) / 2, *g.pos[1:])))
+    room.geoms[:] = [g for g in room.geoms if g.name not in ("wains", "wainsr")] + split
+    _door(room, 0.0, -1.8, 0.5, 1.2)
+    # Floor board seams topped out at 4 mm, level with the mat borders, and
+    # flickered where they crossed. 2 mm keeps them under every mat.
+    for g in room.geoms:
+        if g.name == "board":
+            g.size, g.pos = (*g.size[:2], 0.001), (*g.pos[:2], 0.001)
     # Fluted oak front and a dark stone top, at the original support height.
     for g in room.geoms:
         if g.name == "top" and abs(g.pos[0]) < 0.01:
@@ -196,11 +239,29 @@ def bridge(room):
 
 def blaze(room):
     recolor(room, (0.76, 0.72, 0.64, 1), (0.42, 0.29, 0.17, 1))
+    # THE ONLY WAY OUT HAS TO LOOK OPEN. The store's green band and the south
+    # skirting both ran straight across the store/porch doorway (x -2.81 to
+    # -2.09): non-colliding, but on camera a green bar and a 10 cm sill across
+    # the exit the brief sends the robot through, for a robot that cannot
+    # climb. Both now stop at the door jambs.
+    door_x0, door_x1 = -2.81, -2.09
+    pieces = []
+    for g in room.geoms:
+        if g.name == "band_store":
+            x1 = g.pos[0] + g.size[0]
+            pieces.append(replace(g, size=((x1 - door_x1) / 2, *g.size[1:]), pos=((x1 + door_x1) / 2, *g.pos[1:])))
+        if g.name == "sks":
+            x0, x1 = g.pos[0] - g.size[0], g.pos[0] + g.size[0]
+            for a, b in ((x0, door_x0), (door_x1, x1)):
+                pieces.append(replace(g, size=((b - a) / 2, *g.size[1:]), pos=((a + b) / 2, *g.pos[1:])))
+    room.geoms[:] = [g for g in room.geoms if g.name not in ("band_store", "sks")] + pieces
     # The existing coloured bands identify rooms. Complete the furniture so
     # a kitchen, study and bedroom can also be identified by their contents.
+    # Fronts at y=1.766, clear of the rails' faces at 1.770 they used to
+    # share and flicker against.
     for x in (-2.40, -1.90, -1.40):
-        box(room, "kitchen_front", (0.22, 0.003, 0.078), (x, 1.773, 0.12), TEAL)
-        box(room, "kitchen_handle", (0.065, 0.006, 0.008), (x, 1.760, 0.16), BRASS)
+        box(room, "kitchen_front", (0.22, 0.003, 0.078), (x, 1.766, 0.12), TEAL)
+        box(room, "kitchen_handle", (0.065, 0.006, 0.008), (x, 1.757, 0.16), BRASS)
     for x in (-2.2, -1.9):
         disc(room, "kitchen_hob", 0.075, (x, 2.0, 0.244), INK)
     Panel(room, "kitchen_window", (-1.6, 2.222, 0.87), 0.72, 0.50, (0.43, 0.61, 0.66, 1), 180)
@@ -208,16 +269,27 @@ def blaze(room):
     box(room, "monitor_stem", (0.015, 0.015, 0.10), (1.85, 2.06, 0.35), INK)
     Panel(room, "study_monitor", (1.85, 2.06, 0.47), 0.42, 0.28, (0.17, 0.30, 0.40, 1), 180)
     Panel(room, "bedroom_art", (2.35, -2.222, 0.89), 0.56, 0.55).artwork()
-    # A framed green exit pictogram over the existing store/porch doorway.
-    sign = Panel(room, "exit_sign", (-2.45, -2.222, 1.03), 0.48, 0.24, TEAL)
-    sign.rect("door", -0.08, 0, 0.095, 0.15, WHITE)
-    sign.rect("arrow_shaft", 0.09, 0, 0.15, 0.025, WHITE)
-    sign.rect("arrow_top", 0.15, 0.035, 0.025, 0.09, WHITE)
+    # A framed green exit pictogram on the wall beside the store/porch
+    # doorway, arrow toward it. It used to hang in the doorway itself, which
+    # has no lintel, so it floated in the opening. On a yaw-0 panel +u is
+    # world +x, which a robot facing the wall sees on its LEFT; the door is
+    # to the west, so the arrow runs toward -u.
+    sign = Panel(room, "exit_sign", (-1.80, -2.222, 1.03), 0.48, 0.24, TEAL)
+    sign.rect("door", 0.08, 0, 0.095, 0.15, WHITE)
+    sign.rect("arrow_shaft", -0.09, 0, 0.15, 0.025, WHITE)
+    sign.rect("arrow_top", -0.15, 0.035, 0.025, 0.09, WHITE)
     for x in (-2.45, -1.15):
         disc(room, "exit_waymarker", 0.06, (x, -1.9 if x < -2 else -0.95, 0.008), (0.25, 0.64, 0.37, 1))
     # Closed alarm boxes on walls, away from task props and all door openings.
     for x, y in ((-0.72, 2.22), (2.75, 2.22), (2.75, -2.22)):
         box(room, "fire_alarm", (0.06, 0.013, 0.09), (x, y, 0.91), (0.68, 0.06, 0.04, 1))
+    # Ceiling over the house on the 1.3 m wall tops; the porch stays open.
+    box(room, "ceiling", (3.2, 2.3, 0.025), (0, 0, 1.325), (0.93, 0.91, 0.86, 1))
+    # NO BACKDROP PAST THE PORCH, though the way out still opens onto black.
+    # A daylight panel there was tried: the map exporter's virtual lidar sees
+    # it through the doorway, the building envelope grows to reach it, and
+    # the nav map gained 312 free cells off a porch that drops 0.5 m to the
+    # ground plane.
 
 
 def _floor(room, name, x0, y0, x1, y1, color, z=0.0025):

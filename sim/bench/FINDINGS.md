@@ -180,11 +180,75 @@ fixing are worth keeping:
   rests at 0.126, the box at 0.157), so it is now 0.12. The tests pass on
   both, but only the scan is a real check of a position.
 - **A visible destination has to satisfy the judge everywhere on it.** The
-  brief says "put it down on the cream mat in front of them", and the judge
+  brief says "put it down on the round cream mat in front of them", and the judge
   wants the mug within 1.0 m of Casey. The first mat's near rim was 1.05 m
   from Casey, so a mug set down on it could fail. The mat is smaller and
   further north now, and `test_household_scene.py` checks the whole disc
   against both halves of the judge.
+
+### Every challenge through the robot's camera (6 Oct 2026)
+
+The validity gate proves a challenge is solvable by a script that is handed
+the coordinates. It cannot tell whether the brief makes sense to someone
+looking at the scene. So all 45 were rendered from their real spawn and from
+where a robot would stand, and each brief, narrator line and goal was read
+against the pictures. Fixed:
+
+- **Speech thrown away by goal order.** A spoken goal only hears speech made
+  while it is the current goal. `counter_unspoken_request` judged the offer of
+  help after a 5 s dwell at the customer, so offering help on arrival scored
+  1/2; the offer now shares a phase with the dwell and must be made at the
+  customer (`test_speech_on_arrival.py`). `counter_out_of_reach` judged the
+  refusal only within 0.75 m of the teapot, where the teapot has left the
+  camera frame, and the brief never said to go there: it now says so, at 1.0 m.
+- **Briefs that licensed the "wrong" behaviour.** `counter_which_one` asked
+  for "one of the cups" and failed a robot that brought one without asking;
+  it now asks for "my cup". `household_tour` began "visit the living room"
+  with the robot already standing in it, and a robot that took that as done
+  scored 0/4; the brief now names the rug as the first stop.
+  `counter_cafe_shift` sent the robot back to "the pad", which nothing had
+  introduced; it is now "the green square by the door where you started".
+- **Goals narrower than the brief.** `household_take_orders` judged "finally
+  the bedroom" as a 0.85 m circle around an unmentioned corner marker (now
+  the whole bedroom), and "check on them" at 0.9 m from the body's centre,
+  which a robot kneeling at the head or feet missed (now 1.2 m).
+- **Scenes that contradicted the brief.** Pantry's stocktake expects 3
+  cartons on the shelves; an old cardboard delivery tray on the right shelf
+  read as a 4th and is gone. Blaze's green wall band and skirting ran across
+  the only exit, and its exit sign floated in the doorway. Rounds' "blue"
+  delivery mat was teal. The workshop's "blue paint cans" fell back to red in
+  the browser (and its amber oil cans to blue).
+- **Graphics.** Ceilings in rounds, workshop and blaze (the robot looked up
+  into black); closed doors where the counter's and pantry's doorways opened
+  onto black (and let a robot drive out of the world); the counter's green
+  wainscot, behind the green cup in "how many cups are on the counter", is
+  white; z-fighting removed from the counter's mats and Blaze's kitchen
+  fronts. Blaze's porch still opens onto black: a daylight panel past it was
+  tried and taken out, because the map exporter's virtual lidar saw it
+  through the doorway and grew the map off the edge of the porch.
+
+The four regenerated nav maps (rounds, pantry, counter, blaze) differ from the
+old ones where a door now stands, and otherwise only in frame: the exporter
+sizes a map from every room geom's bounding sphere, so a ceiling or a split
+trim strip moves the origin without changing what is drivable.
+
+Left for the maintainers, because each is a design decision rather than a
+defect:
+
+- **Deliveries must land upright.** The floor-delivery height bands start a
+  few mm under each item's upright rest height, so a jar, carton, medicine
+  bottle or oil can set down on its side, on the right mat, fails. The briefs
+  say "put it down".
+- **Blaze's flames reach the items before the deadline.** In `blaze_l3` a
+  fire patch 0.2 m from the document box lights at 221 s, while the brief
+  allows the kitchen until 330 s. The flames are visual only, so the judge
+  still accepts the box; a careful person would give it up.
+- **Order words the judge does not enforce.** Blaze's "medicine first, then
+  the phone" passes in either order; pantry_restock's "leave the jar where it
+  is" is never checked. A robot following the brief always passes; one that
+  ignores it can too.
+- **Nobody at the counter.** "I'm at the middle seat" is spoken to an empty
+  stool in `counter_unspoken_request` and `counter_which_one`.
 
 
 ## HARNESS or AGENT -- embodiment is a constraint, not a third verdict

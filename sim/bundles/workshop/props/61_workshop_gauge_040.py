@@ -10,7 +10,9 @@ PROP = Prop(
     viewer={"glb": "/models/workshop/workshop_gauge_040.glb", "preNormalized": True},
     collision="cylinder",
     size=(0.02, 0.0575),
-    rgba=(0.1725, 0.4157, 0.7765, 1.0),
+    # The fallback colour matches the amber texture: it is what the browser
+    # draws until the model loads.
+    rgba=(0.803, 0.609, 0.368, 1.0),
     initial_pose=(-3.4, -2.4, 0),
     rest_z=0.0575,
     drop_z=0.0675,

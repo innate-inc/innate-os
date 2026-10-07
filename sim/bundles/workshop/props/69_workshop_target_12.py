@@ -10,7 +10,9 @@ PROP = Prop(
     viewer={"glb": "/models/workshop/workshop_target_12.glb", "preNormalized": True},
     collision="cylinder",
     size=(0.033, 0.0575),
-    rgba=(0.7882, 0.2275, 0.1882, 1.0),
+    # The fallback colour matches the texture (blue, as the brief says): it is
+    # what the browser draws until the model loads.
+    rgba=(0.1725, 0.4157, 0.7765, 1.0),
     initial_pose=(-1.5, 2.3, 0),
     rest_z=0.0575,
     drop_z=0.1875,

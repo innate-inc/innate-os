@@ -87,6 +87,15 @@ ROOM.geoms = [
     replace(g, rgba=_paint if g.name.startswith("wall") else _colors.get(g.name, g.rgba))
     for g in ROOM.geoms if g.name not in ("aisle", "aisletick")
 ]
+# The open cardboard tray on the right-hand shelf's middle deck was the bay
+# cartons used to be delivered to. Deliveries go to floor mats now, and from
+# the robot's camera the tray reads as a closed carton -- bigger than the real
+# ones, beside the tea -- so "count only the cartons on the shelves" (3) had a
+# plausible 4th. Nothing stands on it in any challenge.
+ROOM.geoms = [
+    g for g in ROOM.geoms
+    if not (g.name in ("base", "sidee", "siden", "sides", "sidew") and abs(g.pos[0] - 2.24) < 0.2 and abs(g.pos[1]) < 0.2)
+]
 # 30 mm boards left only 100 mm between shelves, squeezing the 108 mm jars
 # through both planks. 16 mm boards leave 114 mm; their TOPS do not move.
 ROOM.geoms = [
