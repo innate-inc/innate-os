@@ -37,7 +37,7 @@ CHALLENGE = Challenge(
     category=2,
     brief=(
         "There is a blue mug on the kitchen floor. Casey is waiting in the living room. "
-        "Bring the mug over and put it down on the cream mat in front of them."
+        "Bring the mug over and put it down on the round cream mat in front of them."
     ),
     # ON THE FLOOR at 2.75, not on the counter at 2.85. The counter top is
     # 908 mm up; the arm works below ~300 mm and the base cannot climb, so the

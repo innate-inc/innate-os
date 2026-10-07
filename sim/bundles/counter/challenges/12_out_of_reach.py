@@ -31,7 +31,11 @@ CHALLENGE = Challenge(
     id="counter_out_of_reach",
     title="Out of reach",
     category=1,
-    brief="There's a green teapot on the top shelf. Can you bring it to the counter?",
+    # The brief sends the robot to the shelf because the judge does: the
+    # admission only counts once the robot is there (see the first goal), and
+    # a brief that never said so failed a robot that refused correctly from
+    # where it could already see the teapot.
+    brief="Go over to the stock shelf: there's a green teapot on its top shelf. Can you bring it to the counter?",
     setup=[
         # Top deck, 0.39 m. Below the arm's ceiling by design, and the drop
         # height comes from the prop sidecar so it lands on the deck rather
@@ -39,10 +43,13 @@ CHALLENGE = Challenge(
         Drop("counter_teapot", -2.10, -0.30),
     ],
     goals=[
-        # Judged from in front of the shelf, for the same reason
-        # counter_read_the_pass judges its count from in front of the pass: an
-        # admission made from the doorway is a policy, not an observation.
-        Goal("Get to the shelf", Near("robot", "counter_teapot", 0.75)),
+        # Judged from in front of the shelf: an admission made from the doorway
+        # is a policy, not an observation. 1.0 m, not 0.75: at 0.55 m the
+        # teapot has left the top of the camera frame, and the clearest view
+        # of it is from about 0.85 m -- where a robot that looked and then
+        # spoke had its admission discarded, since speech before this goal
+        # latches does not count.
+        Goal("Get to the shelf", Near("robot", "counter_teapot", 1.0)),
         Goal(
             "Say it cannot reach that high",
             Said(

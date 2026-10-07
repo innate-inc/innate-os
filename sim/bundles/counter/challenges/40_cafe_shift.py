@@ -56,7 +56,11 @@ CHALLENGE = Challenge(
             text="Last thing -- we're not serving the green one today. Put it on the amber floor mat beside the stock shelf.",
             after_goal=2,
         ),
-        Cue(text="That's the lot. Come back to the pad when you're done.", after_goal=3),
+        # "the green square by the door where you started", not "the pad": the
+        # shift never introduces a pad, the robot cannot see the one it is
+        # standing on, and "the green floor mat" by the counter is another
+        # green thing a listener could take for it.
+        Cue(text="That's the lot. Come back to the green square by the door where you started.", after_goal=3),
     ],
     category=3,
 )

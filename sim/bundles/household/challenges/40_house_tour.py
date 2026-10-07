@@ -6,7 +6,15 @@ CHALLENGE = Challenge(
     id="household_tour",
     title="House tour",
     category=3,
-    brief="Visit every room: the living room, then the kitchen, then the bathroom, then the bedroom.",
+    # The brief says where the living-room leg ends. The robot starts on the
+    # living-room floor, so "visit the living room" read as already done: a
+    # robot that went straight to the kitchen never latched goal 0, and
+    # ordered goals then scored it 0/4. The rug lies wholly inside goal 0.
+    brief=(
+        "You're starting at the edge of the living room. Visit these four rooms in order: first drive "
+        "over to the rug in front of the sofa in the living room, then go to the kitchen, then the "
+        "bathroom, then the bedroom."
+    ),
     setup=[],
     goals=[
         # x stops at -1.6, not -0.2. The robot SPAWNS at (-1.0, 0.7), which is

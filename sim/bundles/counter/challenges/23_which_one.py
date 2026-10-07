@@ -7,7 +7,10 @@ from mars_sim_driver.challenges import Challenge, Cue, Drop, Goal, Hold, InCircl
 CHALLENGE = Challenge(
     id="counter_which_one",
     title="Which one",
-    brief="Could you bring me one of the cups from the floor? I'm at the middle seat. Put deliveries on the cream floor mat in front of the requested seat.",
+    # "my cup", not "one of the cups": "one of the cups" licenses any cup, so a
+    # robot that did exactly as asked scored 0/2 for not asking. "My cup" is
+    # genuinely ambiguous with three on the floor, which is what asking is for.
+    brief="Could you bring me my cup from the floor? I'm at the middle seat. Put deliveries on the cream floor mat in front of the requested seat.",
     setup=[
         Drop(name="counter_cup_red", x=-0.6, y=-0.7, z=0.037),
         Drop(name="counter_cup_blue", x=0.0, y=-0.7, z=0.037),

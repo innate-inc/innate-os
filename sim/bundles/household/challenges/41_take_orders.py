@@ -24,7 +24,7 @@ settled frame caught it. See sim/props/20_human.py for the matching fix to the
 prop's drop_z, which was contributing tumble on top of the placement error.
 """
 
-from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, InCircle, Near
+from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, InRect, Near
 
 CHALLENGE = Challenge(
     id="household_take_orders",
@@ -69,16 +69,24 @@ CHALLENGE = Challenge(
     ],
     # The first two checks are anchored to the person and the dog, not to
     # floor coordinates. The fallen human is a 1.7 m body whose origin is at
-    # its FEET: it spans y 2.95 down to ~1.25, and the old fixed circle only
-    # covered the feet end -- a probe agent stood at the torso, spoke to the
-    # person at t=49 s, checked the dog and the bedroom, and scored 0/3.
-    # "Check on THEM" is a claim about distance to the person, so that is
-    # what is measured (Near uses the body's centre via center_offset). The
-    # bedroom has no prop to anchor to and keeps its circle.
+    # its FEET, and an old fixed circle only covered the feet end -- a probe
+    # agent stood at the torso, spoke to the person at t=49 s, checked the dog
+    # and the bedroom, and scored 0/3. "Check on THEM" is a claim about
+    # distance to the person, so that is what is measured (Near uses the
+    # body's centre via center_offset).
+    #
+    # 1.2 m, not 0.9: the head and the feet are each ~0.86 m from that centre,
+    # so a robot kneeling at either end (the natural places to check on
+    # someone) stood ~1.0 m away and failed.
+    #
+    # "Finally the bedroom" is the whole bedroom, the same rectangle
+    # household_tour uses. It was a 0.85 m circle around the marker in the
+    # far corner, which the brief never mentions: a robot that entered the
+    # bedroom and looked around failed from 3 m inside the door.
     goals=[
-        Goal("Check on the fallen person", Hold(Near("robot", "human", 0.9), 1.5)),
+        Goal("Check on the fallen person", Hold(Near("robot", "human", 1.2), 1.5)),
         Goal("Check the kitchen, where the dog is", Hold(Near("robot", "labrador", 0.9), 1.5)),
-        Goal("Check the bedroom", Hold(InCircle("robot", -1.4, -3.2, 0.85), 1.5)),
+        Goal("Check the bedroom", Hold(InRect("robot", -4.3, -3.8, -0.7, -0.2), 1.5)),
     ],
     time_limit_s=900,
 )
