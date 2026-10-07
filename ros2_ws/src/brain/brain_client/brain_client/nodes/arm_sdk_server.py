@@ -11,8 +11,9 @@ reads pose/joints/torque straight from the driver topics, so this node costs
 nothing while the page just looks at the arm.
 
 The controller app's phone teleop rides the same node: /armsdk/stream_pose
-carries a 6-DoF end-effector delta (JSON, base_link axes) from where the
-operator's hand was when they pressed the button, and the follower answers
+carries a 6-DoF end-effector delta (JSON) from where the operator's hand was
+when they pressed the button, in the arm's heading at that moment: the phone's
+forward is wherever the arm pointed, not base_link +x. The follower answers
 on /armsdk/stream_pose/status. The arm follows from its pose at the first
 sample applied, after moving to zero unless it is still where the previous
 stream left it: from the rest fold, IK refuses almost every target.
@@ -42,7 +43,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float64MultiArray, String
 
 from brain_client.common.enums import StrEnum
-from brain_client.common.geometry import Quat, apply_pose_delta, rebase_anchor
+from brain_client.common.geometry import Quat, apply_pose_delta, rebase_anchor, unyaw_delta
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
 from brain_client.robot.manipulation import Manipulation
 
@@ -249,7 +250,7 @@ def execute_goal(goal_handle):
 @dataclass(frozen=True)
 class PoseSample:
     """One /armsdk/stream_pose message: the operator's hand motion since
-    ``session`` began, as a base_link delta, and an optional gripper opening
+    ``session`` began, in the arm's heading frame, and an optional gripper opening
     (0 closed … 1 open). A new session re-anchors on the live pose."""
 
     session: str
@@ -261,11 +262,19 @@ class PoseSample:
 @dataclass(frozen=True)
 class Anchor:
     """The pose a session's deltas apply to, rebased so its first applied
-    sample lands on the arm where it stood."""
+    sample lands on the arm where it stood. ``heading`` is j1 at anchoring,
+    fixed for the session: following the live j1 would turn the frame as the
+    arm swings and bend a straight push into a curve."""
 
     session: str
+    heading: float
     position: tuple[float, float, float]
     rotation: Quat
+
+    def target(self, sample: PoseSample) -> tuple[float, float, float, float, float, float]:
+        return apply_pose_delta(
+            self.position, self.rotation, *unyaw_delta(sample.position, sample.rotation, self.heading)
+        )
 
 
 class FollowState(StrEnum):
@@ -351,7 +360,7 @@ class PoseFollower:
                     self._zero()
                     return  # the hand moved during the zero: anchor on the next, fresh sample
                 anchor = self._anchor_on(sample)
-            target = apply_pose_delta(anchor.position, anchor.rotation, sample.position, sample.rotation)
+            target = anchor.target(sample)
             grip = None if sample.grip is None else sample.grip * Manipulation.GRIPPER_OPEN
             reached = manip.stream_pose(*target, grip=grip)
             self._note_arm()
@@ -381,12 +390,17 @@ class PoseFollower:
         self._note_arm()
 
     def _anchor_on(self, sample: PoseSample) -> Anchor:
+        state = manip._arm_state
+        if state is None:
+            raise ArmFailed("no arm joint state yet")
+        heading = float(state.position[0])
         pose = manip.pose
-        anchor = Anchor(
-            sample.session, *rebase_anchor(pose.position, pose.orientation, sample.position, sample.rotation)
-        )
+        delta = unyaw_delta(sample.position, sample.rotation, heading)
+        anchor = Anchor(sample.session, heading, *rebase_anchor(pose.position, pose.orientation, *delta))
         self._anchor = anchor
-        node.get_logger().info(f"pose stream {sample.session}: anchored at ({pose.x:.3f}, {pose.y:.3f}, {pose.z:.3f})")
+        node.get_logger().info(
+            f"pose stream {sample.session}: anchored at ({pose.x:.3f}, {pose.y:.3f}, {pose.z:.3f}), heading {heading:.2f} rad"
+        )
         return anchor
 
     def _set(self, state: FollowState, detail: str = "") -> None:
