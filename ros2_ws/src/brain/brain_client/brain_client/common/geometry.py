@@ -45,6 +45,20 @@ def quat_multiply(a: Quat, b: Quat) -> Quat:
     )
 
 
+def unyaw_delta(
+    delta_xyz: tuple[float, float, float],
+    delta_quat: Quat,
+    yaw: float,
+) -> tuple[tuple[float, float, float], Quat]:
+    """A delta expressed in a frame yawed by ``yaw`` about the parent's Z,
+    re-expressed in the parent frame (Rz·p, qz ⊗ q ⊗ qz⁻¹)."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    x, y, z = delta_xyz
+    qz = (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
+    qz_inv = (0.0, 0.0, -qz[2], qz[3])
+    return (c * x - s * y, s * x + c * y, z), quat_multiply(quat_multiply(qz, delta_quat), qz_inv)
+
+
 def apply_pose_delta(
     anchor_xyz: tuple[float, float, float],
     anchor_quat: Quat,
