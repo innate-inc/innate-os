@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "dimensions_m": {
+    "length": 0.5,
+    "width": 0.3,
+    "height": 0.16
+  },
+  "references": [
+    {
+      "name": "front",
+      "image": "front.png",
+      "quad_px": [
+        [
+          6.0,
+          3.0
+        ],
+        [
+          282.0,
+          21.0
+        ],
+        [
+          281.0,
+          105.0
+        ],
+        [
+          3.0,
+          80.0
+        ]
+      ],
+      "crop_origin_px": [
+        521,
+        441
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.5,
+      "height_m": 0.16,
+      "source": "20261007T151549_358324Z_guided-01-front.jpg",
+      "source_sha256": "986b33bfdf907e8d7cb2538e9631557760e88802be2ac3934973da91cf029928",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "short",
+      "image": "short.png",
+      "quad_px": [
+        [
+          4.0,
+          3.0
+        ],
+        [
+          235.0,
+          7.0
+        ],
+        [
+          233.0,
+          100.0
+        ],
+        [
+          3.0,
+          91.0
+        ]
+      ],
+      "crop_origin_px": [
+        557,
+        467
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.3,
+      "height_m": 0.16,
+      "source": "20261007T151701_371049Z_guided-03-short-side.jpg",
+      "source_sha256": "026616afdb0631931446cdf49378e3868ac3e195b176cecc7146ae6c3cb15762",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "opposite-long",
+      "image": "opposite-long.png",
+      "quad_px": [
+        [
+          3.0,
+          3.0
+        ],
+        [
+          307.0,
+          14.0
+        ],
+        [
+          307.0,
+          100.0
+        ],
+        [
+          3.0,
+          83.0
+        ]
+      ],
+      "crop_origin_px": [
+        534,
+        456
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.5,
+      "height_m": 0.16,
+      "source": "20261007T151741_545739Z_guided-04-opposite-long.jpg",
+      "source_sha256": "77c5015968492d44bb4bac45e8bc73facfa717c6b13891ac069157db1c0dd0c7",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "diagonal-long",
+      "image": "diagonal-long.png",
+      "quad_px": [
+        [
+          4.0,
+          3.0
+        ],
+        [
+          147.0,
+          43.0
+        ],
+        [
+          145.0,
+          140.0
+        ],
+        [
+          3.0,
+          54.0
+        ]
+      ],
+      "crop_origin_px": [
+        551,
+        438
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.5,
+      "height_m": 0.16,
+      "source": "20261007T151629_045051Z_guided-02-angle45.jpg",
+      "source_sha256": "f99ac4e44e14beb681a83955e93185e5ad1a6af87413595cc10626c33402a3c0",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "close-long",
+      "image": "close-long.png",
+      "quad_px": [
+        [
+          3.0,
+          3.0
+        ],
+        [
+          423.0,
+          21.0
+        ],
+        [
+          421.0,
+          136.0
+        ],
+        [
+          3.0,
+          109.0
+        ]
+      ],
+      "crop_origin_px": [
+        478,
+        488
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.5,
+      "height_m": 0.16,
+      "source": "20261007T152018_679789Z_guided-06-closer-retake.jpg",
+      "source_sha256": "f3972f517070a262e48da058e8d9c317c95f43ee06b5fcf9a71a2d44855dc18e",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "opposite-diagonal-long",
+      "image": "opposite-diagonal-long.png",
+      "quad_px": [
+        [
+          4.0,
+          3.0
+        ],
+        [
+          162.0,
+          43.0
+        ],
+        [
+          161.0,
+          143.0
+        ],
+        [
+          3.0,
+          58.0
+        ]
+      ],
+      "crop_origin_px": [
+        533,
+        443
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.5,
+      "height_m": 0.16,
+      "source": "20261007T151813_472844Z_guided-05-opposite-diagonal.jpg",
+      "source_sha256": "6140f6321492b6e3bf0d7b34f4223a4fbe0d2f8566adc9f69e8b10d1e93cebab",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "opposite-diagonal-short",
+      "image": "opposite-diagonal-short.png",
+      "quad_px": [
+        [
+          4.0,
+          34.0
+        ],
+        [
+          122.0,
+          3.0
+        ],
+        [
+          125.0,
+          83.0
+        ],
+        [
+          3.0,
+          134.0
+        ]
+      ],
+      "crop_origin_px": [
+        691,
+        452
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.3,
+      "height_m": 0.16,
+      "source": "20261007T151813_472844Z_guided-05-opposite-diagonal.jpg",
+      "source_sha256": "6140f6321492b6e3bf0d7b34f4223a4fbe0d2f8566adc9f69e8b10d1e93cebab",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    },
+    {
+      "name": "diagonal-short",
+      "image": "diagonal-short.png",
+      "quad_px": [
+        [
+          5.0,
+          27.0
+        ],
+        [
+          136.0,
+          3.0
+        ],
+        [
+          137.0,
+          81.0
+        ],
+        [
+          3.0,
+          124.0
+        ]
+      ],
+      "crop_origin_px": [
+        693,
+        454
+      ],
+      "source_image_size": [
+        1280,
+        720
+      ],
+      "width_m": 0.3,
+      "height_m": 0.16,
+      "source": "20261007T151629_045051Z_guided-02-angle45.jpg",
+      "source_sha256": "f99ac4e44e14beb681a83955e93185e5ad1a6af87413595cc10626c33402a3c0",
+      "annotation": "Manual exterior vertical-face corners; excludes top opening and background. Approximate rectangular surface."
+    }
+  ],
+  "metric_accuracy": "Unverified: user dimensions plus manually annotated nonplanar woven faces."
+}

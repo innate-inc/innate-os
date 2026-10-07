@@ -1,0 +1,405 @@
+{
+  "date": "2026-10-07",
+  "robot": "MARS-47",
+  "algorithm": "Full-resolution RootSIFT, exact mutual matches, geometric verification, planar PnP refined by LM",
+  "tests": {
+    "focused_tests_passed": 14,
+    "ruff_check": "passed",
+    "ruff_format": "passed"
+  },
+  "physical_check": {
+    "user_report": "roughly square and 25cm away",
+    "asked_measurement": "forward gap from main camera lens to nearest rim",
+    "measurement_precision": "approximate; ruler direction not independently verified",
+    "metric_accuracy_verified": false
+  },
+  "live_validation": {
+    "changed_angle": {
+      "detected": 3,
+      "frames": 3,
+      "scene_visually_checked": true,
+      "test_images_added_to_reference_set": false
+    },
+    "basket_absent": {
+      "false_positives": 0,
+      "frames": 3,
+      "scene_visually_checked": true
+    }
+  },
+  "results": {
+    "final-close-regression": [
+      {
+        "file": "20261007T155350_060496053_000.json",
+        "detected": true,
+        "processing_ms": 2654.048462999981,
+        "reference": "close-long",
+        "inliers": 69,
+        "pose": {
+          "reprojection_rms_px": 2.331203087897138,
+          "face_center_camera_m": [
+            0.03195283937956555,
+            0.21159803274898673,
+            0.22587003537036507
+          ],
+          "visible_rim_midpoint_camera_m": [
+            0.03180800521825209,
+            0.13214406948023577,
+            0.21654015091482703
+          ],
+          "rim_forward_depth_m": 0.21654015091482703,
+          "rim_range_m": 0.255662749052297,
+          "rim_right_offset_m": 0.03180800521825209,
+          "face_normal_yaw_camera_deg": 6.795785102545862,
+          "face_normal_camera": [
+            0.11753172482825897,
+            -0.11602677090314556,
+            0.9862677537528455
+          ],
+          "rotation_vector": [
+            0.11686107847627918,
+            0.11777575966520579,
+            0.0050787782809611085
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.21645886430083425,
+              0.12916371901285315,
+              0.24577504462567423
+            ],
+            [
+              0.2800748747373384,
+              0.1351244199476184,
+              0.18730525720397984
+            ],
+            [
+              0.3153343921858161,
+              0.10031638867667472,
+              0.4831855833298335
+            ],
+            [
+              -0.18119934685235656,
+              0.09435568774190947,
+              0.5416553707515278
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            0.024021636318324324,
+            0.13205059704778813,
+            0.21745704195076662
+          ],
+          "nearest_outer_rim_range_m": 0.25554249017739616,
+          "basket_center_camera_m": [
+            0.049582598103804394,
+            0.1941940171135149,
+            0.3738101984332919
+          ]
+        }
+      }
+    ],
+    "final-earlier-view": [
+      {
+        "file": "20261007T155352_403108706_000.json",
+        "detected": true,
+        "processing_ms": 1418.7976809998872,
+        "reference": "front",
+        "inliers": 193,
+        "pose": {
+          "reprojection_rms_px": 1.958416529437262,
+          "face_center_camera_m": [
+            0.09581625251992426,
+            0.17542523276536454,
+            0.5556042108867209
+          ],
+          "visible_rim_midpoint_camera_m": [
+            0.09731338636171634,
+            0.09732656280852911,
+            0.5383312163219949
+          ],
+          "rim_forward_depth_m": 0.5383312163219949,
+          "rim_range_m": 0.5556463384744164,
+          "rim_right_offset_m": 0.09731338636171634,
+          "face_normal_yaw_camera_deg": 3.253955226524801,
+          "face_normal_camera": [
+            0.05543921498942699,
+            -0.21460482030853573,
+            0.975126281330627
+          ],
+          "rotation_vector": [
+            0.21708352809449796,
+            0.05321972658022894,
+            0.024673854892088832
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.1522582808465031,
+              0.08977188838669789,
+              0.5508575813689627
+            ],
+            [
+              0.34688505356993576,
+              0.10488123723036033,
+              0.5258048512750271
+            ],
+            [
+              0.36351681806676384,
+              0.04049979113779961,
+              0.8183427356742152
+            ],
+            [
+              -0.135626516349675,
+              0.025390442294137172,
+              0.8433954657681507
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            0.024324250595459423,
+            0.09511714070860434,
+            0.5419946472286291
+          ],
+          "nearest_outer_rim_range_m": 0.5508149755118295,
+          "basket_center_camera_m": [
+            0.10413213476833831,
+            0.1432345097190842,
+            0.7018731530863149
+          ]
+        }
+      }
+    ],
+    "live-api-rootsift-angle": [
+      {
+        "file": "20261007T155032_695101105_000.json",
+        "detected": true,
+        "processing_ms": 1891.4075170000615,
+        "reference": "close-long",
+        "inliers": 18,
+        "pose": {
+          "reprojection_rms_px": 1.873297115716895,
+          "face_center_camera_m": [
+            -0.034907671585861944,
+            0.23641722052852374,
+            0.5524106853698382
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.03636956044318933,
+            0.15697607151505028,
+            0.5430850902473846
+          ],
+          "rim_forward_depth_m": 0.5430850902473846,
+          "rim_range_m": 0.5664853459747559,
+          "rim_right_offset_m": -0.03636956044318933,
+          "face_normal_yaw_camera_deg": 30.74993496881559,
+          "face_normal_camera": [
+            0.5082102885530848,
+            -0.10962984913684794,
+            0.854226901231179
+          ],
+          "rotation_vector": [
+            0.11894107944962938,
+            0.5336440799727458,
+            0.013334149744665678
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.2516293421257195,
+              0.14606801339138722,
+              0.6697509524911647
+            ],
+            [
+              0.17889022123934084,
+              0.16788412963871335,
+              0.4164192280036047
+            ],
+            [
+              0.3313533078052663,
+              0.13499517489765894,
+              0.6726872983729584
+            ],
+            [
+              -0.09916625555979408,
+              0.11317905865033284,
+              0.9260190228605183
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            0.17889022123934084,
+            0.16788412963871335,
+            0.4164192280036047
+          ],
+          "nearest_outer_rim_range_m": 0.4833133204151596,
+          "basket_center_camera_m": [
+            0.04132387169710078,
+            0.21997274315799653,
+            0.680544720554515
+          ]
+        }
+      },
+      {
+        "file": "20261007T155034_671665187_001.json",
+        "detected": true,
+        "processing_ms": 1661.309717000222,
+        "reference": "opposite-diagonal-long",
+        "inliers": 14,
+        "pose": {
+          "reprojection_rms_px": 3.838133382758252,
+          "face_center_camera_m": [
+            -0.02475027153903211,
+            0.22870006823893663,
+            0.530865072218168
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.027023971729577528,
+            0.14974579352587786,
+            0.5181744145528472
+          ],
+          "rim_forward_depth_m": 0.5181744145528472,
+          "rim_range_m": 0.5400544617202248,
+          "rim_right_offset_m": -0.027023971729577528,
+          "face_normal_yaw_camera_deg": 28.637268799371085,
+          "face_normal_camera": [
+            0.4736164721987635,
+            -0.15304890930749782,
+            0.8673312335098876
+          ],
+          "rotation_vector": [
+            0.16312441661670585,
+            0.4947877453165521,
+            0.011545188883514797
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.24709209607903992,
+              0.13712562689327157,
+              0.636118265768054
+            ],
+            [
+              0.19304415261988483,
+              0.1623659601584842,
+              0.4002305633376405
+            ],
+            [
+              0.33512909427951393,
+              0.11645128736623485,
+              0.6604299333906067
+            ],
+            [
+              -0.10500715441941087,
+              0.09121095410102223,
+              0.8963176358210202
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            0.19304415261988483,
+            0.1623659601584842,
+            0.4002305633376405
+          ],
+          "nearest_outer_rim_range_m": 0.4730890547333355,
+          "basket_center_camera_m": [
+            0.046292199290782404,
+            0.20574273184281194,
+            0.6609647572446512
+          ]
+        }
+      },
+      {
+        "file": "20261007T155038_179795186_002.json",
+        "detected": true,
+        "processing_ms": 1883.7784920001468,
+        "reference": "close-long",
+        "inliers": 21,
+        "pose": {
+          "reprojection_rms_px": 2.0463289539097436,
+          "face_center_camera_m": [
+            -0.035045637318273024,
+            0.23620092169152293,
+            0.5533967206655774
+          ],
+          "visible_rim_midpoint_camera_m": [
+            -0.03652089850514282,
+            0.156735093404619,
+            0.5442859721174717
+          ],
+          "rim_forward_depth_m": 0.5442859721174717,
+          "rim_range_m": 0.5675798489869409,
+          "rim_right_offset_m": -0.03652089850514282,
+          "face_normal_yaw_camera_deg": 31.05825549488879,
+          "face_normal_camera": [
+            0.5129380098012798,
+            -0.10717094818015717,
+            0.8517094492649875
+          ],
+          "rotation_vector": [
+            0.11634048791131743,
+            0.5391518662352939,
+            0.012772503720671092
+          ],
+          "outer_rim_corners_camera_m": [
+            [
+              -0.2510777872743819,
+              0.14605773298251146,
+              0.6721583125827997
+            ],
+            [
+              0.17803599026409628,
+              0.1674124538267265,
+              0.41641363165214357
+            ],
+            [
+              0.33191739320448016,
+              0.13526116937267935,
+              0.6719264664316398
+            ],
+            [
+              -0.09719638433399799,
+              0.1139064485284643,
+              0.9276711473622958
+            ]
+          ],
+          "nearest_outer_rim_point_camera_m": [
+            0.17803599026409628,
+            0.1674124538267265,
+            0.41641363165214357
+          ],
+          "nearest_outer_rim_range_m": 0.4828292204820772,
+          "basket_center_camera_m": [
+            0.041895064151918945,
+            0.22012527946449936,
+            0.6811531380553255
+          ]
+        }
+      }
+    ],
+    "final-live-checked": [
+      {
+        "file": "20261007T155602_502139390_000.json",
+        "detected": false,
+        "processing_ms": 1898.5478560002775,
+        "reference": null,
+        "inliers": null,
+        "pose": null
+      },
+      {
+        "file": "20261007T155604_357453140_001.json",
+        "detected": false,
+        "processing_ms": 1539.3506800000978,
+        "reference": null,
+        "inliers": null,
+        "pose": null
+      },
+      {
+        "file": "20261007T155607_117901572_002.json",
+        "detected": false,
+        "processing_ms": 1354.4449969999732,
+        "reference": null,
+        "inliers": null,
+        "pose": null
+      }
+    ]
+  },
+  "limitations": [
+    "Only this room, basket and a few poses tested; no broad recall/false-positive rate established.",
+    "Approximate geometry of nonplanar wicker; not validated for autonomous dropping.",
+    "Pose is in camera coordinates; transform to base/arm and closed-loop integration not implemented.",
+    "No deployment or performance benchmark on the larger API computer yet.",
+    "Diagnostic HTTP service was started for checks and shut down afterward."
+  ]
+}
