@@ -129,8 +129,11 @@ translation, followed by another stopped observation. Search stops after a full
 odometry-measured revolution or the inherited phase timeout: 175 seconds for
 initial acquisition/repositioning, 50 seconds for final docking/recovery.
 The initial search is capped at 0.70 rad/s; close recovery at 0.40 rad/s.
-Camera/API errors and ambiguous poses do not authorize blind search; they retain
-three stationary retries. Final docking includes the odometry control time;
+Camera/API errors do not authorize blind search and retain three consecutive
+stationary retries. If the basket is recognized but its pose fit is missing or
+ambiguous, the robot waits for fresh observations until the existing phase
+deadline rather than failing after three frames. A lower-ranked matched face
+may supply the pose only if it passes the same ambiguity and fit checks. Final docking includes the odometry control time;
 an individual observation has a 45-second limit. A failed head-settle check
 stops before lifting. Existing grip, arm-pose, and clearance safeguards remain.
 

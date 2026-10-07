@@ -26,10 +26,28 @@ def face_in_base(result, tilt):
     """Visible face centre and inward unit normal, both in base_link XY."""
     if not result.get("detected"):
         raise ValueError("Basket not visible")
-    best = result.get("best", {})
+    candidates = [result.get("best", {})] + result.get("candidates", [])
+    reason = "No candidate pose"
+    for best in candidates:
+        try:
+            return candidate_face_in_base(best, tilt)
+        except (ValueError, TypeError, KeyError) as exc:
+            reason = str(exc)
+    raise ValueError(reason)
+
+
+def candidate_face_in_base(best, tilt):
+    """Apply the same pose checks to every independently matched face."""
     pose = best.get("pose")
     if not pose or best.get("pose_ambiguous", True):
-        raise ValueError("Basket pose missing or ambiguous")
+        if best.get("pose_ambiguous", True):
+            raise ValueError("Basket pose ambiguous")
+        errors = [
+            p.get("reprojection_rms_px") for p in best.get("pose_alternatives", [])
+        ]
+        raise ValueError(
+            f"Basket recognized but metric pose rejected (candidate RMS px: {errors})"
+        )
     center = np.asarray(pose.get("face_center_camera_m"), dtype=float)
     normal = np.asarray(pose.get("face_normal_camera"), dtype=float)
     rms = float(pose.get("reprojection_rms_px", math.inf))
@@ -124,9 +142,11 @@ class FeatureObserver:
         return self.detector.detect(image)
 
     def observe(self, host, controller, *, search=False):
-        """Three stationary attempts; cancellation never waits for inference."""
+        """Retry pose fitting within the phase deadline; sensor errors get three tries."""
         reason = "No observation"
-        for _ in range(3):
+        attempts = sensor_failures = 0
+        while search or attempts < 3:
+            attempts += 1
             host.mobility.stop()
             host.sleep(0.3)
             before = controller.fresh_odom()
@@ -167,13 +187,23 @@ class FeatureObserver:
                 continue
             if not ok:
                 reason = str(value)
+                sensor_failures += 1
+                if sensor_failures >= 3:
+                    raise SkillFailed(
+                        f"Basket camera/API failed three stationary attempts: {reason}"
+                    )
                 continue
+            sensor_failures = 0
             if search and value.get("detected") is False:
                 raise BasketMissing("Basket not visible in fresh frame")
             try:
                 return face_in_base(value, tilt)
             except (ValueError, TypeError, KeyError) as exc:
                 reason = str(exc)
+                host.logger.info(f"[FeaturePose] stationary retry {attempts}: {reason}")
+                # Like ArUco's final-pose observation, wait for a usable fresh
+                # view rather than aborting on three transient pose failures.
+                # fresh_odom above enforces the existing phase deadline.
         raise SkillFailed(
             f"No usable basket pose after three stationary attempts: {reason}"
         )

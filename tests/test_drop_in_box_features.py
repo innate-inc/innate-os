@@ -72,6 +72,13 @@ class GeometryTests(unittest.TestCase):
             bf.release_target(center, normal) - center, [0.13, -0.08]
         )
 
+    def test_lower_ranked_valid_pose_can_recover_recognition_only_best(self):
+        good = detection()
+        result = detection(pose=None)
+        result["candidates"] = [result["best"], good["best"]]
+        center, normal = bf.face_in_base(result, 0)
+        np.testing.assert_allclose((center, normal), bf.face_in_base(good, 0))
+
     def test_rotated_target_is_face_relative(self):
         n = np.array([math.cos(0.6), math.sin(0.6)])
         center = np.array([0.3, 0.1])
@@ -203,6 +210,34 @@ class ObserverTests(unittest.TestCase):
         with self.assertRaises(bf.BasketMissing):
             self.observer.observe(self.h, self.controller, search=True)
         self.observer.capture.assert_called_once()
+
+    def test_recognized_bad_pose_waits_past_three_frames_then_recovers(self):
+        self.observer.capture = Mock(
+            side_effect=[detection(pose=None)] * 4 + [detection()]
+        )
+        center, normal = self.observer.observe(self.h, self.controller, search=True)
+        self.assertEqual(self.observer.capture.call_count, 5)
+        self.assertGreater(center[0], 0)
+        self.h.mobility.send_cmd_vel.assert_not_called()
+
+    def test_persistent_bad_pose_obeys_existing_phase_deadline(self):
+        self.observer.capture = Mock(return_value=detection(pose=None))
+
+        def odom():
+            if self.observer.capture.call_count >= 4:
+                raise SkillFailed("Feature basket alignment timed out")
+            return self.odom
+
+        self.controller.fresh_odom.side_effect = odom
+        with self.assertRaisesRegex(SkillFailed, "alignment timed out"):
+            self.observer.observe(self.h, self.controller, search=True)
+        self.h.mobility.send_cmd_vel.assert_not_called()
+
+    def test_api_errors_remain_bounded_even_during_search(self):
+        self.observer.capture = Mock(side_effect=TimeoutError("API unavailable"))
+        with self.assertRaisesRegex(SkillFailed, "camera/API failed three"):
+            self.observer.observe(self.h, self.controller, search=True)
+        self.assertEqual(self.observer.capture.call_count, 3)
 
     def test_error_retries_then_fresh_pose(self):
         self.observer.capture = Mock(side_effect=[TimeoutError("frame"), detection()])
