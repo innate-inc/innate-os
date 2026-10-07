@@ -45,8 +45,9 @@ LIVING_ROOM = (-4.44, 0.06, -0.06, 3.44)
 
 @pytest.fixture(scope="module")
 def household():
-    mars = VirtualMars(render_wh=(64, 48), depth_render_wh=(64, 48),
-                       environment=Environment.load("household", SIM / "assets"))
+    mars = VirtualMars(
+        render_wh=(64, 48), depth_render_wh=(64, 48), environment=Environment.load("household", SIM / "assets")
+    )
     engine = ChallengeEngine(
         mars, threading.Lock(), roots=[], packs=[mars.environment], progress_path=Path("/tmp/hh_progress.json")
     )
