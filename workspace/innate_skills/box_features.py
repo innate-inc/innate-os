@@ -85,11 +85,27 @@ class BasketMissing(SkillFailed):
 class FeatureObserver:
     """A worker can decode/infer, but never receives hardware control handles."""
 
-    def __init__(self, assets=ASSETS, api_url=None):
+    def __init__(self, assets=ASSETS, api_url=None, api_token=None):
         self.assets = Path(assets)
-        self.api_url = (
-            os.environ.get("BASKET_POSE_API_URL", "") if api_url is None else api_url
+        runtime = self.assets / "runtime.json"
+        config = (
+            json.loads(runtime.read_text())
+            if api_url is None and runtime.exists()
+            else {}
         )
+        self.api_url = (
+            os.environ.get("BASKET_POSE_API_URL", config.get("api_url", ""))
+            if api_url is None
+            else api_url
+        )
+        token_file = os.environ.get(
+            "BASKET_POSE_API_TOKEN_FILE", config.get("token_file", "")
+        )
+        self.api_token = api_token
+        if self.api_url and api_token is None and token_file:
+            self.api_token = Path(token_file).expanduser().read_text().strip()
+            if not self.api_token:
+                raise ValueError("Basket API token file is empty")
         self.camera = Camera.load(self.assets / "calibration.json")
         self.calibration_id = hashlib.sha256(
             (self.assets / "calibration.json").read_bytes()
@@ -125,6 +141,11 @@ class FeatureObserver:
                 data=encoded,
                 headers={
                     "Content-Type": "image/jpeg",
+                    **(
+                        {"Authorization": "Bearer " + self.api_token}
+                        if self.api_token
+                        else {}
+                    ),
                     "X-Calibration-Id": self.calibration_id,
                     "X-Captured-At-Unix": str(stamp["sec"] + stamp["nanosec"] / 1e9),
                 },

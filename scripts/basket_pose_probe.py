@@ -30,7 +30,11 @@ def main():
         "--api-url",
         help="POST images to this basket API rather than run inference locally",
     )
+    p.add_argument(
+        "--token-file", type=Path, help="Bearer token for authenticated API requests"
+    )
     a = p.parse_args()
+    api_token = a.token_file.read_text().strip() if a.token_file else None
     if not 1 <= a.frames <= 100:
         p.error("frames must be between 1 and 100")
     cv2.setNumThreads(2)
@@ -90,6 +94,7 @@ def main():
                     if encoded.startswith(b"\x89PNG")
                     else "image/jpeg",
                     "X-Calibration-Id": calibration_id,
+                    **({"Authorization": "Bearer " + api_token} if api_token else {}),
                 }
                 if "header" in source_meta:
                     stamp = source_meta["header"]["stamp"]

@@ -1,0 +1,4 @@
+{
+  "api_url": "http://axel-mac.local:9071",
+  "token_file": "~/.config/innate/basket-pose-api.token"
+}

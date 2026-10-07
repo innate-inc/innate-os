@@ -156,5 +156,42 @@ class LiveCaptureTests(unittest.TestCase):
             )
 
 
+class AuthenticationTests(unittest.TestCase):
+    def test_authentication_required_for_health_and_inference(self):
+        server = make_server(
+            ROOT / "workspace/config/basket_features",
+            port=0,
+            auth_token="test-only-token",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for path, method in [("/health", "GET"), ("/detect", "POST")]:
+                for auth in (None, "Bearer wrong", "Bearer é"):
+                    conn = http.client.HTTPConnection(
+                        "127.0.0.1", server.server_port, timeout=10
+                    )
+                    headers = {} if auth is None else {"Authorization": auth}
+                    conn.request(method, path, body=b"", headers=headers)
+                    response = conn.getresponse()
+                    self.assertEqual(response.status, 401)
+                    response.read()
+                    conn.close()
+            conn = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port, timeout=10
+            )
+            conn.request(
+                "GET", "/health", headers={"Authorization": "Bearer test-only-token"}
+            )
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["status"], "ready")
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+
 if __name__ == "__main__":
     unittest.main()

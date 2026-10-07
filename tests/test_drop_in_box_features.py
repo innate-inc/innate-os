@@ -464,6 +464,32 @@ class SearchTests(unittest.TestCase):
             )
 
 
+class RuntimeConfigTests(unittest.TestCase):
+    def test_default_uses_saved_endpoint_and_token_explicit_local_override_wins(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            assets = Path(folder)
+            (assets / "calibration.json").write_bytes(
+                (bf.ASSETS / "calibration.json").read_bytes()
+            )
+            token = assets / "test.token"
+            token.write_text("test-only-token\n")
+            (assets / "runtime.json").write_text(
+                json.dumps(
+                    {"api_url": "http://test-host:9071", "token_file": str(token)}
+                )
+            )
+            observer = bf.FeatureObserver(assets)
+            self.assertEqual(observer.api_url, "http://test-host:9071")
+            self.assertEqual(observer.api_token, "test-only-token")
+            token.unlink()
+            self.assertEqual(bf.FeatureObserver(assets, api_url="").api_url, "")
+            with self.assertRaises(FileNotFoundError):
+                bf.FeatureObserver(assets)
+
+
 class CaptureTests(unittest.TestCase):
     def test_queued_frame_before_stop_is_ignored(self):
         import base64
@@ -534,14 +560,17 @@ class CaptureTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "scripts"))
         from basket_pose_api import make_server
 
-        server = make_server(bf.ASSETS, port=0)
+        server = make_server(bf.ASSETS, port=0, auth_token="test-only-token")
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         image = np.zeros((720, 1280, 3), np.uint8)
         encoded = cv2.imencode(".jpg", image)[1].tobytes()
         now = time.time()
         meta = {"header": {"stamp": {"sec": int(now), "nanosec": int(now % 1 * 1e9)}}}
-        observer = bf.FeatureObserver(api_url=f"http://127.0.0.1:{server.server_port}")
+        observer = bf.FeatureObserver(
+            api_url=f"http://127.0.0.1:{server.server_port}",
+            api_token="test-only-token",
+        )
         try:
             with (
                 patch.object(bf.websocket, "create_connection"),

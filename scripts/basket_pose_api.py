@@ -2,13 +2,15 @@
 """Portable JPEG/PNG -> basket face pose HTTP API; no ROS or motion dependency.
 
 One inference at a time: the detector's OpenCV matcher is mutable. Put the
-loopback service behind your existing authenticated reverse proxy to expose it.
+loopback service behind your authenticated reverse proxy, or use --token-file
+for direct access on a trusted LAN.
 """
 
 import argparse
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import secrets
 from pathlib import Path
 import sys
 import time
@@ -26,7 +28,9 @@ MAX_BYTES = 8 * 1024 * 1024
 IMAGE_SIZES = {(1280, 720), (640, 480)}
 
 
-def make_server(assets, host="127.0.0.1", port=9071):
+def make_server(assets, host="127.0.0.1", port=9071, auth_token=None):
+    if auth_token is not None and not auth_token.strip():
+        raise ValueError("API authentication token must not be empty")
     assets = Path(assets)
     detector = BasketDetector(assets)
     calibration_id = hashlib.sha256(
@@ -48,7 +52,18 @@ def make_server(assets, host="127.0.0.1", port=9071):
             self.wfile.write(data)
             self.close_connection = True
 
+        def authorized(self):
+            if auth_token is not None and not secrets.compare_digest(
+                self.headers.get("Authorization", "").encode(),
+                ("Bearer " + auth_token).encode(),
+            ):
+                self.send_json(401, {"error": "unauthorized"})
+                return False
+            return True
+
         def do_GET(self):
+            if not self.authorized():
+                return
             if self.path != "/health":
                 self.send_json(404, {"error": "not_found"})
                 return
@@ -65,6 +80,8 @@ def make_server(assets, host="127.0.0.1", port=9071):
             )
 
         def do_POST(self):
+            if not self.authorized():
+                return
             if self.path != "/detect":
                 self.send_json(404, {"error": "not_found"})
                 return
@@ -172,11 +189,15 @@ def main():
         default=2,
         help="OpenCV worker threads; inference requests remain serial",
     )
+    p.add_argument(
+        "--token-file", type=Path, help="Shared bearer token file for direct LAN access"
+    )
     a = p.parse_args()
     if not 1 <= a.threads <= 64:
         p.error("threads must be 1..64")
     cv2.setNumThreads(a.threads)
-    server = make_server(a.assets, a.host, a.port)
+    token = a.token_file.read_text().strip() if a.token_file else None
+    server = make_server(a.assets, a.host, a.port, auth_token=token)
     print(f"Basket pose API ready on http://{a.host}:{server.server_port}", flush=True)
     try:
         server.serve_forever()

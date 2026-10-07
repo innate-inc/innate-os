@@ -19,8 +19,8 @@ curl --fail-with-body -H 'Content-Type: image/jpeg' \
   --data-binary @frame.jpg http://127.0.0.1:9071/detect
 ```
 
-The API defaults to loopback. For remote hosting, place it behind the deployment's
-normal authenticated reverse proxy. One request runs at a time; OpenCV worker
+The API defaults to loopback. For remote hosting, use an authenticated reverse
+proxy, or `--token-file` for direct access on a trusted LAN. One request runs at a time; OpenCV worker
 threads can be configured with `--threads`. No robot credentials or ROS runtime
 are needed on the inference computer.
 
@@ -121,12 +121,28 @@ Like the ArUco routine, it lifts first, searches right for the basket, uses a
 performs final docking, release and retreat. It does not plan around obstacles.
 The original ArUco skill is unchanged.
 
-The skill uses full-resolution RootSIFT locally by default. To use the same
-HTTP perception service on another computer, set `BASKET_POSE_API_URL` in the
-skills-server process environment to its base URL, for example
-`http://inference-host:9071`. Configure the environment before starting the
-server; this change does not provision a remote service or restart ROS.
-An API error is retried without silently switching backends.
+The checked-in `runtime.json` selects MARS-47's Mac backend at
+`http://axel-mac.local:9071`. It stores an endpoint and a token-file path;
+the token itself lives outside Git at `~/.config/innate/basket-pose-api.token`.
+The configuration is read when the skill starts, so no ROS restart is required.
+`BASKET_POSE_API_URL` and `BASKET_POSE_API_TOKEN_FILE` can override those settings.
+Without runtime configuration or an environment URL, inference runs locally.
+Explicit `FeatureObserver(api_url="")` selects local inference for diagnostics.
+API errors are retried without silently switching backends.
+
+The Mac API runs as the login agent `com.innate.basket-pose-api`, with its
+isolated runtime and code in `~/Library/Application Support/Innate/BasketPose`.
+It starts at login and restarts after a process failure. The Mac must be awake
+and reachable on the same network. Direct LAN access uses `--token-file` on the
+server; health and detection requests both require the corresponding bearer
+token. Tokens must be transferred privately and must never be committed.
+For a live authenticated probe on MARS-47:
+
+```sh
+python scripts/basket_pose_probe.py --live --frames 3 \
+  --api-url http://axel-mac.local:9071 \
+  --token-file ~/.config/innate/basket-pose-api.token --output /tmp/basket-api-check
+```
 
 The robot stops and settles before every image. Acquisition checks current
 CameraInfo and requires a frame captured after the stop. Inference runs in a
