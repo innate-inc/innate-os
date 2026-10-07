@@ -144,8 +144,12 @@ python scripts/basket_pose_probe.py --live --frames 3 \
   --token-file ~/.config/innate/basket-pose-api.token --output /tmp/basket-api-check
 ```
 
-The robot stops and settles before every image. Acquisition checks current
-CameraInfo and requires a frame captured after the stop. Inference runs in a
+The robot stops and settles before every image. The skill uses ArUco's injected MainHighResImage/MainImage stream and waits for a new frame object
+after settling (the same three-second stalled-stream bound as ArUco). It sends
+the original JPEG bytes to the API, without reconnecting to rosbridge or decoding
+and re-encoding. Calibration comes from the saved snapshot; the standalone live
+probe additionally checks published CameraInfo. The injected image has no sensor
+timestamp, so the skill does not claim a sensor-time capture-age check. Inference runs in a
 cancellable wait; its worker has no hardware handles. Motion during inference
 invalidates the result. API responses must identify the exact input image and
 calibration. A fresh missing-basket result starts rightward rotation without

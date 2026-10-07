@@ -193,7 +193,14 @@ class ExecutionTests(unittest.TestCase):
 class ObserverTests(unittest.TestCase):
     def setUp(self):
         self.h = host()
-        self.h.sleep = lambda _: time.sleep(0.001)  # test-only worker scheduling
+        self.h.main_image = NS(jpeg=b"initial")
+        self.h.main_highres_image = None
+
+        def advance(_):
+            self.h.main_image = NS(jpeg=b"next")
+            time.sleep(0.001)  # test-only worker scheduling
+
+        self.h.sleep = advance
         self.odom = NS(x=0, y=0, theta=0)
         self.controller = NS(fresh_odom=Mock(side_effect=lambda: self.odom))
         self.observer = bf.FeatureObserver(api_url="")
@@ -246,7 +253,7 @@ class ObserverTests(unittest.TestCase):
         self.assertGreater(center[0], 0)
 
     def test_moved_robot_discards_result(self):
-        def capture():
+        def capture(encoded):
             self.odom = NS(x=self.odom.x + 0.03, y=0, theta=0)
             return detection()
 
@@ -258,7 +265,7 @@ class ObserverTests(unittest.TestCase):
         started = threading.Event()
         finish = threading.Event()
 
-        def capture():
+        def capture(encoded):
             started.set()
             finish.wait(3)
             return detection()
@@ -266,6 +273,7 @@ class ObserverTests(unittest.TestCase):
         self.observer.capture = capture
 
         def sleep(_):
+            self.h.main_image = NS(jpeg=b"next")
             if started.is_set():
                 raise SkillCancelled("stop")
 
@@ -277,6 +285,37 @@ class ObserverTests(unittest.TestCase):
             self.assertLess(time.monotonic() - before, 0.5)
         finally:
             finish.set()
+
+    def test_stream_uses_new_highres_original_jpeg(self):
+        old = NS(jpeg=b"old")
+        fresh = NS(jpeg=b"original highres")
+        self.h.main_highres_image = old
+        self.h.sleep = lambda _: setattr(self.h, "main_highres_image", fresh)
+        encoded = self.observer.fresh_frame(self.h, self.controller)
+        self.assertIs(encoded, fresh.jpeg)
+
+    def test_frozen_stream_times_out(self):
+        self.h.sleep = Mock()
+        with patch.object(bf.time, "monotonic", side_effect=[0, 0, 3.1]):
+            with self.assertRaisesRegex(SkillFailed, "stream stopped"):
+                self.observer.fresh_frame(self.h, self.controller)
+
+    def test_cancel_during_frame_wait(self):
+        self.h.sleep = Mock(side_effect=SkillCancelled("stop"))
+        with self.assertRaises(SkillCancelled):
+            self.observer.fresh_frame(self.h, self.controller)
+
+    def test_frame_is_selected_after_settle(self):
+        seen = []
+        def advance(duration):
+            seen.append(duration)
+            self.h.main_image = NS(jpeg=str(len(seen)).encode())
+        self.h.sleep = advance
+        self.observer.capture = Mock(return_value=detection())
+        self.observer.observe(self.h, self.controller)
+        self.assertEqual(seen[:2], [0.3, 0.02])
+        self.observer.capture.assert_called_once_with(b"2")
+
 
 
 class DockTests(unittest.TestCase):
@@ -565,25 +604,20 @@ class CaptureTests(unittest.TestCase):
         thread.start()
         image = np.zeros((720, 1280, 3), np.uint8)
         encoded = cv2.imencode(".jpg", image)[1].tobytes()
-        now = time.time()
-        meta = {"header": {"stamp": {"sec": int(now), "nanosec": int(now % 1 * 1e9)}}}
         observer = bf.FeatureObserver(
             api_url=f"http://127.0.0.1:{server.server_port}",
             api_token="test-only-token",
         )
         try:
-            with (
-                patch.object(bf.websocket, "create_connection"),
-                patch.object(bf, "live_frame", return_value=(image, meta, encoded)),
+            self.assertFalse(observer.capture(encoded)["detected"])
+            self.assertIsNone(observer.detector)
+            with patch.object(
+                bf.json,
+                "load",
+                return_value={"calibration_id": "wrong", "image_sha256": "wrong"},
             ):
-                self.assertFalse(observer.capture()["detected"])
-                with patch.object(
-                    bf.json,
-                    "load",
-                    return_value={"calibration_id": "wrong", "image_sha256": "wrong"},
-                ):
-                    with self.assertRaisesRegex(ValueError, "does not match"):
-                        observer.capture()
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    observer.capture(encoded)
         finally:
             server.shutdown()
             server.server_close()

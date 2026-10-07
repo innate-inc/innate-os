@@ -11,10 +11,9 @@ import time
 import urllib.request
 
 import numpy as np
-import websocket
-from innate_skills.basket_capture import live_frame
+import cv2
 from innate_skills.basket_features import BasketDetector, Camera
-from innate_skills.box_marker import camera_in_base
+from innate_skills.box_marker import camera_in_base, marker_image
 from innate_skills.box_nav2 import PointController, approach_goal, in_odom, wrap
 
 from innate.exceptions import SkillFailed
@@ -112,30 +111,28 @@ class FeatureObserver:
         ).hexdigest()
         self.detector = None
 
-    def capture(self):
-        not_before = time.time()
-        ws = websocket.create_connection("ws://127.0.0.1:9090", timeout=1)
-        try:
-            for topic, kind in (
-                ("/mars/main_camera/left/camera_info", "CameraInfo"),
-                ("/mars/main_camera/left/image_highres/compressed", "CompressedImage"),
-            ):
-                ws.send(
-                    json.dumps(
-                        {
-                            "op": "subscribe",
-                            "topic": topic,
-                            "type": "sensor_msgs/msg/" + kind,
-                            "queue_length": 1,
-                            "throttle_rate": 200,
-                        }
-                    )
-                )
-            image, meta, encoded = live_frame(ws, self.camera, not_before=not_before)
-        finally:
-            ws.close()
+    @staticmethod
+    def fresh_frame(host, controller):
+        """Read the same injected stream as ArUco, after settling.
+
+        Image identity changes once per received frame. Do not reconnect to
+        rosbridge or manufacture a sensor capture timestamp from local time.
+        """
+        previous = marker_image(host)
+        until = time.monotonic() + 3
+        while True:
+            host.check_cancelled()
+            controller.fresh_odom()  # preserve the phase deadline
+            frame = marker_image(host)
+            if frame is not None and frame is not previous:
+                return frame.jpeg
+            if time.monotonic() >= until:
+                raise SkillFailed("Camera stream stopped updating; base remains stopped")
+            host.sleep(0.02)
+
+    def capture(self, encoded):
+        """Infer from an immutable JPEG selected on the skill thread."""
         if self.api_url:
-            stamp = meta["header"]["stamp"]
             request = urllib.request.Request(
                 self.api_url.rstrip("/") + "/detect",
                 data=encoded,
@@ -147,7 +144,6 @@ class FeatureObserver:
                         else {}
                     ),
                     "X-Calibration-Id": self.calibration_id,
-                    "X-Captured-At-Unix": str(stamp["sec"] + stamp["nanosec"] / 1e9),
                 },
             )
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -160,6 +156,9 @@ class FeatureObserver:
             return result
         if self.detector is None:
             self.detector = BasketDetector(self.assets)
+        image = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("Invalid camera JPEG")
         return self.detector.detect(image)
 
     def observe(self, host, controller, *, search=False):
@@ -172,11 +171,12 @@ class FeatureObserver:
             host.sleep(0.3)
             before = controller.fresh_odom()
             tilt = host.head_position.pitch_degrees
+            encoded = self.fresh_frame(host, controller)
             output = queue.Queue(maxsize=1)
 
-            def run():
+            def run(encoded=encoded, output=output):
                 try:
-                    output.put((True, self.capture()))
+                    output.put((True, self.capture(encoded)))
                 except Exception as exc:
                     output.put((False, exc))
 
