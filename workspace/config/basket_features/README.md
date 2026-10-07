@@ -107,9 +107,11 @@ baskets, arbitrary views, and robot-motion performance remain unverified.
 ## Feature-guided sock-drop skill (experimental)
 
 `innate-os/drop_in_box_features` is a separate alternative to
-`innate-os/drop_in_box_aruco`. Start holding a sock, with this basket visible
-in the main camera and a clear approach path. It does not search the room or
-plan around obstacles. The original ArUco skill is unchanged.
+`innate-os/drop_in_box_aruco`. Start holding a sock with a clear approach path.
+Like the ArUco routine, it lifts first, searches right for the basket, uses a
+26 cm frontal waypoint when the face is more than 20 degrees oblique, then
+performs final docking, release and retreat. It does not plan around obstacles.
+The original ArUco skill is unchanged.
 
 The skill uses full-resolution RootSIFT locally by default. To use the same
 HTTP perception service on another computer, set `BASKET_POSE_API_URL` in the
@@ -122,27 +124,35 @@ The robot stops and settles before every image. Acquisition checks current
 CameraInfo and requires a frame captured after the stop. Inference runs in a
 cancellable wait; its worker has no hardware handles. Motion during inference
 invalidates the result. API responses must identify the exact input image and
-calibration. Three failed stationary observations stop the skill holding the
-sock. Docking has a 120-second deadline, including odometry control;
+calibration. A fresh missing-basket result starts rightward rotation without
+translation, followed by another stopped observation. Search stops after a full
+odometry-measured revolution or the inherited phase timeout: 175 seconds for
+initial acquisition/repositioning, 50 seconds for final docking/recovery.
+The initial search is capped at 0.70 rad/s; close recovery at 0.40 rad/s.
+Camera/API errors and ambiguous poses do not authorize blind search; they retain
+three stationary retries. Final docking includes the odometry control time;
 an individual observation has a 45-second limit. A failed head-settle check
 stops before lifting. Existing grip, arm-pose, and clearance safeguards remain.
 
 The visible face centre and inward normal are transformed with measured head
 pitch into base_link. The base approaches a point 16 cm in front of that centre,
-in steps of at most 15 cm at up to 0.15 m/s. Position tolerance is 4.5 cm and
+in steps of at most 15 cm at up to 0.10 m/s (the ArUco final-approach cap). Position tolerance is 4.5 cm and
 normal-heading tolerance is 0.13 radians. After checking the held sock, it
 reobserves before calculating release. If another move is needed, it checks
 the held sock again after that move. Wrist release is 13 cm
 inside the face and 8 cm to its right, preserving the rehearsed arm offset.
 Thus docking is centred; release is deliberately offset inside the basket.
-The raised entry, release, and clearance wrist heights are 36, 22, and 30 cm,
-respectively, to account for the 16 cm rim. Existing IK selection and measured
+Arm motion, pitch selection, entry arc, release/shake, clearance, folding and
+retreat inherit the ArUco implementation. Wrist heights are unchanged at
+32 cm entry, 18 cm release, and 26 cm clearance. These inherited heights have
+not been physically validated against this 16 cm basket. Existing IK selection and measured
 pose checks precede opening; verified arm clearance precedes retreat.
 
 Validation: hardware-free execution tests exercise success, lost/ambiguous
 pose, grip loss, unreachable target, head timeout, cancellation, and failed
-clearance. The actual KDL model supports the nominal raised/release/clearance
-poses within the inherited tolerances. Catalog registration and live stationary
+clearance. Regression tests require the arm routines and heights to match ArUco, and
+exercise rightward search, full-revolution exhaustion, reacquisition, sensor
+errors/cancellation, and the same frontal-waypoint geometry. Catalog registration and live stationary
 camera capture were checked on MARS-47. **No physical approach, release, or
 landing has been tested for this new skill.** Similar baskets, different
 lighting, and the curved basket's metric bias remain unverified.

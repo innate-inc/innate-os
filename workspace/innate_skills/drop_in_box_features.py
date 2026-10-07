@@ -3,7 +3,12 @@
 """Feature-guided alternative to the rehearsed ArUco sock-drop skill."""
 
 from innate_skills.approach import FloorApproach
-from innate_skills.box_features import FeatureObserver, dock_features, release_target
+from innate_skills.box_features import (
+    FeatureObserver,
+    dock_features,
+    dock_features_via_point,
+    release_target,
+)
 from innate_skills.drop_in_box_aruco import DropInBoxAruco
 from innate_skills.drop_return import retract_to_rest
 from innate_skills.sock_grip import fresh_sock_held
@@ -16,18 +21,13 @@ from innate.exceptions import SkillFailed
 class DropInBoxFeatures(DropInBoxAruco):
     """Drop a held sock into the learned 50 x 30 x 16 cm wicker basket.
 
-    Start with the basket visible in the main camera and a clear approach path.
+    Start holding a sock with a clear approach path; searches right for the basket.
     Matches its natural texture, with no marker or language-model localization.
     Stops to observe between short moves; fails holding the sock if no reliable
     pose is available. Experimental: physical docking/drop is not yet validated.
     """
 
     head_position: HeadState
-
-    # Preserve the rehearsed wrist-to-rim offsets for a rim 4 cm taller.
-    RELEASE_Z = 0.36
-    LOWER_RELEASE_Z = 0.22
-    CLEARANCE_Z = 0.30
 
     def execute(self) -> SkillReturn:
         self._box_release_xy = None
@@ -38,7 +38,7 @@ class DropInBoxFeatures(DropInBoxAruco):
         self._vertical_lift_pending = True
         try:
             observer = FeatureObserver()
-            # Validate the taller basket's nominal reach before any motion.
+            # Keep the ArUco arm motion and preflight its nominal reach.
             self._select_drop_pitch(
                 self.FINAL_DISTANCE_M + self._p["drop_inset"], -self.DROP_RIGHT_M
             )
@@ -67,6 +67,11 @@ class DropInBoxFeatures(DropInBoxAruco):
                 "feature basket", stages=["approach", "release"], frame=(1280, 720)
             )
             self.overlay.stage("approach")
+            dock_features_via_point(self, observer)
+            if not fresh_sock_held(self, timeout=None):
+                raise SkillFailed(
+                    "Sock slipped during approach; refusing an empty drop"
+                )
 
             def verify_hold():
                 if not fresh_sock_held(self, timeout=None):

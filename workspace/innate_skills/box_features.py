@@ -15,7 +15,7 @@ import websocket
 from innate_skills.basket_capture import live_frame
 from innate_skills.basket_features import BasketDetector, Camera
 from innate_skills.box_marker import camera_in_base
-from innate_skills.box_nav2 import PointController, in_odom, wrap
+from innate_skills.box_nav2 import PointController, approach_goal, in_odom, wrap
 
 from innate.exceptions import SkillFailed
 
@@ -58,6 +58,10 @@ def face_in_base(result, tilt):
 
 def release_target(center, normal, inset=0.13, right=0.08):
     return tuple(center + inset * normal + right * np.array([normal[1], -normal[0]]))
+
+
+class BasketMissing(SkillFailed):
+    """A fresh calibrated frame contains no supported basket match."""
 
 
 class FeatureObserver:
@@ -119,7 +123,7 @@ class FeatureObserver:
             self.detector = BasketDetector(self.assets)
         return self.detector.detect(image)
 
-    def observe(self, host, controller):
+    def observe(self, host, controller, *, search=False):
         """Three stationary attempts; cancellation never waits for inference."""
         reason = "No observation"
         for _ in range(3):
@@ -164,6 +168,8 @@ class FeatureObserver:
             if not ok:
                 reason = str(value)
                 continue
+            if search and value.get("detected") is False:
+                raise BasketMissing("Basket not visible in fresh frame")
             try:
                 return face_in_base(value, tilt)
             except (ValueError, TypeError, KeyError) as exc:
@@ -174,16 +180,69 @@ class FeatureObserver:
 
 
 class FeatureController(PointController):
-    def __init__(self, host):
+    def __init__(self, host, timeout=50):
         super().__init__(host)
-        self.deadline = time.monotonic() + 120
-        self.follower.max_linear = 0.15
-        self.follower.max_angular = 0.6
+        self.deadline = time.monotonic() + timeout
+        self.follower.final_approach()
 
     def fresh_odom(self):
         if time.monotonic() > self.deadline:
             raise SkillFailed("Feature basket alignment timed out; refusing release")
         return super().fresh_odom()
+
+
+def find_features(host, observer, controller, speed=0.4):
+    """ArUco's rightward search/recovery, paused for full-quality inference."""
+    swept = 0.0
+    old_speed = controller.follower.max_angular
+    controller.follower.max_angular = speed
+    try:
+        while True:
+            try:
+                return observer.observe(host, controller, search=True)
+            except BasketMissing:
+                if swept >= 2 * math.pi:
+                    raise SkillFailed(
+                        "Basket not found after looking around; stopped holding sock"
+                    )
+                odom = controller.fresh_odom()
+                # The inherited turn controller stops within 0.12 rad. Include
+                # that tolerance so each actual rightward step covers ~20 deg.
+                step = min(math.radians(20) + 0.12, 2 * math.pi - swept + 0.12)
+                host.logger.info(
+                    "[FeatureDock] basket missing; searching right, no translation"
+                )
+                controller.turn(wrap(odom.theta - step))
+                after = controller.fresh_odom()
+                swept += abs(wrap(after.theta - odom.theta))
+    finally:
+        controller.follower.max_angular = old_speed
+        controller.follower._stop()
+
+
+def dock_features_via_point(host, observer):
+    """Same search -> 26 cm frontal waypoint decision as dock_via_point."""
+    controller = FeatureController(host, timeout=175)
+    controller.follower.fast_approach()
+    controller.follower.max_linear = 0.30
+    controller.follower.max_angular = 0.90
+    controller.follower.angular_braking = 1.80
+    try:
+        center, normal = find_features(host, observer, controller, speed=0.70)
+        yaw = math.atan2(normal[1], normal[0])
+        if abs(wrap(yaw - math.atan2(center[1], center[0]))) <= math.radians(20):
+            return
+        odom = controller.fresh_odom()
+        origin = odom.x, odom.y, odom.theta
+        basket = in_odom([(center[0], center[1], yaw)], origin)[0]
+        destination = in_odom([approach_goal(center, yaw)], origin)[0]
+        controller.drive(destination)
+        host.mobility.stop()
+        host.sleep(0.15)
+        odom = controller.fresh_odom()
+        controller.turn(math.atan2(basket[1] - odom.y, basket[0] - odom.x))
+    finally:
+        controller.close()
 
 
 def dock_features(host, observer, verify_hold=None):
@@ -192,7 +251,7 @@ def dock_features(host, observer, verify_hold=None):
     hold_checked = verify_hold is None
     try:
         while True:
-            center, normal = observer.observe(host, controller)
+            center, normal = find_features(host, observer, controller)
             yaw = math.atan2(normal[1], normal[0])
             goal = center - host.FINAL_DISTANCE_M * normal
             if np.linalg.norm(goal) <= 0.045 and abs(yaw) <= 0.13:
