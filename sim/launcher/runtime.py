@@ -40,6 +40,8 @@ from config import (
     LEGACY_CLOUD_AGENT_CONTAINER,
     LEGACY_SHARED_CONTAINER,
     LEGACY_SHARED_PROJECT,
+    LEROBOT_ACTIONS_PORT,
+    LEROBOT_OBSERVATIONS_PORT,
     NO_BACKEND,
     OS_BUILD_LOG_PATH,
     OS_CONTAINER_NAME,
@@ -51,6 +53,7 @@ from config import (
     PUBLISHED_PORT_ENV,
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
+    SERVER_BACKEND,
     SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_DERIVED,
     SIM_DIR,
@@ -768,18 +771,18 @@ def prune_superseded_pulled_images(config: dict[str, object], *, cwd: Path, env:
         prune_stale_local_images(current, cwd=cwd, env=env, label=label, tag_prefix=prefix, keep_recent=keep)
 
 
-# Directories the container's ROS nodes create lazily on the workspace
-# bind-mount. The container runs as root: on native Linux a root mkdir lands
-# on the host as root:root and locks the user out of their own skills dir
-# (macOS is immune -- Docker Desktop's file sharing rewrites ownership).
-WORKSPACE_USER_DIRS = ("custom_agents", "custom_skills")
+# Host directories the container writes into. The container runs as root: on
+# native Linux a missing bind source, or a root mkdir on a bind-mount, lands on
+# the host as root:root and locks the user out of their own checkout (macOS is
+# immune -- Docker Desktop's file sharing rewrites ownership).
+USER_OWNED_BIND_DIRS = ("data", "workspace/custom_agents", "workspace/custom_skills")
 
 
-def ensure_workspace_dirs(config: dict[str, object]) -> None:
-    """Pre-create container-written workspace dirs as the invoking user."""
+def ensure_bind_mount_dirs(config: dict[str, object]) -> None:
+    """Pre-create container-written bind-mount dirs as the invoking user."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    for name in WORKSPACE_USER_DIRS:
-        path = os_repo / "workspace" / name
+    for name in USER_OWNED_BIND_DIRS:
+        path = os_repo / name
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -829,6 +832,8 @@ _STACK_PORTS = (
     ("foxglove bridge", SIM_FOXGLOVE_PORT, "8765/tcp"),
     ("world server", WORLD_SERVER_PORT, None),
     ("world state stream", WORLD_STATE_PORT, None),
+    ("lerobot bridge actions", LEROBOT_ACTIONS_PORT, "5555/tcp"),
+    ("lerobot bridge observations", LEROBOT_OBSERVATIONS_PORT, "5556/tcp"),
 )
 
 
@@ -955,7 +960,11 @@ def _seed_nav_map(config: dict[str, object]) -> None:
         return
     state = os_repo / "data"
     state.mkdir(parents=True, exist_ok=True)
-    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    # Replaced, not rewritten: the container's mode manager recreates this file
+    # as root, and a rename needs only the (user-owned) directory to be writable.
+    staged = state / ".last_map.tmp"
+    staged.write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+    os.replace(staged, state / ".last_map")
 
 
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
@@ -1371,7 +1380,7 @@ def refuse_if_ports_taken() -> None:
     move = (
         f"move this checkout to a block that is free:\n  {PORT_BASE_ENV}={suggestion} {CLI_SIM} up"
         if suggestion is not None
-        else f"set {PORT_BASE_ENV} to the start of seven free ports"
+        else f"set {PORT_BASE_ENV} to the start of nine free ports"
     )
     other = _other_checkout_holding({port for _, port in taken})
     if other is None:
@@ -2731,6 +2740,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
+            and reply.get("mdns") == _beacon_ports_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2756,11 +2766,13 @@ def ensure_world_server(config: dict[str, object]) -> str:
             )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
-        else:
+        elif set(actual_binds) != expected_binds:
             log(
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
+        else:
+            log("Host world server announces a different simulator (or none) to the app -- restarting it...")
         _stop_stale_world_server()
     else:
         # Silence on this block's port says nothing about the last run: a
@@ -2873,6 +2885,33 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
+def _beacon_ports_wanted() -> list[int] | None:
+    """The [rosbridge, webapp] ports the world server should advertise; None
+    when advertising is switched off (INNATE_SIM_BEACON=0)."""
+    if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
+        return None
+    return [SIM_ROSBRIDGE_PORT, SIM_HTTPS_PORT]
+
+
+def _beacon_env(repo_root: Path) -> dict[str, str]:
+    """What the world server's LAN discovery beacon announces (mars_sim_driver
+    beacon.py): the ports the controller app needs, the robot's name file, and
+    the checkout's version. Empty when advertising is switched off."""
+    if _beacon_ports_wanted() is None:
+        return {}
+    described = subprocess.run(
+        ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "INNATE_SIM_BEACON_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
+        "INNATE_SIM_BEACON_WEBAPP_PORT": str(SIM_HTTPS_PORT),
+        "INNATE_SIM_BEACON_ROBOT_INFO": str(repo_root / "data" / "robot_info.json"),
+        "INNATE_SIM_BEACON_VERSION": described.stdout.strip() if described.returncode == 0 else "",
+    }
+
+
 def _start_world_server(
     uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
 ) -> bool:
@@ -2881,13 +2920,16 @@ def _start_world_server(
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
         "from mars_sim_driver.world_server import main; main()"
     )
-    env = os.environ.copy()
+    # The beacon's settings come only from this launcher: one inherited from the
+    # shell would advertise after an opt-out, and every later up would restart.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("INNATE_SIM_BEACON_")}
     # An explicit VIRTUAL_MARS_ASSETS wins. The default is the apartment
     # bundle, and hard-coding it made the world server ignore an asset bundle
     # chosen by the caller -- which is how you point the live stack at a
     # different world (sim/bundles/<map>) without editing the launcher. The
     # benchmark needs exactly that: same stack, same brain, a different room.
     env["VIRTUAL_MARS_ASSETS"] = os.environ.get("VIRTUAL_MARS_ASSETS", "").strip() or str(sim_repo / "assets")
+    env.update(_beacon_env(sim_repo.parent))
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
@@ -3247,8 +3289,10 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == SERVER_BACKEND:
+        llm_level, llm_label = "healthy", "llm server"
     else:
-        llm_level, llm_label = "healthy", "gemini key"
+        llm_level, llm_label = "healthy", "vendor key"
 
     if all(level == "healthy" for level in (world_level, sim_level, transport_level, brain_level, llm_level)):
         stack_mood = ("healthy", "LIVE")

@@ -11,6 +11,8 @@ setup(
         "auth_client",
         "innate_proxy",
         "innate_proxy.adapters",
+        "innate_llm",
+        "innate_llm.wires",
         "training_client",
         "training_client.src",
     ],
@@ -18,6 +20,8 @@ setup(
         "auth_client": "auth-client/auth_client",
         "innate_proxy": "proxy-client/innate_proxy",
         "innate_proxy.adapters": "proxy-client/innate_proxy/adapters",
+        "innate_llm": "innate-llm/innate_llm",
+        "innate_llm.wires": "innate-llm/innate_llm/wires",
         "training_client": "training-client/training_client",
         "training_client.src": "training-client/training_client/src",
     },
@@ -32,7 +36,7 @@ setup(
     zip_safe=True,
     maintainer="Innate Engineering",
     maintainer_email="eng@innate.bot",
-    description="Innate cloud client libraries: auth, proxy, and training.",
+    description="Innate cloud client libraries: auth, proxy, LLM vendors, and training.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

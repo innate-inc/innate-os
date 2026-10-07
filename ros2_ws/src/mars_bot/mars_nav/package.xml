@@ -37,7 +37,6 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>python3-cupy</exec_depend>
 
   <!-- Navigation dependencies -->
   <exec_depend>nav2_simple_commander</exec_depend>

@@ -100,6 +100,10 @@ def build_agent_instances(
                 ):
                     raise ValueError(f"{name} must be a finite positive number or None")
             agent._turn_intervals = intervals
+            if agent.model is not None:
+                if not isinstance(agent.model, str) or not agent.model.strip():
+                    raise ValueError("model must be a 'vendor:name' string or None")
+                agent.model = agent.model.strip()
             agent.uses_gaze()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster

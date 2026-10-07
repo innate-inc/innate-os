@@ -73,6 +73,8 @@ export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
 export const AGENT_STATUS_TOPIC = "/brain/agent_status";
 // Reset the agent's brain/memory (brain_messages/srv/ResetBrain → {success}).
 export const RESET_BRAIN_SERVICE = "/brain/reset_brain";
+// The brain node itself: its llm_model parameter is the robot's model, applied live.
+export const BRAIN_NODE = "/brain_client_node";
 // Cloud/local agent backend connection (std_msgs/String JSON: {state, connected,
 // message, uri, hosted, timestamp}) — distinct from the rosbridge link.
 export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";
@@ -95,13 +97,14 @@ export const AMCL_POSE_TOPIC = "/amcl_pose";
 export const COMMANDED_GOAL_TOPIC = "/nav/commanded_goal";
 // Stop all active navigation (std_srvs/Trigger), no matter which client started it.
 export const CANCEL_NAVIGATION_SERVICE = "/nav/cancel_navigation";
-// Auto-localization (std_srvs/Trigger on grid_localizer). Can take tens of seconds.
+// Auto-localization (std_srvs/Trigger on grid_localizer), about half a second.
 export const LOCALIZE_SERVICE = "/localize";
-// grid_localizer's one-shot result (std_msgs/String, published once per
-// localization attempt): processing_map | localized | localized_low_confidence
-// | error. Only seen if subscribed when it fires — steady-state localization
-// health comes from /amcl_pose covariance instead (mobile-app pattern).
+// grid_localizer's word on where the robot stands (std_msgs/String, latched):
+// processing_map | localized | localized_low_confidence | lost | error. The one
+// localization indicator — see grid_localizer.py on why covariance cannot be.
 export const LOCALIZATION_STATUS_TOPIC = "/localization/status";
+// Tell grid_localizer (std_srvs/Trigger) that a hand placement vouched for the pose.
+export const HAND_PLACED_SERVICE = "/localization/hand_placed";
 // AMCL's manual seed (nav2_msgs/srv/SetInitialPose) — place the robot by hand.
 export const SET_INITIAL_POSE_SERVICE = "/set_initial_pose";
 

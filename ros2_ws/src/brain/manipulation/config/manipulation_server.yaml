@@ -18,3 +18,15 @@ manipulation_server:
     #   = 0 : disabled -- fall back to the chunked-queue path (replan every n_action_steps)
     # Disabled by default; 0.01 is a good starting value to enable smoothing (pins n_action_steps=1).
     temporal_ensemble_coeff: 0.0
+    # LeRobot bridge: a lerobot process (another computer, or a uv env on this Jetson) observes and drives the
+    # robot over ZMQ; the protocol and its limits are in manipulation/lerobot_bridge.py, the user guide
+    # in lerobot/README.md.
+    lerobot_bridge:
+      enabled: true
+      port_actions: 5555        # PULL: clients push JSON actions / heartbeats
+      port_observations: 5556   # PUB: 'state' (JSON) and 'obs' (JSON + one JPEG per camera)
+      rate_hz: 30.0
+      jpeg_quality: 90
+      # No login, like the rosbridge websocket: anyone on the robot's network can connect.
+      # "127.0.0.1" keeps the bridge to lerobot processes on this Jetson; enabled: false closes it.
+      bind_address: "*"

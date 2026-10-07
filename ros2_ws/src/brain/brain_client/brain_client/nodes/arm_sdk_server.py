@@ -10,6 +10,13 @@ same way every other page-facing robot feature is: an action
 reads pose/joints/torque straight from the driver topics, so this node costs
 nothing while the page just looks at the arm.
 
+The controller app's phone teleop rides the same node: /armsdk/stream_pose
+carries a 6-DoF end-effector delta (JSON, base_link axes) from where the
+operator's hand was when they pressed the button, and the follower answers
+on /armsdk/stream_pose/status. The arm follows from its pose at the first
+sample applied, after moving to zero unless it is still where the previous
+stream left it: from the rest fold, IK refuses almost every target.
+
 The Manipulation feeds cost ~600 msg/s of callback dispatch while live, so
 they only run around commands: constructed lazy, started on the first goal,
 and parked again after IDLE_PARK_S without one.
@@ -23,6 +30,8 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import rclpy
 from brain_messages.action import ExecuteArmCommand
@@ -30,12 +39,15 @@ from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 
+from brain_client.common.enums import StrEnum
+from brain_client.common.geometry import Quat, apply_pose_delta, rebase_anchor
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
 from brain_client.robot.manipulation import Manipulation
 
 IDLE_PARK_S = 60.0  # park the state feeds this long after the last command
+STATE_WAKE_S = 1.5  # how long a waking command waits for the first /mars/arm/state
 
 rclpy.init(args=sys.argv)  # honor the launch file's --ros-args
 node = rclpy.create_node("arm_sdk_server")
@@ -53,12 +65,18 @@ last_request = time.monotonic()
 
 
 def touch():
-    """Mark activity and make sure the state feeds are live (idempotent)."""
+    """Mark activity and wake the state feeds. Waking waits for the first
+    joint state: commands read the measured arm, and would otherwise refuse
+    the very command that woke the feeds."""
     global last_request
     last_request = time.monotonic()
-    if manip._executor is None:  # log the resume, not every stream step
-        node.get_logger().info("command while parked — starting arm-state feeds")
+    if manip._executor is not None:
+        return
+    node.get_logger().info("command while parked — starting arm-state feeds")
     manip.start()
+    deadline = time.monotonic() + STATE_WAKE_S
+    while manip._arm_state is None and time.monotonic() < deadline:
+        time.sleep(0.02)
 
 
 def parker():
@@ -207,7 +225,9 @@ def execute_goal(goal_handle):
     # torque_off is the abort path: it must work WHILE a motion holds the
     # lock (the motion then fails fast on the de-energized arm).
     needs_lock = cmd != "torque_off"
-    if needs_lock and not motion_lock.acquire(blocking=False):
+    # A pose-stream step holds the lock for one IK solve; wait that out so a
+    # gripper tap mid-teleop lands instead of bouncing off as busy.
+    if needs_lock and not motion_lock.acquire(timeout=Manipulation.STREAM_IK_TIMEOUT_S * 2):
         goal_handle.succeed()
         return result(False, "arm busy — wait for the current motion")
     try:
@@ -224,6 +244,164 @@ def execute_goal(goal_handle):
     finally:
         if needs_lock:
             motion_lock.release()
+
+
+@dataclass(frozen=True)
+class PoseSample:
+    """One /armsdk/stream_pose message: the operator's hand motion since
+    ``session`` began, as a base_link delta, and an optional gripper opening
+    (0 closed … 1 open). A new session re-anchors on the live pose."""
+
+    session: str
+    position: tuple[float, float, float]
+    rotation: Quat
+    grip: float | None
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """The pose a session's deltas apply to, rebased so its first applied
+    sample lands on the arm where it stood."""
+
+    session: str
+    position: tuple[float, float, float]
+    rotation: Quat
+
+
+class FollowState(StrEnum):
+    IDLE = "idle"
+    ZEROING = "zeroing"
+    FOLLOWING = "following"
+    UNREACHABLE = "unreachable"
+    REFUSED = "refused"
+
+
+class PoseFollower:
+    """Latest-wins follower for /armsdk/stream_pose: the subscription only keeps
+    the newest sample and a tick thread solves it, so messages never queue
+    behind a slow solve. Each new session zeroes the arm unless it is still
+    where the last session left it, then anchors on the live FK pose."""
+
+    STATUS_HZ = 5.0
+    ZERO_S = 3.0
+    # j1-j4 this far from a pose: the arm is elsewhere, not settling after the
+    # operator let go or finishing a zero.
+    MOVED_RAD = 0.25
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sample: PoseSample | None = None
+        self._stamp = 0.0
+        self._anchor: Anchor | None = None
+        self._left_at: list[float] | None = None  # j1-j4 as the last session had them
+        # The stream being answered: a refused one never gets an anchor.
+        self._session: str | None = None
+        self._expired: str | None = None
+        self._state = FollowState.IDLE
+        self._detail = ""
+        self._status_pub = node.create_publisher(String, "/armsdk/stream_pose/status", 10)
+        self._last_status = 0.0
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def on_message(self, msg: String) -> None:
+        try:
+            body = json.loads(msg.data)
+            sample = PoseSample(
+                session=str(body["session"]),
+                position=(float(body["x"]), float(body["y"]), float(body["z"])),
+                rotation=(float(body["qx"]), float(body["qy"]), float(body["qz"]), float(body["qw"])),
+                grip=None if body.get("grip") is None else min(1.0, max(0.0, float(body["grip"]))),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            node.get_logger().warning(f"bad stream_pose message: {e}", throttle_duration_sec=2.0)
+            return
+        with self._lock:
+            self._sample = sample
+            self._stamp = time.monotonic()
+
+    def _run(self) -> None:
+        dt = 1.0 / Manipulation.STREAM_RATE_HZ
+        while rclpy.ok():
+            time.sleep(dt)
+            with self._lock:
+                sample, fresh = self._sample, time.monotonic() - self._stamp < Manipulation.STREAM_IDLE_S
+            if sample is None or not fresh or sample.session == self._expired:
+                # A stream that went quiet stays dropped; the operator presses again.
+                if sample is not None:
+                    self._expired = sample.session
+                self._session = None
+                self._set(FollowState.IDLE)
+                self._anchor = None
+                continue
+            self._session = sample.session
+            touch()  # here, not in the subscription callback: waking the feeds can block
+            self._step(sample)
+            self._publish_status()
+
+    def _step(self, sample: PoseSample) -> None:
+        if not motion_lock.acquire(blocking=False):
+            return  # a discrete motion owns the arm; the next tick retries
+        try:
+            if manip.torque_enabled is False:
+                self._anchor = None  # the arm falls; with torque back the session starts over
+                raise ArmFailed("arm torque is disabled")
+            anchor = self._anchor
+            if anchor is None or anchor.session != sample.session:
+                if self._arm_away_from(self._left_at):
+                    self._zero()
+                    return  # the hand moved during the zero: anchor on the next, fresh sample
+                anchor = self._anchor_on(sample)
+            target = apply_pose_delta(anchor.position, anchor.rotation, sample.position, sample.rotation)
+            grip = None if sample.grip is None else sample.grip * Manipulation.GRIPPER_OPEN
+            reached = manip.stream_pose(*target, grip=grip)
+            self._note_arm()
+            self._set(FollowState.FOLLOWING if reached else FollowState.UNREACHABLE)
+        except (ArmFailed, ArmUnhealthy) as e:
+            self._set(FollowState.REFUSED, str(e))
+        finally:
+            motion_lock.release()
+
+    def _arm_away_from(self, joints: Sequence[float] | None) -> bool:
+        state = manip._arm_state
+        if state is None or joints is None:
+            return True
+        return any(abs(q - j) > self.MOVED_RAD for q, j in zip(state.position[:4], joints[:4], strict=True))
+
+    def _note_arm(self) -> None:
+        state = manip._arm_state
+        if state is not None:
+            self._left_at = [float(q) for q in state.position[:4]]
+
+    def _zero(self) -> None:
+        node.get_logger().info(f"pose stream {self._session}: the arm is not where the last stream left it — zeroing")
+        self._set(FollowState.ZEROING)
+        manip.move_joints(Manipulation.ZERO[:5], duration=self.ZERO_S)
+        if self._arm_away_from(Manipulation.ZERO):
+            raise ArmFailed("the arm did not reach zero")  # a limp arm "completes" a goto without moving
+        self._note_arm()
+
+    def _anchor_on(self, sample: PoseSample) -> Anchor:
+        pose = manip.pose
+        anchor = Anchor(
+            sample.session, *rebase_anchor(pose.position, pose.orientation, sample.position, sample.rotation)
+        )
+        self._anchor = anchor
+        node.get_logger().info(f"pose stream {sample.session}: anchored at ({pose.x:.3f}, {pose.y:.3f}, {pose.z:.3f})")
+        return anchor
+
+    def _set(self, state: FollowState, detail: str = "") -> None:
+        changed = state != self._state or detail != self._detail
+        self._state, self._detail = state, detail
+        if changed:
+            self._publish_status(force=True)
+
+    def _publish_status(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_status < 1.0 / self.STATUS_HZ:
+            return
+        self._last_status = now
+        body = {"session": self._session, "state": self._state.value, "detail": self._detail}
+        self._status_pub.publish(String(data=json.dumps(body)))
 
 
 def on_stream(msg):
@@ -252,8 +430,18 @@ def main():
         QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         callback_group=group,
     )
+    follower = PoseFollower()
+    node.create_subscription(
+        String,
+        "/armsdk/stream_pose",
+        follower.on_message,
+        QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        callback_group=group,
+    )
     threading.Thread(target=parker, daemon=True).start()
-    node.get_logger().info("Arm SDK server: action /armsdk/command, stream /armsdk/stream_joints")
+    node.get_logger().info(
+        "Arm SDK server: action /armsdk/command, streams /armsdk/stream_joints and /armsdk/stream_pose"
+    )
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:

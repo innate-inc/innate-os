@@ -130,7 +130,7 @@ Robot software sees the world only through the driver. Humans and tools see it o
 
 ## Foxglove and ROS
 
-The sim starts a Foxglove bridge for you. Connect [Foxglove Studio](https://foxglove.dev) to `ws://localhost:8765`. Because this is localhost, full-resolution cameras and point clouds are fine — unlike a physical robot on Wi-Fi, where you want the `/mars/main_camera/remote/*` topics. See the [Foxglove docs](https://docs.innate.bot/software/foxglove-setup).
+The sim starts a Foxglove bridge for you. Connect [Foxglove Studio](https://foxglove.dev) to `ws://localhost:8765`. Because this is localhost, full-resolution cameras and point clouds are fine — unlike a physical robot on Wi-Fi, where you want the `/mars/main_camera/remote/*` topics (start the camera stack with `remote_rviz:=true` to enable them). See the [Foxglove docs](https://docs.innate.bot/software/foxglove-setup).
 
 A rosbridge server is at `ws://localhost:9090`.
 
@@ -157,6 +157,8 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 | +4 | Foxglove bridge | `SIM_FOXGLOVE_PORT` | 8765 |
 | +5 | world server RPC | `SIM_WORLD_PORT` | 8799 |
 | +6 | world state stream | `SIM_WORLD_STATE_PORT` | 8800 |
+| +7 | LeRobot bridge, actions | `SIM_LEROBOT_ACTIONS_PORT` | 5555 |
+| +8 | LeRobot bridge, observations | `SIM_LEROBOT_OBSERVATIONS_PORT` | 5556 |
 
 ## Configuration
 
@@ -164,6 +166,7 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 - `config/settings.yaml` — optional ROS tunables
 - `sim/config.toml` — optional overrides, created from `config.toml.template`
 - `INNATE_SIM_RENDER_SCALE=N` — render cameras at 1/N (helps software rendering)
+- `INNATE_SIM_HARDWARE_CAMERA_RATES=1` — render the raw camera topics at the robot's capture rates (head 15 fps, wrist 30 fps) while something subscribes to them, for recording datasets; needs native GL. See [lerobot/README.md](../lerobot/README.md#using-the-simulator)
 
 ## Benchmark worlds
 

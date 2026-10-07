@@ -140,6 +140,14 @@ class Manipulation:
     STREAM_RATE_HZ = 30.0
     STREAM_MAX_SPEED = 1.8  # rad/s
     STREAM_IDLE_S = 0.4
+    STREAM_IK_TIMEOUT_S = 0.1
+    # Pose samples arrive slower and less evenly than the slew loop ticks; an
+    # unsmoothed loop reaches each target in one tick and then stalls.
+    STREAM_POSE_SMOOTHING_S = 0.1
+    # A new IK solution this far from the streamed target is another elbow or
+    # wrist branch, not the hand's motion: recorded phone teleop never moved a
+    # joint more than 0.55 rad per sample; other branches sit a median 1.6 away.
+    STREAM_MAX_JUMP_RAD = 0.8
 
     # A motion completes on ARRIVAL, and motions serialize in the driver, so a
     # queued one waits out whatever is already moving before its own duration
@@ -155,7 +163,7 @@ class Manipulation:
 
     def __init__(self, node: Node, logger, lazy: bool = False):
         """``lazy`` defers the state feeds until :meth:`start`."""
-        self.node = rclpy.create_node(f"{node.get_name()}_manipulation_interface")
+        self.node = rclpy.create_node(f"{node.get_name()}_manipulation_interface", start_parameter_services=False)
         self.logger = logger
         self.safety = Safety(logger)
         # Spins only while a skill is active; parked between skills to keep
@@ -174,6 +182,7 @@ class Manipulation:
         self._stream_target: list[float] | None = None
         self._stream_cmd: list[float] | None = None
         self._stream_speed = self.STREAM_MAX_SPEED
+        self._stream_smoothing = 0.0
         self._stream_stamp = 0.0
         self._stream_thread: threading.Thread | None = None
 
@@ -186,6 +195,11 @@ class Manipulation:
         self._status_stamp = 0.0
         # Standing grip target: the last COMMANDED j6 (see module docstring).
         self._grip_target: float | None = None
+        # Standing j1-j5 target, like _grip_target for the claw: a gripper command
+        # holds it. Re-sending the MEASURED pose instead sinks a loaded arm by
+        # its sag each time (fingertips pressed into carpet could not close).
+        # None once a motion has failed: the arm is then wherever it stopped.
+        self._arm_target: list[float] | None = None
         self._pending: _PendingMotion | None = None
 
         # Subscriptions are created once and never destroyed: destroying one
@@ -515,7 +529,9 @@ class Manipulation:
 
     # --- streaming ---
 
-    def stream_joints(self, joints: Sequence[float], *, max_speed: float | None = None) -> None:
+    def stream_joints(
+        self, joints: Sequence[float], *, max_speed: float | None = None, smoothing_s: float = 0.0
+    ) -> None:
         """Continuously retarget the arm (teleop-style streaming); returns at
         once.
 
@@ -523,7 +539,9 @@ class Manipulation:
         path leader-arm teleop uses, soft gains, no per-step splines — via a
         STREAM_RATE_HZ slew loop that clamps each joint to ``max_speed``
         (default STREAM_MAX_SPEED rad/s), so a far target ramps instead of
-        snapping. Call repeatedly from a UI or servoing loop; the stream idles
+        snapping. ``smoothing_s`` low-passes the approach with that time
+        constant, for targets that arrive slower than the loop ticks. Call
+        repeatedly from a UI or servoing loop; the stream idles
         out STREAM_IDLE_S after the last call, and the last streamed j6
         becomes the standing grip target. 5 values keep the standing grip,
         6 set it. Any discrete motion stops the stream first, and a skill
@@ -558,10 +576,43 @@ class Manipulation:
                 self._stream_cmd = seed
             self._stream_target = target
             self._stream_speed = float(max_speed) if max_speed is not None else self.STREAM_MAX_SPEED
+            self._stream_smoothing = smoothing_s
             self._stream_stamp = time.monotonic()
             if starting:
                 self._stream_thread = threading.Thread(target=self._stream_run, daemon=True)
                 self._stream_thread.start()
+
+    def stream_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        grip: float | None = None,
+    ) -> bool:
+        """One cartesian streaming step: solve IK and hand the joints to
+        :meth:`stream_joints`, with ``grip`` (j6 radians; None keeps the
+        standing grip). False, moving nothing, when the pose has no solution
+        within one stream tick, or only one on another IK branch."""
+        joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
+        if joints is None or self._branch_jump(joints):
+            return False
+        self.stream_joints(joints if grip is None else [*joints, grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
+        return True
+
+    def _branch_jump(self, joints: Sequence[float]) -> bool:
+        """Whether ``joints`` lie more than STREAM_MAX_JUMP_RAD from where the
+        stream is heading (or, with no stream running, from where the arm is)."""
+        with self._stream_lock:
+            reference = self._stream_target
+        if reference is None:
+            state = self._arm_state
+            if state is None:
+                return False  # stream_joints refuses to start without a measurement
+            reference = list(state.position)
+        return any(abs(a - b) > self.STREAM_MAX_JUMP_RAD for a, b in zip(joints, reference[:5], strict=True))
 
     def stream_stop(self) -> None:
         """Stop streaming; the arm holds its current position. Idempotent.
@@ -574,6 +625,7 @@ class Manipulation:
         with self._stream_lock:
             if self._stream_target is not None and self._stream_cmd is not None:
                 self._grip_target = float(self._stream_cmd[5])
+                self._arm_target = [float(j) for j in self._stream_cmd[:5]]
             self._stream_target = None
 
     def _stream_run(self) -> None:
@@ -589,13 +641,15 @@ class Manipulation:
                     # here again could stomp a grip a motion set since.
                     if not stopped and self._stream_cmd is not None:
                         self._grip_target = float(self._stream_cmd[5])
+                        self._arm_target = [float(j) for j in self._stream_cmd[:5]]
                     self._stream_target = None
                     self._stream_thread = None  # under the lock: see stream_joints
                     return
                 step = self._stream_speed * dt
+                gain = min(1.0, dt / self._stream_smoothing) if self._stream_smoothing > 0 else 1.0
                 assert self._stream_cmd is not None  # seeded before the thread starts
                 for i in range(6):
-                    delta = self._stream_target[i] - self._stream_cmd[i]
+                    delta = (self._stream_target[i] - self._stream_cmd[i]) * gain
                     self._stream_cmd[i] += max(-step, min(step, delta))
                 msg = Float64MultiArray()
                 msg.data = [float(v) for v in self._stream_cmd]
@@ -630,6 +684,7 @@ class Manipulation:
         if pending is not None:
             budget = timeout if timeout is not None else max(0.0, pending.deadline - time.monotonic())
             if not self._await_motion_result(pending.future, pending.name, budget):
+                self._arm_target = None
                 raise ArmFailed(f"{pending.name} motion failed or did not complete in time")
 
     # --- gripper ---
@@ -687,6 +742,7 @@ class Manipulation:
             self._torque_enabled = False
             self._torque_stamp = time.monotonic()
             self._grip_target = None  # a limp claw holds nothing
+            self._arm_target = None  # and a limp arm is wherever gravity left it
         return success
 
     def reboot_servos(self) -> bool:
@@ -702,6 +758,7 @@ class Manipulation:
             self._torque_enabled = False
             self._torque_stamp = time.monotonic()
             self._grip_target = None
+            self._arm_target = None
         return success
 
     def recover(self) -> None:
@@ -755,6 +812,7 @@ class Manipulation:
         """
         with self._ik_lock:
             self._ik_solution = None
+            key = f"{x:.4f} {y:.4f} {z:.4f} {roll:.4f} {pitch:.4f} {yaw:.4f}"  # as mars_arm/ik.py echoes it
 
             target = Twist()  # /ik_delta is an ABSOLUTE pose despite the name
             target.linear.x = x
@@ -768,11 +826,14 @@ class Manipulation:
             start_time = time.time()
             while time.time() - start_time < timeout:
                 self._settle(0.01)
-                if self._ik_solution is not None:
-                    joint_positions = list(self._ik_solution.position)
+                reply = self._ik_solution
+                if reply is not None:
+                    if reply.header.frame_id and reply.header.frame_id != key:
+                        self._ik_solution = None  # another client's reply on the shared topic
+                        continue
+                    joint_positions = list(reply.position)
                     if len(joint_positions) == 0:
-                        self.logger.error("[Manipulation] IK solver returned empty solution (IK failed)")
-                        return None
+                        return None  # the IK node's "unreachable" reply
                     # Callers append j6 unconditionally, so anything but the
                     # 5 arm joints would build a malformed 6-joint command.
                     if len(joint_positions) != 5:
@@ -780,7 +841,7 @@ class Manipulation:
                         return None
                     return joint_positions
 
-        self.logger.error(f"[Manipulation] IK solution timeout after {timeout}s")
+        self.logger.debug(f"[Manipulation] IK solution timeout after {timeout}s")  # callers raise or skip
         return None
 
     def _goto(self, joint_positions: list[float], duration: float, wait: bool) -> bool:
@@ -807,14 +868,17 @@ class Manipulation:
             future = self._goto_js_client.call_async(request)
             if wait:
                 if not self._await_motion_result(future, "GotoJS v2", duration + self._MOTION_SLACK_S):
+                    self._arm_target = None
                     return False
             else:
                 self._pending = _PendingMotion(future, "GotoJS v2", time.monotonic() + duration + self._MOTION_SLACK_S)
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJS v2: {e}")
+            self._arm_target = None
             return False
 
         self._grip_target = float(joint_positions[5])
+        self._arm_target = [float(j) for j in joint_positions[:5]]
         return True
 
     def _send_trajectory(
@@ -849,6 +913,7 @@ class Manipulation:
             future = self._goto_js_traj_client.call_async(request)
             if wait:
                 if not self._await_motion_result(future, "GotoJSTrajectory", total_time + self._MOTION_SLACK_S):
+                    self._arm_target = None
                     return False
             else:
                 self._pending = _PendingMotion(
@@ -856,28 +921,31 @@ class Manipulation:
                 )
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJSTrajectory: {e}")
+            self._arm_target = None
             return False
 
         self._grip_target = float(waypoint_joints[-1][5])
+        self._arm_target = [float(j) for j in waypoint_joints[-1][:5]]
         return True
 
     def _command_gripper(self, j6: float, duration: float, blocking: bool) -> bool:
         """Send a joint command that moves only the gripper to ``j6``.
 
-        Joins any unjoined non-blocking motion first (raising on its failure):
-        j1-j5 are re-sent from measured state, which would otherwise retarget
-        an arm still in flight at a transient pose."""
+        Joins any unjoined non-blocking motion and stops any stream first, so
+        j1-j5 are the standing target the arm was last sent; only with none
+        (after a reboot) are they read from measured state."""
         self._join_pending()
-        if self._arm_state is None:
-            self.logger.error("No arm state available")
-            return False
-
-        self._settle()
-
-        positions = list(self._arm_state.position)
-        if len(positions) < 6:
-            positions.extend([0.0] * (6 - len(positions)))
-        positions[5] = j6
+        self.stream_stop()
+        if self._arm_target is not None:
+            positions = list(self._arm_target)
+        else:
+            if self._arm_state is None:
+                self.logger.error("No arm state available")
+                return False
+            self._settle()
+            positions = [float(p) for p in self._arm_state.position[:5]]
+            positions.extend([0.0] * (5 - len(positions)))
+        positions.append(j6)
         return self._goto(positions, duration, wait=blocking)
 
     def _arm_from_fk(self, msg: PoseStamped) -> Arm:

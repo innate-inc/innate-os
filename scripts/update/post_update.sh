@@ -257,6 +257,21 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# 0a. Migrate user-created data into the post-refactor layout.
+# The refactor moved agents/skills/inputs under workspace/ and maps + nav-state
+# (.last_mode/.last_map) under data/. git checkout relocated the *tracked*
+# shipped files; this step preserves any user-created *untracked* content
+# (custom skills/agents/inputs, trained models, SLAM maps, last mode/map).
+# Idempotent, never overwrites, only rmdir's empty dirs.
+# Home-dir ~/agents and ~/skills are migrated too: 0.7 loads only from
+# workspace/, so leaving them in place would silently stop loading them.
+# Before 0·1: a service_key migrated into .env must seed /etc/innate.env this run.
+# -----------------------------------------------------------------------------
+# shellcheck source=scripts/update/migrate_user_data.sh
+source "$SCRIPT_DIR/migrate_user_data.sh"
+MIGRATE_CHOWN_USER="$ACTUAL_USER" MIGRATE_HOME="$ACTUAL_HOME" run_user_data_migrations "$REPO_DIR"
+
+# -----------------------------------------------------------------------------
 # 0·1 Seed /etc/innate.env with the service key, so INNATE_SERVICE_KEY survives a repo
 # reset that loses the .env. Readers use it only as a fallback (repo .env wins). Write-once:
 # an existing key is left untouched. Mode 640 root:$ACTUAL_USER — root-owned but group-readable
@@ -297,20 +312,6 @@ if [ -f "$SYSTEM_ENV_FILE" ]; then
         fi
     fi
 fi
-
-# -----------------------------------------------------------------------------
-# 0a. Migrate user-created data into the post-refactor layout.
-# The refactor moved agents/skills/inputs under workspace/ and maps + nav-state
-# (.last_mode/.last_map) under data/. git checkout relocated the *tracked*
-# shipped files; this step preserves any user-created *untracked* content
-# (custom skills/agents/inputs, trained models, SLAM maps, last mode/map).
-# Idempotent, never overwrites, only rmdir's empty dirs.
-# Home-dir ~/agents and ~/skills are migrated too: 0.7 loads only from
-# workspace/, so leaving them in place would silently stop loading them.
-# -----------------------------------------------------------------------------
-# shellcheck source=scripts/update/migrate_user_data.sh
-source "$SCRIPT_DIR/migrate_user_data.sh"
-MIGRATE_CHOWN_USER="$ACTUAL_USER" MIGRATE_HOME="$ACTUAL_HOME" run_user_data_migrations "$REPO_DIR"
 
 # -----------------------------------------------------------------------------
 # 0a2. Create config/settings.yaml from template if missing.

@@ -79,20 +79,21 @@ The base client handles HTTP + auth. Credentials from env or constructor.
 ```python
 from innate_proxy import ProxyClient
 
-proxy = ProxyClient()                          # creds from env
+proxy = ProxyClient()  # creds from env
 proxy = ProxyClient(config={"voice_id": "…"})  # with app config
 
-proxy.is_available()   # True if creds are set
-proxy.proxy_url        # resolved URL
-proxy.token            # current JWT (or raw key)
-proxy.config           # your app config dict
+proxy.is_available()  # True if creds are set
+proxy.proxy_url  # resolved URL
+proxy.token  # current JWT (or raw key)
+proxy.config  # your app config dict
 ```
 
 Low-level request (you usually don't need this — use the adapters):
 
 ```python
 with proxy.request_stream("cartesia", "/tts/bytes", json=body) as resp:
-    for chunk in resp.iter_bytes(): ...
+    for chunk in resp.iter_bytes():
+        ...
 resp = await proxy.request_async("openai", "/v1/chat/completions", json={...})
 ```
 

@@ -9,6 +9,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "mars_cam/camera_by_id.hpp"
+
 using namespace std::chrono_literals;
 
 namespace mars_cam {
@@ -35,64 +37,16 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions& options) : Node("arm
     compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
     power_line_frequency_ = this->get_parameter("power_line_frequency").as_int();
 
-    // Find camera symlink by pattern matching
-    std::string camera_pattern = camera_symlink;
-    std::string symlink_path;
-    std::string v4l_dir = "/dev/v4l/by-id/";
-
-    std::vector<std::string> matching_symlinks;
-    if (std::filesystem::exists(v4l_dir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(v4l_dir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find(camera_pattern) != std::string::npos) {
-                matching_symlinks.push_back(entry.path().string());
-            }
-        }
-    }
-
-    if (matching_symlinks.empty()) {
-        RCLCPP_ERROR(this->get_logger(), "Camera symlink matching pattern '%s' not found in %s", camera_pattern.c_str(),
-                     v4l_dir.c_str());
+    device_path_ = findCameraByIdPath(camera_symlink);
+    if (device_path_.empty()) {
+        RCLCPP_ERROR(this->get_logger(), "No camera matching '%s' in /dev/v4l/by-id", camera_symlink.c_str());
         throw std::runtime_error("Camera symlink not found");
     }
 
-    // Prefer -video-index0 if available (typically the capture device)
-    bool found_index0 = false;
-    for (const auto& symlink : matching_symlinks) {
-        std::string filename = std::filesystem::path(symlink).filename().string();
-        if (filename.find("-video-index0") != std::string::npos) {
-            symlink_path = symlink;
-            found_index0 = true;
-            RCLCPP_INFO(this->get_logger(), "Found camera symlink matching pattern '%s': %s (preferred -video-index0)",
-                        camera_pattern.c_str(), filename.c_str());
-            break;
-        }
-    }
-
-    if (!found_index0) {
-        symlink_path = matching_symlinks[0];
-        std::string filename = std::filesystem::path(symlink_path).filename().string();
-        RCLCPP_INFO(this->get_logger(),
-                    "Found camera symlink matching pattern '%s': %s (no -video-index0 found, using first match)",
-                    camera_pattern.c_str(), filename.c_str());
-    }
-
-    // Resolve the symlink to get actual device path
-    std::string resolved_path = std::filesystem::read_symlink(symlink_path).string();
-
-    if (resolved_path.find("/dev/") == 0) {
-        device_path_ = resolved_path;
-    } else {
-        std::filesystem::path symlink_dir = std::filesystem::path(symlink_path).parent_path();
-        std::filesystem::path full_path = std::filesystem::canonical(symlink_dir / resolved_path);
-        device_path_ = full_path.string();
-    }
-
     RCLCPP_DEBUG(this->get_logger(), "=== Mars Arm Camera Driver (GStreamer) ===");
-    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
-    RCLCPP_DEBUG(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
-    RCLCPP_INFO(this->get_logger(), "Resolved device: %s @ %dx%d, %.1f FPS", device_path_.c_str(), width_, height_,
-                fps_);
+    RCLCPP_DEBUG(this->get_logger(), "Camera pattern: %s", camera_symlink.c_str());
+    RCLCPP_INFO(this->get_logger(), "Camera device: %s (%s) @ %dx%d, %.1f FPS", device_path_.c_str(),
+                currentVideoNode(device_path_).c_str(), width_, height_, fps_);
     RCLCPP_DEBUG(this->get_logger(), "Resolution: %dx%d", width_, height_);
     RCLCPP_DEBUG(this->get_logger(), "FPS: %.1f", fps_);
     RCLCPP_DEBUG(this->get_logger(), "Pixel Format: YUYV (via GStreamer)");
@@ -337,6 +291,9 @@ void ArmCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
         compressed_frame_counter_++;
         if (compressed_frame_counter_ >= compressed_frame_interval_) {
             compressed_frame_counter_ = 0;
+            if (compressed_pub_->get_subscription_count() == 0) {
+                return;
+            }
 
             auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
             compressed_msg->header.stamp = current_time;

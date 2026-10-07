@@ -188,6 +188,7 @@ class InterfaceType(Enum):
     MOBILITY = "mobility"
     HEAD = "head"
     MEMORY = "memory"
+    LLM = "llm"
 
 
 class SkillStorage:
@@ -507,6 +508,7 @@ class _FeedSpec:
 def _feed_specs() -> "tuple[_FeedSpec, ...]":
     # imported lazily: the interface classes pull ROS/Nav2 modules
     from brain_client.robot.head import Head
+    from brain_client.robot.llm import Llm
     from brain_client.robot.manipulation import Manipulation
     from brain_client.robot.mobility import Mobility
     from brain_client.robot.spatial_memory import SpatialMemory
@@ -527,6 +529,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
         _FeedSpec(Mobility, Interface, InterfaceType.MOBILITY, "Mobility", ("mobility",)),
         _FeedSpec(Head, Interface, InterfaceType.HEAD, "Head", ("head",)),
         _FeedSpec(SpatialMemory, Interface, InterfaceType.MEMORY, "SpatialMemory", ("memory",)),
+        _FeedSpec(Llm, Interface, InterfaceType.LLM, "Llm", ("llm", "model", "vlm")),
         # cameras start per run (and sim renders on demand) — longer grace
         _FeedSpec(MainImage, Camera, main, "MainImage", ("image", "main_image"), "main camera", grace_s=3.0),
         _FeedSpec(WristImage, Camera, wrist, "WristImage", ("wrist_image",), "wrist camera", grace_s=3.0),

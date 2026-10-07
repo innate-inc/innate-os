@@ -1,0 +1,59 @@
+{
+  "model": "claude-sonnet-5",
+  "max_tokens": 16000,
+  "stream": true,
+  "system": [
+    {
+      "type": "text",
+      "text": "SYS"
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": "/9j/4GZha2VqcGVnYnl0ZXM="
+          }
+        },
+        {
+          "type": "text",
+          "text": "Frame 1"
+        },
+        {
+          "type": "text",
+          "text": "Which frame?"
+        }
+      ]
+    }
+  ],
+  "thinking": {
+    "type": "adaptive"
+  },
+  "output_config": {
+    "effort": "low",
+    "format": {
+      "type": "json_schema",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "frame": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "found",
+          "frame"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

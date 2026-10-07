@@ -4,12 +4,15 @@
 
 import glob
 import json
+import math
 import os
+import re
 import subprocess
 import threading
 import time
 import traceback
 from enum import Enum
+from pathlib import Path
 
 import rclpy
 
@@ -22,23 +25,45 @@ from geometry_msgs.msg import TransformStamped
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
-from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
+from mars_nav.map_straightening import straighten_saved_map, turn_pose
 from mars_nav.service_utils import call_service, get_node_state, transition_node
+from mars_nav.subscription_feed import SubscriptionFeed
 
 # TODO: move this into launch file?
 map_server_node = "navigation_map_server"
 bt_node = "bt_navigator"
 
 NAV_CANCEL_SERVICE = "/internal_navigate_to_pose/_action/cancel_goal"
+
+# map_saver writes unexplored cells as gray 205, occupancy (255 - 205) / 255 = 0.196; under its
+# default free_thresh of 0.25, map_server reloads all unexplored space as free floor.
+MAP_FREE_THRESH = 0.196
+_FREE_THRESH_LINE = re.compile(r"^free_thresh:[ \t]*([0-9.eE+-]+)", re.MULTILINE)
+
+
+def keep_unexplored_unknown(map_yaml: str) -> bool:
+    """Lower the map's free_thresh to MAP_FREE_THRESH if it is above it; True when the file was rewritten.
+    The new yaml is written beside the old one and swapped in, so a failed write leaves the map loadable."""
+    with open(map_yaml) as f:
+        text = f.read()
+    match = _FREE_THRESH_LINE.search(text)
+    if match is None or float(match.group(1)) <= MAP_FREE_THRESH:
+        return False
+    replacement = f"{map_yaml}.tmp"
+    with open(replacement, "w") as f:
+        f.write(_FREE_THRESH_LINE.sub(f"free_thresh: {MAP_FREE_THRESH}", text))
+    os.replace(replacement, map_yaml)
+    return True
+
 
 # Nodes that should only be configured (not activated) in specific modes
 configure_only_nodes = {
@@ -215,8 +240,11 @@ class ModeManager(Node):
         # Map persistence file
         self.map_file = os.path.join(state_dir, ".last_map")
 
-        # BasicNavigator for map operations
-        self.navigator = None
+        # /tf and /odom are followed only while mapping or switching (see current_mode).
+        # map->base_link needs no /tf_static.
+        self.tf_buffer = tf2_ros.Buffer()
+        self._pose_feed: SubscriptionFeed | None = None
+        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
 
         # Discover available maps first (needed for loading last map)
         self.available_maps = self.discover_maps()
@@ -244,6 +272,9 @@ class ModeManager(Node):
         # (map->base_link TransformStamped, monotonic capture time): where the
         # robot ended its last mapping session, in the slam session's frame.
         self._last_mapping_pose = None
+        # Map name -> rotation its save straightened the slam frame by, for the
+        # maps saved in the current mapping session.
+        self._session_rotations = {}
         # grid_localizer's status feed: lets the post-switch relocalization
         # wait for confirmation instead of guessing when the new map landed.
         self._last_localization_status = ("", 0.0)
@@ -258,27 +289,6 @@ class ModeManager(Node):
             self._localization_status_cb,
             10,
             callback_group=self._internal_callbacks_group,
-        )
-
-        # One-shot check: the costmaps' camera voxel layer is silently inert
-        # when /mars/main_camera/points never publishes (e.g. missing stereo
-        # calibration). Warn once so lidar-only operation is visible.
-        self._camera_points_seen = False
-        self._camera_points_sub = self.create_subscription(
-            PointCloud2, "/mars/main_camera/points", self._camera_points_cb, qos_profile_sensor_data
-        )
-        self._camera_check_timer = self.create_timer(30.0, self._check_camera_obstacle_source)
-
-        # --- TF2: Mapping pose publisher ---
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.mapping_pose_pub = self.create_publisher(Odometry, "/mapping_pose", 10)
-        # Subscribe to odometry topic (for mapping_pose publishing)
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            20,  # queue size
         )
 
         self.get_logger().info("Mode Manager starting with map management capabilities.")
@@ -310,9 +320,30 @@ class ModeManager(Node):
             5.0, self._lifecycle_watchdog, callback_group=self._internal_callbacks_group
         )
 
-    def odom_callback(self, msg):
-        # Only publish mapping_pose in mapping mode
-        if getattr(self, "current_mode", None) != "mapping":
+    @property
+    def current_mode(self) -> str:
+        return self._current_mode
+
+    @current_mode.setter
+    def current_mode(self, mode: str) -> None:
+        # /mapping_pose while mapping; the switch into navigation polls map->base_link.
+        self._current_mode = mode
+        following = mode in ("mapping", "switching")
+        if following and self._pose_feed is None:
+            self._pose_feed = SubscriptionFeed(
+                "mode_manager_pose_feed",
+                [(TFMessage, "/tf", self._on_tf, 100), (Odometry, "/odom", self.odom_callback, 20)],
+            )
+        elif not following and self._pose_feed is not None:
+            self._pose_feed.close()
+            self._pose_feed = None
+
+    def _on_tf(self, msg: TFMessage) -> None:
+        for transform in msg.transforms:
+            self.tf_buffer.set_transform(transform, "mode_manager")
+
+    def odom_callback(self, msg: Odometry) -> None:
+        if self.current_mode != "mapping":
             return
         try:
             tf_time = rclpy.time.Time()
@@ -786,22 +817,31 @@ class ModeManager(Node):
     def _end_of_mapping_seed(self) -> SetInitialPose.Request | None:
         """The robot's final mapping pose, while a session just ended.
 
-        The pose is in the slam session's frame: exact for the map that
-        session saved (the finish flow switches to it right after), and only
-        approximate when returning to a previous map — no worse than the
-        latched-replay behavior it replaces, and relocalization refines it.
+        The pose is carried from the slam session's frame into the saved map's
+        straightened one: exact for the map that session saved (the finish
+        flow switches to it right after), and only approximate when returning
+        to a previous map — no worse than the latched-replay behavior it
+        replaces, and relocalization refines it.
         """
         if self._last_mapping_pose is None:
             return None
         tf, captured_at = self._last_mapping_pose
         if time.monotonic() - captured_at > 120.0:
             return None
+        t = tf.transform
+        x, y, yaw = turn_pose(
+            t.translation.x,
+            t.translation.y,
+            2 * math.atan2(t.rotation.z, t.rotation.w),
+            self._session_rotations.get(self.current_map, 0.0),
+        )
         request = SetInitialPose.Request()
         pose = request.pose
         pose.header.frame_id = "map"
-        pose.pose.pose.position.x = tf.transform.translation.x
-        pose.pose.pose.position.y = tf.transform.translation.y
-        pose.pose.pose.orientation = tf.transform.rotation
+        pose.pose.pose.position.x = x
+        pose.pose.pose.position.y = y
+        pose.pose.pose.orientation.z = math.sin(yaw / 2)
+        pose.pose.pose.orientation.w = math.cos(yaw / 2)
         pose.pose.covariance[0] = 0.1
         pose.pose.covariance[7] = 0.1
         pose.pose.covariance[35] = 0.05
@@ -917,6 +957,11 @@ class ModeManager(Node):
 
         map_request = LoadMap.Request()
         map_request.map_url = os.path.join(self.maps_dir, self.current_map)
+        try:
+            if keep_unexplored_unknown(map_request.map_url):
+                self.get_logger().info(f"Updated {self.current_map}: its unexplored space now loads as unknown")
+        except (OSError, ValueError) as e:
+            self.get_logger().warning(f"Could not check {self.current_map}'s free_thresh: {e}")
 
         self.get_logger().info(f"Loading map: {self.current_map} on {node_name}")
 
@@ -1037,20 +1082,6 @@ class ModeManager(Node):
         else:
             self.get_logger().warning(
                 "Re-localization after map switch failed or timed out; AMCL may still hold the previous map's pose"
-            )
-
-    def _camera_points_cb(self, _msg):
-        self._camera_points_seen = True
-        if self._camera_points_sub is not None:
-            self.destroy_subscription(self._camera_points_sub)
-            self._camera_points_sub = None
-
-    def _check_camera_obstacle_source(self):
-        self._camera_check_timer.cancel()
-        if not self._camera_points_seen:
-            self.get_logger().warning(
-                "No camera pointcloud on /mars/main_camera/points 30s after start: the costmaps' camera "
-                "obstacle layer is inert (missing stereo calibration?) — navigating with lidar obstacles only"
             )
 
     def change_map_callback(self, request, response):
@@ -1288,6 +1319,8 @@ class ModeManager(Node):
                 "map_saver_cli",
                 "-f",
                 map_path,
+                "--free",
+                str(MAP_FREE_THRESH),
                 "--ros-args",
                 "-p",
                 "save_map_timeout:=5000.0",
@@ -1307,11 +1340,14 @@ class ModeManager(Node):
                 pgm_file = f"{map_path}.pgm"
 
                 if os.path.exists(yaml_file) and os.path.exists(pgm_file):
+                    # Before the announcement: brain_client fingerprints the
+                    # map file as it promotes the tour's memories.
+                    rotation = self._straighten_saved_map(yaml_file, map_yaml_name)
                     response.success = True
                     action_word = "overwritten" if is_overwriting else "saved"
                     response.message = f"Successfully {action_word} map as '{map_name}.yaml'"
                     self.get_logger().info(response.message)
-                    save_announcement = {"map": map_yaml_name, "stamp": time.time()}
+                    save_announcement = {"map": map_yaml_name, "stamp": time.time(), "rotation": rotation}
                     if self._mapping_session_started is not None:
                         save_announcement["mapping_started"] = self._mapping_session_started
                     self.map_saved_publisher.publish(String(data=json.dumps(save_announcement)))
@@ -1344,6 +1380,19 @@ class ModeManager(Node):
             self.get_logger().error(response.message)
 
         return response
+
+    def _straighten_saved_map(self, yaml_file: str, map_yaml_name: str) -> float:
+        """Square the just-saved map's walls to its grid; returns the rotation
+        from the slam frame into the saved one (0 when left as recorded)."""
+        try:
+            rotation = straighten_saved_map(Path(yaml_file))
+        except Exception as e:  # noqa: BLE001 — the map is saved; a failed straightening must not fail the save
+            self.get_logger().error(f"Could not straighten {map_yaml_name}, keeping it as recorded: {e!r}")
+            rotation = 0.0
+        if rotation:
+            self.get_logger().info(f"Straightened {map_yaml_name} by {math.degrees(rotation):.1f} deg")
+        self._session_rotations[map_yaml_name] = rotation
+        return rotation
 
     def _cleanup_orphaned_processes(self):
         """Kill any orphaned navigation processes from previous mode_manager runs."""
@@ -1502,18 +1551,12 @@ class ModeManager(Node):
                 response.message = f"Successfully switched to {target_mode} mode"
                 if target_mode == "navigation":
                     response.message += f" with map '{self.current_map}'"
-                    # Initialize BasicNavigator for navigation mode
-                    try:
-                        if self.navigator is None:
-                            self.navigator = BasicNavigator()
-                        self.get_logger().info("BasicNavigator initialized for navigation mode")
-                    except Exception as e:
-                        self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
                 elif target_mode == "mapping":
                     # Every slam_toolbox activation is a new coordinate frame;
                     # stamp it before the mode flips so no subscriber pairs
                     # mode "mapping" with a previous session's stamp.
                     self._mapping_session_started = time.time()
+                    self._session_rotations = {}
                     self.mapping_session_publisher.publish(
                         String(data=json.dumps({"started": self._mapping_session_started}))
                     )

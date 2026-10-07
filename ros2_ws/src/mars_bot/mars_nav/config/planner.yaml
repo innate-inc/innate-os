@@ -11,7 +11,9 @@
         tolerance: 0.1
         downsample_costmap: false
         downsampling_factor: 1
-        allow_unknown: false
+        # unexplored cells stay passable but cost more than explored floor, so paths
+        # prefer explored floor; false strands goals between sparse lidar rays
+        allow_unknown: true
         max_iterations: 1000000
         max_on_approach_iterations: 1000
         terminal_checking_interval: 5000

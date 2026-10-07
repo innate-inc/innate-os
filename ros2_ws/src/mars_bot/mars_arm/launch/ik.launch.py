@@ -13,6 +13,10 @@ def generate_launch_description():
                 package="mars_arm",
                 executable="ik.py",
                 name="kdl_ik_from_file",
+                # Teleop streams through this node at 30 Hz; a crash must not
+                # leave the arm without IK until the next restart.
+                respawn=True,
+                respawn_delay=2.0,
                 output="screen",
             ),
         ]

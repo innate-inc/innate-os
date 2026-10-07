@@ -20,7 +20,22 @@ from urdf_parser_py.urdf import URDF
 from mars_arm.urdf import treeFromUrdfModel
 
 
+def _request_key(t: Twist) -> str:
+    """The request pose, echoed in every reply's frame_id: two clients share
+    /ik_delta and /ik_solution with no other correlation, and each must be
+    able to tell its own answer from the other's. Manipulation._solve_ik
+    builds the same string from the floats it sent."""
+    return f"{t.linear.x:.4f} {t.linear.y:.4f} {t.linear.z:.4f} {t.angular.x:.4f} {t.angular.y:.4f} {t.angular.z:.4f}"
+
+
 class KDLIKNode(Node):
+    # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
+    # as-is instead of being outvoted by another seed's marginally better fit.
+    CONTINUITY_SCORE = 0.005
+    # Radians past a URDF limit still accepted; the servo clamps the rest, a few mm at the
+    # gripper. drop_in_box's release at pitch 1.30 needs joint4 up to ~0.015 past its stop.
+    LIMIT_SLACK = 0.03
+
     def __init__(self):
         super().__init__("kdl_ik_from_file")
 
@@ -77,6 +92,13 @@ class KDLIKNode(Node):
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
 
+        # LMA ignores joint limits, and the driver clamps an overrun silently:
+        # the arm would land somewhere nobody asked for.
+        self.joint_limits = [
+            (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
+            for name in self.joint_names
+        ]
+
         # Calculate and store initial FK pose (corresponding to q=0)
         self.initial_frame = kdl.Frame()
         fk_result = self.fksolver.JntToCart(self.current_q, self.initial_frame)
@@ -93,9 +115,7 @@ class KDLIKNode(Node):
 
         # 6) publisher and subscription
         self.joint_pub = self.create_publisher(JointState, "/ik_solution", 10)
-        self.ik_fk_pub = self.create_publisher(PoseStamped, "/ik_solution_fk", 10)
         self.fk_pub = self.create_publisher(PoseStamped, "/fk_pose", 10)
-        # self.command_pub = self.create_publisher(Float64MultiArray, '/mars_arm/commands', 10)
         self.create_subscription(Twist, "/ik_delta", self.on_delta, 10)
         self.create_subscription(JointState, "/mars/arm/state", self.on_joint_states, 10)
 
@@ -119,7 +139,7 @@ class KDLIKNode(Node):
 
     def publish_fk(self):
         """Timer callback to publish FK result at 10Hz"""
-        if self.latest_joint_states is None:
+        if self.latest_joint_states is None or self.fk_pub.get_subscription_count() == 0:
             return
 
         # Create joint array from received joint states
@@ -180,6 +200,12 @@ class KDLIKNode(Node):
             return True, q_out, score
         return False, None, float("inf")
 
+    def _within_limits(self, q: kdl.JntArray) -> bool:
+        return all(
+            lower - self.LIMIT_SLACK <= self._normalize_angle(q[i]) <= upper + self.LIMIT_SLACK
+            for i, (lower, upper) in enumerate(self.joint_limits)
+        )
+
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
         while angle > math.pi:
@@ -190,6 +216,7 @@ class KDLIKNode(Node):
 
     def on_delta(self, delta: Twist):
         """Handle absolute target pose (sent via Twist message for compatibility)"""
+        key = _request_key(delta)
         # Create target frame from absolute pose values
         target_frame = kdl.Frame()
 
@@ -204,14 +231,15 @@ class KDLIKNode(Node):
         # Log the target frame before IK
         target_pos = target_frame.p
         target_rot = target_frame.M.GetRPY()
-        self.get_logger().info(
+        self.get_logger().debug(
             f"IK Target (absolute w.r.t. base) - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
             f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
         )
 
-        # Multi-start IK: try from current position and from zeros, pick best
         start_time = time.perf_counter()
 
+        # The zero seed only votes when the current posture lands short, or a
+        # streamed target hops between elbow branches.
         seeds = [
             ("current", self.current_q),
             ("zeros", kdl.JntArray(self.chain.getNrOfJoints())),  # initialized to zeros
@@ -223,55 +251,41 @@ class KDLIKNode(Node):
 
         for seed_name, seed in seeds:
             success, q_out, score = self._try_ik_with_seed(seed, target_frame)
+            if success and not self._within_limits(q_out):
+                self.get_logger().debug(f"IK ({seed_name} seed) solution violates joint limits — rejected")
+                success = False
             if success and score < best_score:
                 best_solution = q_out
                 best_score = score
                 best_seed_name = seed_name
+            if best_score < self.CONTINUITY_SCORE:
+                break
 
         solve_time_ms = (time.perf_counter() - start_time) * 1000
 
         if best_solution is None:
-            self.get_logger().error(f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)")
+            self.get_logger().warning(
+                f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
+                throttle_duration_sec=1.0,
+            )
+            # An empty solution is the answer "unreachable": without it the
+            # asker learns nothing until its timeout.
+            reply = JointState()
+            reply.header.frame_id = key
+            self.joint_pub.publish(reply)
             return
 
-        self.get_logger().info(
+        self.get_logger().debug(
             f"KDL IK solved (seed={best_seed_name}, score={best_score:.4f}, took {solve_time_ms:.2f} ms)"
         )
 
         # publish JointState
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
+        js.header.frame_id = key
         js.name = self.joint_names
         js.position = [self._normalize_angle(best_solution[i]) for i in range(best_solution.rows())]
         self.joint_pub.publish(js)
-
-        # publish FK of the IK solution (what the commanded joints map to)
-        fk_frame = kdl.Frame()
-        if self.fksolver.JntToCart(best_solution, fk_frame) >= 0:
-            ik_fk_msg = PoseStamped()
-            ik_fk_msg.header.stamp = js.header.stamp
-            ik_fk_msg.header.frame_id = "base_link"
-            ik_fk_msg.pose.position.x = fk_frame.p.x()
-            ik_fk_msg.pose.position.y = fk_frame.p.y()
-            ik_fk_msg.pose.position.z = fk_frame.p.z()
-            quat = fk_frame.M.GetQuaternion()
-            ik_fk_msg.pose.orientation.x = quat[0]
-            ik_fk_msg.pose.orientation.y = quat[1]
-            ik_fk_msg.pose.orientation.z = quat[2]
-            ik_fk_msg.pose.orientation.w = quat[3]
-            self.ik_fk_pub.publish(ik_fk_msg)
-
-        # Publish command for the arm - COMMENTED OUT
-        # cmd_msg = Float64MultiArray()
-        # # Get the 5 joint values from IK solution
-        # ik_positions = [q_out[i] for i in range(q_out.rows())]
-        # # Append 0.0 for the 6th joint (joint6)
-        # ik_positions.append(0.0)
-        # cmd_msg.data = ik_positions
-        # self.command_pub.publish(cmd_msg)
-
-        # seed next solve with the result
-        self.current_q = q_out
 
 
 def main(args=None):

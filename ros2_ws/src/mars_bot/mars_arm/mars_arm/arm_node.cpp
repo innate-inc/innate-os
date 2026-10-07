@@ -3,6 +3,7 @@
 // arm_node.cpp — Constructor, main()
 #include "mars_arm/arm_node.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -75,16 +76,27 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     timer_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     health_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    stop_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rest_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Declare parameters
     this->declare_parameter("baud_rate", 1000000);
     this->declare_parameter("control_frequency", 100.0);
+    this->declare_parameter("arm_state_publish_rate", 50.0);
+    this->declare_parameter("joint_state_publish_rate", 25.0);
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
+    this->declare_parameter("auto_rest", true);
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
+    auto publish_divisor = [this](const char* rate_param) {
+        const double rate = this->get_parameter(rate_param).as_double();
+        return rate > 0.0 ? std::max(1, static_cast<int>(std::lround(control_frequency_ / rate))) : 1;
+    };
+    arm_state_publish_divisor_ = publish_divisor("arm_state_publish_rate");
+    joint_state_publish_divisor_ = publish_divisor("joint_state_publish_rate");
     auto joint_names_param = this->get_parameter("joints").as_string_array();
 
     // Load joint configurations from sub-parameters (nav2 style)
@@ -129,7 +141,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     arm_torque_off_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/torque_off",
         std::bind(&MarsArmNode::armTorqueOffCallback, this, std::placeholders::_1, std::placeholders::_2),
-        rmw_qos_profile_services_default, service_callback_group_);
+        rmw_qos_profile_services_default, stop_callback_group_);
 
     arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/reboot",
@@ -158,7 +170,9 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 
     // ── HEAD publishers / subscribers / services ──
     RCLCPP_DEBUG(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
-    head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
+    // Latched: published on change, so a subscriber that starts later still gets the standing value.
+    head_position_pub_ =
+        this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", rclcpp::QoS(1).transient_local());
     joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     head_position_sub_ = this->create_subscription<std_msgs::msg::Int32>(
         "/mars/head/set_position", 10, std::bind(&MarsArmNode::headPositionCallback, this, std::placeholders::_1));
@@ -178,12 +192,11 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     arm_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
     joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"};
 
-    // Initialize command buffers with current positions
-    RCLCPP_DEBUG(this->get_logger(), "Initializing command buffers with current positions");
-    auto [initial_positions, initial_velocities, initial_loads] = robot_->readState();
-    (void)initial_loads;
-    latest_head_command_ = initial_positions[6];
-    syncTargetToMotorPositions();
+    try {
+        syncTargetToMotorPositions();
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Could not read the servos at start-up: %s", e.what());
+    }
 
     // ── Timers ──
     RCLCPP_DEBUG(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
@@ -195,16 +208,19 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     RCLCPP_DEBUG(this->get_logger(), "Creating health monitor timer at 0.2 Hz");
     health_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(5000), std::bind(&MarsArmNode::healthMonitorCallback, this), health_callback_group_);
+    // Now, not 5 s in: the tripped-servo latch must be set before the first fold.
+    healthMonitorCallback();
 
     // Register parameter change callback for PID hot-reload
     param_callback_handle_ =
         this->add_on_set_parameters_callback(std::bind(&MarsArmNode::onParameterChange, this, std::placeholders::_1));
     RCLCPP_DEBUG(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
 
-    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
+    idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
+                                               rest_callback_group_);
+    releaseArm();  // the boot grace counts from here: servo init above took seconds
 
-    // No homing here: the control timer consumes trajectories, and it only
-    // fires once the executor spins — after this constructor returns.
+    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }
 
 }  // namespace mars_arm
@@ -213,7 +229,8 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_arm::MarsArmNode>();
 
-    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+    // One thread per callback group, so nothing waits behind a fold or a goto.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 6);
     executor.add_node(node);
     executor.spin();
 

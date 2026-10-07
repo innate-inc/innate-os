@@ -37,7 +37,11 @@
 #                         (RemoteProtocolError, never an HTTP status), not a
 #                         refused credential. It is held out because memory earns
 #                         nothing here and its spend is unmetered -- so it follows
-#                         BRAIN_DISABLE_MEMORY, not the key.
+#                         BRAIN_DISABLE_MEMORY, not the key. Since 0.8.0 the brain
+#                         itself has no memory-off switch (the tier was rebuilt
+#                         around MemoryStore and is always constructed), so
+#                         withholding this skill is now the ONLY thing that
+#                         keeps the agent off it.
 #
 # Nothing here is a physical property of the robot; it is which of its
 # capabilities are actually wired up. The roster is printed per run so the

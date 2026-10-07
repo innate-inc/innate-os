@@ -34,11 +34,15 @@ BUNDLES="${*:-counter pantry workshop gallery rounds household bridge blaze}"
 
 echo "=== full benchmark, maps: $BUNDLES" | tee "$LOG"
 echo "=== caps: cat1 ${CAP_1}s, cat2 ${CAP_2}s, cat3 ${CAP_3}s" | tee -a "$LOG"
-# The benchmark asks for the two things it needs from the robot, rather
-# than the robot doing them for everyone. Unset, both are off upstream.
-export GEMINI_USAGE_LOG="${GEMINI_USAGE_LOG:-/root/innate-os/workspace/gemini_usage.jsonl}"
+# The benchmark asks for the one thing it needs from the robot, rather than
+# the robot doing it for everyone. Unset, it is off upstream.
+#
+# There used to be a second: GEMINI_USAGE_LOG, a per-call token log written
+# by brain/transport.py and innate/gemini.py. Both files were replaced by the
+# innate_llm provider library in 0.8.0, which reports usage on every Reply
+# but writes no log, so live runs currently have no cost line. Re-adding it
+# belongs in innate_llm, not in a fork of it.
 export BENCH_IDLE_BLOCK_S="${BENCH_IDLE_BLOCK_S:-20}"
-rm -f workspace/gemini_usage.jsonl
 
 for BUNDLE in $BUNDLES; do
   ASSETS="$REPO/sim/bundles/$BUNDLE"

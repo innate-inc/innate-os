@@ -34,8 +34,8 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Int32MultiArray
 
 from .ws_client import Action, ClientState, UninavidWsClient
 
@@ -124,15 +124,17 @@ class UninavidNode(Node):
         self._goal_handle = None
         self._last_rtt_report: float = 0.0
 
-        self._image_sub = self.create_subscription(
+        # Raw and never destroyed: a destroy under this multi-threaded executor
+        # races its take (InvalidHandle), and an idle frame skips deserialization.
+        self.create_subscription(
             CompressedImage,
             "/mars/main_camera/left/image_raw/compressed",
             self._on_image,
             QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1),
             callback_group=MutuallyExclusiveCallbackGroup(),
+            raw=True,
         )
         self._cmd = self.create_publisher(Twist, "/cmd_vel", 10)
-        self._actions_pub = self.create_publisher(Int32MultiArray, "/vln/actions", 10)
 
         self._action_server = ActionServer(
             self,
@@ -167,26 +169,21 @@ class UninavidNode(Node):
         self._goal_handle = goal_handle
         goal_handle.execute()
 
-    # ── Actions publisher ────────────────────────────────────────────────
-
-    def _publish_actions(self, actions: list[int]) -> None:
-        """Publish the latest batch of action codes on /vln/actions for client-side overlay."""
-        msg = Int32MultiArray()
-        msg.data = actions
-        self._actions_pub.publish(msg)
-
     # ── Image forwarding ──────────────────────────────────────────────────
 
-    def _on_image(self, msg: CompressedImage) -> None:
+    def _on_image(self, raw: bytes) -> None:
         c = self._client
         if c is None or c.state != ClientState.CONNECTED:
             return
+        msg = deserialize_message(raw, CompressedImage)
         s = msg.header.stamp
         now = self.get_clock().now().nanoseconds
         last = getattr(self, "_last_image_ns", 0)
         cam_dt = (now - last) / 1e9 if last > 0 else -1.0
         self._last_image_ns = now
-        self.get_logger().info(f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes) cam_dt={cam_dt:.3f}s")
+        self.get_logger().debug(
+            f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes) cam_dt={cam_dt:.3f}s"
+        )
         c.push_frame(format=msg.format, stamp_sec=s.sec, stamp_nanosec=s.nanosec, data=bytes(msg.data))
 
     # ── Goal execution ────────────────────────────────────────────────────
@@ -277,10 +274,6 @@ class UninavidNode(Node):
                             self._cmd.publish(tw)
                             time.sleep(dt)
                         self._cmd.publish(_STOP)
-
-                    new_actions = client.pop_action_history()
-                    if new_actions:
-                        self._publish_actions(new_actions)
 
                     code = client.pop_action()
 

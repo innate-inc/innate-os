@@ -35,6 +35,7 @@ add_executable(arm
   mars_arm/arm_config.cpp
   mars_arm/arm_control.cpp
   mars_arm/arm_services.cpp
+  mars_arm/arm_head.cpp
   mars_arm/arm_trajectory.cpp
 )
 

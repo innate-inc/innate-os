@@ -10,6 +10,7 @@ dependencies = [
     "coacd>=1.0.5",
     "websockets>=12.0",
     "pillow>=12.3.0",
+    "zeroconf>=0.140",
 ]
 
 [dependency-groups]
