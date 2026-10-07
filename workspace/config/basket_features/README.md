@@ -134,7 +134,10 @@ The Mac API runs as the login agent `com.innate.basket-pose-api`, with its
 isolated runtime and code in `~/Library/Application Support/Innate/BasketPose`.
 It starts at login and restarts after a process failure. The Mac must be awake
 and reachable on the same network. Direct LAN access uses `--token-file` on the
-server; health and detection requests both require the corresponding bearer
+server; HTTP/1.1 connections are reused across skill observations. Idle clients
+do not block other clients, while detector access remains serialized. Errors
+close the connection; transport failures use the existing fresh-frame retry.
+Health and detection requests both require the corresponding bearer
 token. Tokens must be transferred privately and must never be committed.
 For a live authenticated probe on MARS-47:
 

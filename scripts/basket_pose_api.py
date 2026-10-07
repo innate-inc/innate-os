@@ -8,9 +8,11 @@ for direct access on a trusted LAN.
 
 import argparse
 import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
+import socket
+import threading
 from pathlib import Path
 import sys
 import time
@@ -37,20 +39,29 @@ def make_server(assets, host="127.0.0.1", port=9071, auth_token=None):
         (assets / "calibration.json").read_bytes()
     ).hexdigest()
 
+    inference_lock = threading.Lock()
+
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
         def setup(self):
             super().setup()
             self.connection.settimeout(15)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         def send_json(self, status, body):
             data = json.dumps(body, allow_nan=False).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Connection", "close")
+            # Error paths may leave an unread request body. Never reuse those
+            # connections: leftover JPEG bytes would become the next request.
+            if status != 200:
+                self.close_connection = True
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
-            self.close_connection = True
 
         def authorized(self):
             if auth_token is not None and not secrets.compare_digest(
@@ -151,7 +162,8 @@ def make_server(assets, host="127.0.0.1", port=9071, auth_token=None):
                         },
                     )
                     return
-                result = detector.detect(image)
+                with inference_lock:
+                    result = detector.detect(image)
                 result.update(
                     image_size=list(size),
                     calibration_id=calibration_id,
@@ -173,7 +185,7 @@ def make_server(assets, host="127.0.0.1", port=9071, auth_token=None):
             # Avoid logging payloads, camera images or user-provided text.
             return
 
-    return HTTPServer((host, port), Handler)
+    return ThreadingHTTPServer((host, port), Handler)
 
 
 def main():

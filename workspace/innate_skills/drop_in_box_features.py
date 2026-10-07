@@ -36,6 +36,7 @@ class DropInBoxFeatures(DropInBoxAruco):
         self._over_rim = self._released = self._fold_started = False
         self._clearance_z = None
         self._vertical_lift_pending = True
+        observer = None
         try:
             observer = FeatureObserver()
             # Keep the ArUco arm motion and preflight its nominal reach.
@@ -102,5 +103,7 @@ class DropInBoxFeatures(DropInBoxAruco):
                 raise SkillFailed("Sock released at feature target, but retreat failed")
             return "Released sock inside the feature-detected basket and raised the arm; landing was not visually verified."
         finally:
+            if observer is not None:
+                observer.close()
             self.mobility.stop()
             self._retract()

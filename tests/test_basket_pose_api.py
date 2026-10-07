@@ -72,6 +72,26 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(result["detected"])
         self.assertNotIn("best", result)
 
+    def test_keepalive_idle_client_does_not_block_another_client(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            for _ in range(2):
+                c.request("POST", "/detect", self.blank, {"Content-Type": "image/jpeg"})
+                r = c.getresponse()
+                self.assertEqual(r.status, 200)
+                r.read()
+                self.assertFalse(r.will_close)
+                sock = c.sock
+                self.assertEqual(self.request("/health", method="GET")[0], 200)
+                self.assertIs(c.sock, sock)
+            c.request("POST", "/detect", self.blank, {"Content-Type": "bad"})
+            r = c.getresponse()
+            self.assertEqual(r.status, 415)
+            self.assertTrue(r.will_close)
+            r.read()
+        finally:
+            c.close()
+
     def test_bad_payloads_and_dimensions(self):
         for body, headers, expected in [
             (b"bad jpeg", {}, 400),

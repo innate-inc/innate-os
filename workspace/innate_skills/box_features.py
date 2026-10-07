@@ -1,6 +1,7 @@
 """Stationary feature observation and base-relative basket-face geometry."""
 
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 import queue
 import threading
 import time
-import urllib.request
+from urllib.parse import urlsplit
 
 import numpy as np
 import cv2
@@ -110,6 +111,20 @@ class FeatureObserver:
             (self.assets / "calibration.json").read_bytes()
         ).hexdigest()
         self.detector = None
+        self._connection = None
+        self._closed = False
+        self._request_lock = threading.Lock()
+
+    def close(self):
+        """Release idle connections without waiting for a cancelled inference."""
+        self._closed = True
+        if self._request_lock.acquire(blocking=False):
+            try:
+                if self._connection is not None:
+                    self._connection.close()
+                    self._connection = None
+            finally:
+                self._request_lock.release()
 
     @staticmethod
     def fresh_frame(host, controller):
@@ -127,27 +142,59 @@ class FeatureObserver:
             if frame is not None and frame is not previous:
                 return frame.jpeg
             if time.monotonic() >= until:
-                raise SkillFailed("Camera stream stopped updating; base remains stopped")
+                raise SkillFailed(
+                    "Camera stream stopped updating; base remains stopped"
+                )
             host.sleep(0.02)
 
     def capture(self, encoded):
         """Infer from an immutable JPEG selected on the skill thread."""
         if self.api_url:
-            request = urllib.request.Request(
-                self.api_url.rstrip("/") + "/detect",
-                data=encoded,
-                headers={
-                    "Content-Type": "image/jpeg",
-                    **(
-                        {"Authorization": "Bearer " + self.api_token}
-                        if self.api_token
-                        else {}
-                    ),
-                    "X-Calibration-Id": self.calibration_id,
-                },
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                result = json.load(response)
+            with self._request_lock:
+                if self._closed:
+                    raise ValueError("Basket observer is closed")
+                if self._connection is None:
+                    url = urlsplit(self.api_url)
+                    if url.scheme not in ("http", "https") or not url.hostname:
+                        raise ValueError("Basket API URL must be HTTP or HTTPS")
+                    connection_type = (
+                        http.client.HTTPSConnection
+                        if url.scheme == "https"
+                        else http.client.HTTPConnection
+                    )
+                    self._connection = connection_type(
+                        url.hostname, url.port, timeout=30
+                    )
+                    self._detect_path = url.path.rstrip("/") + "/detect"
+                try:
+                    self._connection.request(
+                        "POST",
+                        self._detect_path,
+                        body=encoded,
+                        headers={
+                            "Content-Type": "image/jpeg",
+                            **(
+                                {"Authorization": "Bearer " + self.api_token}
+                                if self.api_token
+                                else {}
+                            ),
+                            "X-Calibration-Id": self.calibration_id,
+                        },
+                    )
+                    response = self._connection.getresponse()
+                    data = response.read()  # drain before reusing the connection
+                    if response.status != 200:
+                        raise ValueError(f"Basket API returned HTTP {response.status}")
+                    result = json.loads(data)
+                except Exception:
+                    self._connection.close()
+                    self._connection = None
+                    # Let observe retry on a NEW frame, not the old JPEG.
+                    raise
+                finally:
+                    if self._closed and self._connection is not None:
+                        self._connection.close()
+                        self._connection = None
             if (
                 result.get("image_sha256") != hashlib.sha256(encoded).hexdigest()
                 or result.get("calibration_id") != self.calibration_id

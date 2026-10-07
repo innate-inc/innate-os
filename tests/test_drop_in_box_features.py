@@ -286,6 +286,23 @@ class ObserverTests(unittest.TestCase):
         finally:
             finish.set()
 
+    def test_close_does_not_wait_for_active_request(self):
+        observer = self.observer
+        connection = Mock()
+        observer._connection = connection
+        observer._request_lock.acquire()
+        try:
+            start = time.monotonic()
+            observer.close()
+            self.assertLess(time.monotonic() - start, 0.1)
+            self.assertTrue(observer._closed)
+            connection.close.assert_not_called()
+        finally:
+            observer._request_lock.release()
+        observer.close()
+        connection.close.assert_called_once()
+        self.assertIsNone(observer._connection)
+
     def test_stream_uses_new_highres_original_jpeg(self):
         old = NS(jpeg=b"old")
         fresh = NS(jpeg=b"original highres")
@@ -307,15 +324,16 @@ class ObserverTests(unittest.TestCase):
 
     def test_frame_is_selected_after_settle(self):
         seen = []
+
         def advance(duration):
             seen.append(duration)
             self.h.main_image = NS(jpeg=str(len(seen)).encode())
+
         self.h.sleep = advance
         self.observer.capture = Mock(return_value=detection())
         self.observer.observe(self.h, self.controller)
         self.assertEqual(seen[:2], [0.3, 0.02])
         self.observer.capture.assert_called_once_with(b"2")
-
 
 
 class DockTests(unittest.TestCase):
@@ -611,14 +629,26 @@ class CaptureTests(unittest.TestCase):
         try:
             self.assertFalse(observer.capture(encoded)["detected"])
             self.assertIsNone(observer.detector)
+            connection = observer._connection
+            sock = connection.sock
+            self.assertFalse(observer.capture(encoded)["detected"])
+            self.assertIs(observer._connection, connection)
+            self.assertIs(connection.sock, sock)
+            # A broken transport is discarded; the next observation can recover.
+            with patch.object(connection, "request", side_effect=ConnectionResetError):
+                with self.assertRaises(ConnectionResetError):
+                    observer.capture(encoded)
+            self.assertIsNone(observer._connection)
+            self.assertFalse(observer.capture(encoded)["detected"])
             with patch.object(
                 bf.json,
-                "load",
+                "loads",
                 return_value={"calibration_id": "wrong", "image_sha256": "wrong"},
             ):
                 with self.assertRaisesRegex(ValueError, "does not match"):
                     observer.capture(encoded)
         finally:
+            observer.close()
             server.shutdown()
             server.server_close()
             thread.join(5)
