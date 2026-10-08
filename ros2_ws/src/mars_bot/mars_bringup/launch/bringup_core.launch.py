@@ -23,11 +23,20 @@ def generate_launch_description():
         output="screen",
     )
 
+    # On-demand camera→MP4 recorder driven by the webapp's record button.
+    video_recorder_node = Node(
+        package="mars_bringup",
+        executable="video_recorder.py",
+        name="video_recorder",
+        output="screen",
+    )
+
     # base_link -> base_footprint static TF is now published by
     # robot_state_publisher via the URDF (base_footprint_joint).
 
     return LaunchDescription(
         [
             bringup_node,
+            video_recorder_node,
         ]
     )
