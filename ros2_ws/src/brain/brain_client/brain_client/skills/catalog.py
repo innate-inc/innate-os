@@ -27,12 +27,15 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 from brain_client.common.dynamic_loader import class_name_to_snake_case, evict_modules_under
 from brain_client.common.script_paths import (
+    LEARNED_GROUP,
     classify_source,
     ensure_user_directories,
     get_custom_skills_dir,
     get_innate_skills_dir,
+    get_learned_skills_dir,
     get_skill_directories,
     get_workspace_dir,
+    is_draft,
     skill_id_prefix_for,
 )
 from brain_client.skills.hot_reload_watcher import HotReloadWatcher
@@ -86,6 +89,7 @@ class CodeSkillEntry:
     inputs_json: str  # the same schema, serialized for the roster message
     float_params: frozenset[str]  # params to widen int -> float before dispatch
     accepts_extra_inputs: bool  # execute() takes **kwargs (compat plumbing)
+    draft: bool  # on trial by learn_skill: runnable by id, withheld from the roster
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,8 @@ class SkillRepository:
         # carried across reloads: a module that later fails to import rosters
         # every skill it used to define as broken (see _load_code_skills).
         self._skill_ids_by_module: dict[str, list[str]] = {}
+        # broken ids whose file is a learn_skill draft: withheld from the roster like a loaded one
+        self._broken_drafts: set[str] = set()
 
         # Evict before the first load too: in a fresh process this is a no-op,
         # but it makes construction deterministic when workspace modules are
@@ -134,7 +140,7 @@ class SkillRepository:
             self._skills_directories
         )
         self._refresh_physical_refs(self._physical_skills, self._in_training_skills)
-        self._code_skills, code_broken = self._load_code_skills()
+        self._code_skills, code_broken, self._broken_drafts = self._load_code_skills()
         self._logger.info(f"Successfully loaded {len(self._code_skills)} code skills")
         self._broken_skills = {**code_broken, **physical_broken}
         self._logger.info(f"Successfully loaded {len(self._physical_skills)} physical skills")
@@ -286,8 +292,8 @@ class SkillRepository:
         self.reload_all()
 
     # --- loading ---
-    def _load_code_skills(self) -> tuple[dict[str, CodeSkillEntry], dict[str, str]]:
-        """Returns ``(loaded entries, broken: skill_id -> load-error text)``.
+    def _load_code_skills(self) -> tuple[dict[str, CodeSkillEntry], dict[str, str], set[str]]:
+        """Returns ``(loaded entries, broken: skill_id -> load-error text, broken ids that are drafts)``.
 
         Workspace packages are *imported* — defining a Skill subclass registers
         it (see workspace_import.py). The distinction between skill, helper,
@@ -310,16 +316,18 @@ class SkillRepository:
         # import instead; the module-derived row is only for modules that
         # never imported cleanly in this process.
         ids_by_module: dict[str, list[str]] = {}
+        broken_drafts: set[str] = set()
         for skill_id, (_class_name, cls, _src_path) in id_keyed.items():
             ids_by_module.setdefault(cls.__module__, []).append(skill_id)
         for module_name, error in import_errors.items():
             known_ids = self._skill_ids_by_module.get(module_name)
             if known_ids:
                 ids_by_module[module_name] = known_ids  # carry through the breakage
-                for skill_id in known_ids:
-                    broken[skill_id] = error
-            else:
-                broken[module_skill_id(module_name)] = error
+            broken_ids = known_ids or [module_skill_id(module_name)]
+            for skill_id in broken_ids:
+                broken[skill_id] = error
+            if _draft_module(module_name):
+                broken_drafts.update(broken_ids)
         self._skill_ids_by_module = ids_by_module
 
         self._logger.info(f"Discovered skills: {list(id_keyed.keys())}")
@@ -331,9 +339,11 @@ class SkillRepository:
             except Exception as e:
                 broken[skill_id] = format_load_error(e)
                 self._logger.error(f"Error loading skill {skill_id}: {broken[skill_id]}")
-        return code_skills, broken
+                if _draft_file(src_path):
+                    broken_drafts.add(skill_id)
+        return code_skills, broken, broken_drafts
 
-    def _harvest_entry(self, skill_id: str, skill_class: type, src_path) -> CodeSkillEntry:
+    def _harvest_entry(self, skill_id: str, skill_class: type, src_path: Path) -> CodeSkillEntry:
         """Build a skill's metadata from one throwaway instance — name and
         guidelines() are instance-level API (0.6.0 contract)."""
         instance = skill_class(self._logger)
@@ -360,6 +370,7 @@ class SkillRepository:
                 inputs_json=inputs_json,
                 float_params=float_params,
                 accepts_extra_inputs=accepts_extra,
+                draft=_draft_file(src_path),
             )
             declared = instance.describe_feeds()
             self._logger.info(
@@ -502,12 +513,13 @@ class SkillRepository:
         # Physical before code, refs in between — see __init__ for why.
         new_physical, new_in_training, physical_broken = self._load_physical_skills(self._skills_directories)
         self._refresh_physical_refs(new_physical, new_in_training)
-        new_code_skills, code_broken = self._load_code_skills()
+        new_code_skills, code_broken, broken_drafts = self._load_code_skills()
         with self._skills_lock:
             self._code_skills = new_code_skills
             self._physical_skills = new_physical
             self._in_training_skills = new_in_training
             self._broken_skills = {**code_broken, **physical_broken}
+            self._broken_drafts = broken_drafts
         self._logger.info(f"Reloaded {len(new_code_skills)} code + {len(new_physical)} physical skills")
         self.publish_skills_list()
 
@@ -770,27 +782,28 @@ class SkillRepository:
         """Build and publish the full AvailableSkills message on the latched topic."""
         msg = AvailableSkills()
         skills = []
+        drafts = []
 
         with self._skills_lock:
             code_skills_snapshot = dict(self._code_skills)
             physical_skills_snapshot = dict(self._physical_skills)
             in_training_skills_snapshot = dict(self._in_training_skills)
             broken_skills_snapshot = dict(self._broken_skills)
+            broken_drafts_snapshot = set(self._broken_drafts)
 
         for skill_id, entry in code_skills_snapshot.items():
-            skills.append(
-                self._build_skill_info(
-                    skill_id=skill_id,
-                    name=entry.display_name,
-                    skill_type="code",
-                    group=entry.group,
-                    guidelines=entry.guidelines,
-                    guidelines_when_running=entry.guidelines_when_running,
-                    inputs_json=entry.inputs_json,
-                    module=entry.skill_class.__module__,
-                    class_name=entry.skill_class.__name__,
-                )
+            info = self._build_skill_info(
+                skill_id=skill_id,
+                name=entry.display_name,
+                skill_type="code",
+                group=entry.group,
+                guidelines=entry.guidelines,
+                guidelines_when_running=entry.guidelines_when_running,
+                inputs_json=entry.inputs_json,
+                module=entry.skill_class.__module__,
+                class_name=entry.skill_class.__name__,
             )
+            (drafts if entry.draft else skills).append(info)
 
         physical_infos = []
         physical_dirs_by_id = {}
@@ -814,18 +827,17 @@ class SkillRepository:
             # show it as "foo" grouped under "chess", like its healthy peers.
             dotted = skill_id.split("/", 1)[-1]
             group, _, leaf = dotted.rpartition(".")
-            skills.append(
-                self._build_skill_info(
-                    skill_id=skill_id,
-                    name=leaf,
-                    skill_type="broken",
-                    group=group.replace(".", "/"),
-                    guidelines="",
-                    guidelines_when_running="",
-                    inputs_json="{}",
-                    load_error=error,
-                )
+            info = self._build_skill_info(
+                skill_id=skill_id,
+                name=leaf,
+                skill_type="broken",
+                group=group.replace(".", "/"),
+                guidelines="",
+                guidelines_when_running="",
+                inputs_json="{}",
+                load_error=error,
             )
+            (drafts if skill_id in broken_drafts_snapshot else skills).append(info)
 
         filtered_skills = self._dedupe_display_names(skills)
 
@@ -833,8 +845,9 @@ class SkillRepository:
         try:
             self._skills_publisher.publish(msg)
             self._last_published_msg = msg
-            self._write_skill_cache(filtered_skills)
-            self._logger.info(f"Published {len(filtered_skills)} skills on /brain/available_skills")
+            self._write_skill_cache(filtered_skills, drafts)
+            withheld = f" ({len(drafts)} draft on trial withheld)" if drafts else ""
+            self._logger.info(f"Published {len(filtered_skills)} skills on /brain/available_skills{withheld}")
         except Exception as e:
             self._logger.error(f"Failed to publish AvailableSkills (had {len(filtered_skills)} entries): {e}")
 
@@ -1085,7 +1098,7 @@ class SkillRepository:
     def _skill_cache_path(self) -> Path:
         return Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
 
-    def _skill_info_to_cache_dict(self, skill: SkillInfo) -> dict:
+    def _skill_info_to_cache_dict(self, skill: SkillInfo, *, draft: bool = False) -> dict:
         try:
             inputs = json.loads(skill.inputs_json or "{}")
         except json.JSONDecodeError:
@@ -1107,14 +1120,17 @@ class SkillRepository:
             "module": skill.module,
             "class_name": skill.class_name,
             "load_error": skill.load_error,
+            "draft": draft,
         }
 
-    def _write_skill_cache(self, skills: list[SkillInfo]) -> None:
+    def _write_skill_cache(self, skills: list[SkillInfo], drafts: list[SkillInfo]) -> None:
+        """The cache carries drafts too, flagged: learn_skill watches it to see its file load."""
         cache_path = self._skill_cache_path()
         payload = {
             "version": 1,
             "updated_at": time.time(),
-            "skills": [self._skill_info_to_cache_dict(skill) for skill in skills],
+            "skills": [self._skill_info_to_cache_dict(skill) for skill in skills]
+            + [self._skill_info_to_cache_dict(skill, draft=True) for skill in drafts],
         }
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1123,3 +1139,17 @@ class SkillRepository:
             tmp_path.replace(cache_path)
         except OSError as exc:
             self._logger.warning(f"Failed to write skill cache {cache_path}: {exc}")
+
+
+def _draft_file(src_path: Path) -> bool:
+    """A learned skill's file still carrying learn_skill's trial marker."""
+    try:
+        return src_path.parent.samefile(get_learned_skills_dir()) and is_draft(src_path)
+    except OSError:  # no learned dir yet, or the trial ended and the draft is already deleted
+        return False
+
+
+def _draft_module(module_name: str) -> bool:
+    """A learned module that failed to import while learn_skill is trying it: the file, not the roster, says so."""
+    prefix = f"custom_skills.{LEARNED_GROUP}."
+    return module_name.startswith(prefix) and _draft_file(get_learned_skills_dir() / f"{module_name[len(prefix) :]}.py")
