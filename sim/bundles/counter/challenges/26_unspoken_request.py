@@ -31,7 +31,7 @@ its authored line, which is the gate proving the end state is reachable, not
 the pragmatics -- the pragmatics are the measurement.
 """
 
-from mars_sim_driver.challenges import AllOf, Challenge, Goal, Hold, InCircle, Said
+from mars_sim_driver.challenges import AllOf, Challenge, Drop, Goal, Hold, InCircle, Said
 
 CHALLENGE = Challenge(
     id="counter_unspoken_request",
@@ -42,7 +42,10 @@ CHALLENGE = Challenge(
         "seat waving for five minutes and not one person has come over. "
         "Honestly."
     ),
-    setup=[],
+    # The customer the brief is spoken by, behind the middle stool and facing
+    # the room. The stool was empty, so "sitting here at the middle seat"
+    # pointed at nobody.
+    setup=[Drop("cafe_customer", 0.0, 0.78, yaw_deg=0)],
     # MEASURED GUESSING FLOOR: a baseline that blurts plausible answers and
     # never looks (`--agents brain:guess`) still passes this about 1 run in 3,
     # and lengthening the approach hold further starts failing the oracle

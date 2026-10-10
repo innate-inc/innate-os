@@ -19,21 +19,21 @@ CHALLENGE = Challenge(
         Goal(
             label="Red cup to the left seat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_red", x=-0.9, y=0.22, radius_m=0.27, min_z=0.0223, max_z=0.0413),
+                inner=InCircle(target="counter_cup_red", x=-0.9, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413),
                 seconds=0.75,
             ),
         ),
         Goal(
             label="Blue cup to the middle seat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0223, max_z=0.0413),
+                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413),
                 seconds=0.75,
             ),
         ),
         Goal(
             label="Green cup on the amber stock mat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_green", x=-1.65, y=-0.3, radius_m=0.22, min_z=0.0223, max_z=0.0413),
+                inner=InCircle(target="counter_cup_green", x=-1.65, y=-0.3, radius_m=0.22, min_z=0.0209, max_z=0.0413),
                 seconds=0.75,
             ),
         ),

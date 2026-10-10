@@ -2,7 +2,7 @@
 
 The photo in level 4 remains an intentional risk to leave behind. Oracle placement does not test the arm."""
 
-from mars_sim_driver.challenges import After, AnyOf, Challenge, Cue, Drop, Goal, Hold, InRect
+from mars_sim_driver.challenges import After, AllOf, AnyOf, Challenge, Cue, Drop, Goal, Hold, InRect, Not
 
 CHALLENGE = Challenge(
     id="blaze_l3",
@@ -17,14 +17,24 @@ CHALLENGE = Challenge(
         Goal(
             label="Medicine on the porch",
             predicate=Hold(
-                inner=InRect(
-                    target="blaze_medicine",
-                    x0=-3.25,
-                    y0=-3.3,
-                    x1=-1.65,
-                    y1=-2.4,
-                    min_z=0.0274,
-                    max_z=0.0464,
+                inner=AllOf(
+                    preds=[
+                        InRect(
+                            target="blaze_medicine", x0=-3.25, y0=-3.3, x1=-1.65, y1=-2.4, min_z=0.0209, max_z=0.0464
+                        ),
+                        # "Bring the medicine out first, then the document box": this one counts only while the other is not delivered yet.
+                        Not(
+                            inner=InRect(
+                                target="blaze_documents",
+                                x0=-3.25,
+                                y0=-3.3,
+                                x1=-1.65,
+                                y1=-2.4,
+                                min_z=0.0209,
+                                max_z=0.1075,
+                            )
+                        ),
+                    ]
                 ),
                 seconds=0.75,
             ),
@@ -33,7 +43,7 @@ CHALLENGE = Challenge(
             label="Documents on the porch",
             predicate=Hold(
                 inner=InRect(
-                    target="blaze_documents", x0=-3.25, y0=-3.3, x1=-1.65, y1=-2.4, min_z=0.0885, max_z=0.1075
+                    target="blaze_documents", x0=-3.25, y0=-3.3, x1=-1.65, y1=-2.4, min_z=0.0209, max_z=0.1075
                 ),
                 seconds=0.75,
             ),

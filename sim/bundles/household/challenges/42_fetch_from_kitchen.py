@@ -26,10 +26,11 @@ RECIPIENT = (-1.3, 2.95)
 # Measured: a route from the spawn stops at (-1.33, 2.17), inside 0.1 m of
 # this point, and at no other candidate around the mat.
 DROP_SPOT = (-1.3, 2.2)
-# Mug rest_z is 0.0279. Same margin the refreshed counter deliveries use,
-# rest_z - 4 mm to rest_z + 15 mm, so an airborne or buried mug is not a
-# delivery.
-MUG_FLOOR = (0.0239, 0.0429)
+# Every stable resting pose counts: upright the mug's centre settles at
+# 0.0279, on its side at 0.0249. The band runs from 4 mm under the lowest to
+# 15 mm over the highest, so a mug knocked over on the mat is still delivered
+# and an airborne or buried one is not (test_delivery_bands.py).
+MUG_FLOOR = (0.0209, 0.0429)
 
 CHALLENGE = Challenge(
     id="household_fetch_mug",

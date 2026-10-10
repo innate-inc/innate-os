@@ -16,7 +16,7 @@ CHALLENGE = Challenge(
         Goal(
             label="Return it to the pad",
             predicate=Hold(
-                InCircle(target="workshop_gauge_040", x=0.0, y=0.6, radius_m=0.45, min_z=0.0535, max_z=0.0725), 0.75
+                InCircle(target="workshop_gauge_040", x=0.0, y=0.6, radius_m=0.45, min_z=0.0159, max_z=0.0725), 0.75
             ),
         ),
     ],

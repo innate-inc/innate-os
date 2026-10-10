@@ -36,6 +36,7 @@ from mars_sim_driver.challenges import (  # noqa: E402
     InCircle,
     InRect,
     Near,
+    Not,
     Predicate,
     Said,
     SkillDone,
@@ -75,6 +76,8 @@ def requirement(p: Predicate) -> str:
             if level in reqs:
                 return level
         return NAV_ONLY
+    if isinstance(p, Not):
+        return NAV_ONLY  # an order constraint: satisfied by not having done the later thing yet
     if isinstance(p, Answered):
         return NAV_ONLY  # nothing has to move; the oracle just reports
     if isinstance(p, Said):
@@ -124,6 +127,8 @@ def steps_for_goal(p: Predicate) -> list[tuple] | None:
                 return s + tail
         return None
 
+    if isinstance(p, Not):
+        return []  # ordered goals already do the later thing later
     if isinstance(p, Answered):
         # The first accepted spelling is by convention the canonical one.
         return [("answer", p.accept[0])] + tail

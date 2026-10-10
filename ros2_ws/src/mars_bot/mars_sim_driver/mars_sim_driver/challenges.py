@@ -571,6 +571,30 @@ class AnyOf(_Composite):
             p.reset()
 
 
+@dataclass
+class Not(Predicate):
+    """inner is false right now. For a state, not a latch: wrap an InCircle
+    or InRect, never a Hold or a Said.
+
+    What makes an ORDER checkable. Delivered objects stay delivered, so "the
+    medicine first, then the phone" judged as two ordered placements passed in
+    either order: by the time the medicine landed, the phone was already
+    waiting on the porch. AllOf(medicine there, Not(phone there)) only holds
+    if the medicine got there first.
+    """
+
+    inner: Predicate
+
+    def update(self, state: WorldState, events: list[dict]) -> bool:
+        return not self.inner.update(state, events)
+
+    def observe(self, state: WorldState, events: list[dict]) -> None:
+        self.inner.observe(state, events)
+
+    def reset(self) -> None:
+        self.inner.reset()
+
+
 # --- challenge definition ---
 
 

@@ -36,7 +36,7 @@ CHALLENGE = Challenge(
         Goal(
             label="Jar on the amber jar sorting mat",
             predicate=Hold(
-                inner=InCircle(target="pantry_jar_stray", x=-1.68, y=0.15, radius_m=0.24, min_z=0.0274, max_z=0.0464),
+                inner=InCircle(target="pantry_jar_stray", x=-1.68, y=0.15, radius_m=0.24, min_z=0.0209, max_z=0.0464),
                 seconds=0.75,
             ),
         ),

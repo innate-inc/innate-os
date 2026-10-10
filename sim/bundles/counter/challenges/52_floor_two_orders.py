@@ -2,7 +2,7 @@
 
 This layout supersedes the shelf-pick benchmark; historical scores are not comparable."""
 
-from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, InCircle, SkillDone
+from mars_sim_driver.challenges import AllOf, Challenge, Drop, Goal, Hold, InCircle, Not, SkillDone
 
 CHALLENGE = Challenge(
     id="counter_floor_two_orders",
@@ -18,14 +18,24 @@ CHALLENGE = Challenge(
         Goal(
             label="Red to the left seat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_red", x=-0.9, y=0.22, radius_m=0.27, min_z=0.0223, max_z=0.0413),
+                inner=AllOf(
+                    preds=[
+                        InCircle(target="counter_cup_red", x=-0.9, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413),
+                        # "the red one at the left seat, then the blue one": this one counts only while the other is not delivered yet.
+                        Not(
+                            inner=InCircle(
+                                target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413
+                            )
+                        ),
+                    ]
+                ),
                 seconds=0.75,
             ),
         ),
         Goal(
             label="Blue to the middle seat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0223, max_z=0.0413),
+                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413),
                 seconds=0.75,
             ),
         ),

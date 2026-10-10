@@ -14,7 +14,7 @@ CHALLENGE = Challenge(
         Goal(
             label="Jar on the green counter mat",
             predicate=Hold(
-                inner=InCircle(target="counter_jar_jam", x=0, y=1.02, radius_m=0.18, min_z=0.0274, max_z=0.0464),
+                inner=InCircle(target="counter_jar_jam", x=0, y=1.02, radius_m=0.18, min_z=0.0209, max_z=0.0464),
                 seconds=0.75,
             ),
         ),

@@ -2,7 +2,7 @@
 
 The photo in level 4 remains an intentional risk to leave behind. Oracle placement does not test the arm."""
 
-from mars_sim_driver.challenges import After, AnyOf, Challenge, Cue, Drop, Goal, Hold, InRect
+from mars_sim_driver.challenges import After, AllOf, AnyOf, Challenge, Cue, Drop, Goal, Hold, InRect, Not
 
 CHALLENGE = Challenge(
     id="blaze_l2",
@@ -17,14 +17,18 @@ CHALLENGE = Challenge(
         Goal(
             label="Medicine on the porch",
             predicate=Hold(
-                inner=InRect(
-                    target="blaze_medicine",
-                    x0=-3.25,
-                    y0=-3.3,
-                    x1=-1.65,
-                    y1=-2.4,
-                    min_z=0.0274,
-                    max_z=0.0464,
+                inner=AllOf(
+                    preds=[
+                        InRect(
+                            target="blaze_medicine", x0=-3.25, y0=-3.3, x1=-1.65, y1=-2.4, min_z=0.0209, max_z=0.0464
+                        ),
+                        # "Save the medicine first, then the phone": this one counts only while the other is not delivered yet.
+                        Not(
+                            inner=InRect(
+                                target="blaze_phone", x0=-3.25, y0=-3.3, x1=-1.65, y1=-2.4, min_z=0.0004, max_z=0.0649
+                            )
+                        ),
+                    ]
                 ),
                 seconds=0.75,
             ),
@@ -38,8 +42,8 @@ CHALLENGE = Challenge(
                     y0=-3.3,
                     x1=-1.65,
                     y1=-2.4,
-                    min_z=0.0005,
-                    max_z=0.0195,
+                    min_z=0.0004,
+                    max_z=0.0649,
                 ),
                 seconds=0.75,
             ),

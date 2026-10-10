@@ -2,7 +2,7 @@
 
 Movable tasks use floor staging mats; counts are owned by this exact setup."""
 
-from mars_sim_driver.challenges import Answered, Challenge, Cue, Drop, Goal, Hold, InCircle
+from mars_sim_driver.challenges import AllOf, Answered, Challenge, Cue, Drop, Goal, Hold, InCircle, Not
 
 CHALLENGE = Challenge(
     id="pantry_stocktake",
@@ -25,14 +25,24 @@ CHALLENGE = Challenge(
         Goal(
             label="Delivery on the blue box sorting mat",
             predicate=Hold(
-                inner=InCircle(target="pantry_carton_new", x=0, y=1.12, radius_m=0.24, min_z=0.036, max_z=0.055),
+                inner=AllOf(
+                    preds=[
+                        InCircle(target="pantry_carton_new", x=0, y=1.12, radius_m=0.24, min_z=0.0209, max_z=0.0613),
+                        # "in this order": the carton, then the jar: this one counts only while the other is not delivered yet.
+                        Not(
+                            inner=InCircle(
+                                target="pantry_jar_stray", x=-1.68, y=0.15, radius_m=0.24, min_z=0.0209, max_z=0.0464
+                            )
+                        ),
+                    ]
+                ),
                 seconds=0.75,
             ),
         ),
         Goal(
             label="Jar on the amber jar sorting mat",
             predicate=Hold(
-                inner=InCircle(target="pantry_jar_stray", x=-1.68, y=0.15, radius_m=0.24, min_z=0.0274, max_z=0.0464),
+                inner=InCircle(target="pantry_jar_stray", x=-1.68, y=0.15, radius_m=0.24, min_z=0.0209, max_z=0.0464),
                 seconds=0.75,
             ),
         ),

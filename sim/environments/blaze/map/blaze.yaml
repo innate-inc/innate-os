@@ -1,7 +1,7 @@
 image: blaze.pgm
 mode: trinary
 resolution: 0.05
-origin: [-5.8908, -5.3244, 0.0]
+origin: [-6.3973, -8.1473, 0.0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196

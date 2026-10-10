@@ -1,5 +1,6 @@
 """Fire cues follow the judge, are visible to RGB, and never become physics."""
 
+import math
 from pathlib import Path
 
 import mujoco
@@ -28,6 +29,46 @@ def test_fire_follows_each_challenges_real_deadlines(challenge):
         assert all(s[3] == 1 for s in in_region)
     fire.sync(None, 0)
     assert fire.sources == [[-1.30, 1.96, 0.25, 0.38, 0]]
+
+
+@pytest.mark.parametrize(
+    "challenge",
+    list(load_challenges([Path(__file__).parents[1] / "bundles/blaze/challenges"]).values()),
+    ids=lambda c: c.id,
+)
+def test_no_flame_reaches_an_item_before_its_room_is_lethal(challenge):
+    """In blaze_l3 a patch 0.2 m from the document box lit at 221 s while the
+    kitchen was safe until 330 s: the judge still accepted the box, and the
+    flames on it said otherwise."""
+    from mars_sim_driver.fire import KEEP_CLEAR_M
+
+    fire = FireEffect(True)
+    items = [(d.x, d.y) for d in challenge.setup]
+    deadlines = [after.seconds for after in challenge.fail_if.preds]
+    for t in np.arange(0, max(deadlines), 5.0):
+        fire.sync(challenge, float(t))
+        for x, y, z, strength, _ in fire.sources:
+            if z != 0.025 or strength == 0:
+                continue  # ignition points are fixed furniture, not spread patches
+            room = next(
+                a for a in challenge.fail_if.preds if a.inner.x0 <= x <= a.inner.x1 and a.inner.y0 <= y <= a.inner.y1
+            )
+            if t < room.seconds:
+                near = min(math.dist((x, y), item) for item in items)
+                assert near >= KEEP_CLEAR_M, (
+                    f"t={t:.0f}s: flame {near:.2f} m from an item, room lethal at {room.seconds}s"
+                )
+
+
+def test_the_fire_knows_where_the_rescue_items_live():
+    from mars_sim_driver.fire import ITEM_HOMES
+    from mars_sim_driver.props import load_props
+
+    props = load_props([Path(__file__).parents[1] / "bundles/blaze/props"])
+    homes = {tuple(p.initial_pose[:2]) for p in props.values() if p.initial_pose}
+    assert homes == set(ITEM_HOMES)
+    for challenge in load_challenges([Path(__file__).parents[1] / "bundles/blaze/challenges"]).values():
+        assert {(d.x, d.y) for d in challenge.setup} <= homes, challenge.id
 
 
 def test_fire_uses_edited_predicate_deadline_and_stays_inside_the_room():

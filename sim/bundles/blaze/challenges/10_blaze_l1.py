@@ -23,7 +23,7 @@ CHALLENGE = Challenge(
                     y0=-3.3,
                     x1=-1.65,
                     y1=-2.4,
-                    min_z=0.0274,
+                    min_z=0.0209,
                     max_z=0.0464,
                 ),
                 seconds=0.75,

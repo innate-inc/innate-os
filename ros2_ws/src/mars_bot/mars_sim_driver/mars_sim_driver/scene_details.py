@@ -285,11 +285,22 @@ def blaze(room):
         box(room, "fire_alarm", (0.06, 0.013, 0.09), (x, y, 0.91), (0.68, 0.06, 0.04, 1))
     # Ceiling over the house on the 1.3 m wall tops; the porch stays open.
     box(room, "ceiling", (3.2, 2.3, 0.025), (0, 0, 1.325), (0.93, 0.91, 0.86, 1))
-    # NO BACKDROP PAST THE PORCH, though the way out still opens onto black.
-    # A daylight panel there was tried: the map exporter's virtual lidar sees
-    # it through the doorway, the building envelope grows to reach it, and
-    # the nav map gained 312 free cells off a porch that drops 0.5 m to the
-    # ground plane.
+    # THE PORCH GETS A LOW WALL, AND THE WORLD PAST IT A SKY. The porch slab
+    # (x -3.45..-1.45, y -3.40..-2.30) stood 0.5 m above the ground plane with
+    # open edges, so a robot could drive off it, and the way out opened onto
+    # black. A sky panel alone broke the nav map: the exporter's virtual lidar
+    # saw it through the doorway and grew the map 312 free cells off the
+    # porch. A collidable 0.45 m wall on the three open edges stops both the
+    # robot and the lidar at the porch edge; the sky behind it is only seen
+    # above it, by the camera.
+    for half, pos in (
+        ((1.0, 0.03, 0.225), (-2.45, -3.37, 0.225)),
+        ((0.03, 0.52, 0.225), (-3.42, -2.88, 0.225)),
+        ((0.03, 0.52, 0.225), (-1.48, -2.88, 0.225)),
+    ):
+        room.geoms.append(Geom("box", half, pos, rgba=WHITE, name="porch_wall"))
+        box(room, "porch_wall_cap", (half[0] + 0.01, half[1] + 0.01, 0.012), (pos[0], pos[1], 0.462), OAK)
+    box(room, "sky", (3.05, 0.02, 2.0), (-2.45, -4.2, 1.4), (0.70, 0.82, 0.90, 1))
 
 
 def _floor(room, name, x0, y0, x1, y1, color, z=0.0025):

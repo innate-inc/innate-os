@@ -223,32 +223,47 @@ against the pictures. Fixed:
   onto black (and let a robot drive out of the world); the counter's green
   wainscot, behind the green cup in "how many cups are on the counter", is
   white; z-fighting removed from the counter's mats and Blaze's kitchen
-  fronts. Blaze's porch still opens onto black: a daylight panel past it was
-  tried and taken out, because the map exporter's virtual lidar saw it
-  through the doorway and grew the map off the edge of the porch.
+  fronts. Blaze's porch, a slab 0.5 m above the ground plane with open edges,
+  has a low collidable wall on its three open sides and sky beyond it. A sky
+  panel alone was tried first and broke the nav map: the exporter's virtual
+  lidar saw it through the doorway and grew the map 312 free cells off the
+  porch. The wall stops the lidar, and the robot, at the porch edge.
 
 The four regenerated nav maps (rounds, pantry, counter, blaze) differ from the
-old ones where a door now stands, and otherwise only in frame: the exporter
+old ones where a door or Blaze's porch wall now stands, and otherwise only in
+frame: the exporter
 sizes a map from every room geom's bounding sphere, so a ceiling or a split
 trim strip moves the origin without changing what is drivable.
 
-Left for the maintainers, because each is a design decision rather than a
-defect:
+Four more, each a judge or scene that disagreed with its own brief:
 
-- **Deliveries must land upright.** The floor-delivery height bands start a
-  few mm under each item's upright rest height, so a jar, carton, medicine
-  bottle or oil can set down on its side, on the right mat, fails. The briefs
-  say "put it down".
-- **Blaze's flames reach the items before the deadline.** In `blaze_l3` a
-  fire patch 0.2 m from the document box lights at 221 s, while the brief
-  allows the kitchen until 330 s. The flames are visual only, so the judge
-  still accepts the box; a careful person would give it up.
-- **Order words the judge does not enforce.** Blaze's "medicine first, then
-  the phone" passes in either order; pantry_restock's "leave the jar where it
-  is" is never checked. A robot following the brief always passes; one that
-  ignores it can too.
-- **Nobody at the counter.** "I'm at the middle seat" is spoken to an empty
-  stool in `counter_unspoken_request` and `counter_which_one`.
+- **Deliveries had to land upright.** The height bands were drawn from each
+  item's upright rest (rest_z - 4 mm to + 15 mm), so a jar, carton, medicine
+  bottle, document box or oil can set down on the right mat and tipped onto
+  its side -- centre 25 mm up, 20 mm for the can -- failed, while every brief
+  said "put it down". The book and the phone also rest stably on an edge,
+  above their bands. Every band now runs from 4 mm under the item's lowest
+  stable rest to 15 mm over its highest, measured by settling the item on its
+  own mat upright, on each side and upside down (`test_delivery_bands.py`,
+  which fails on the old bands in five worlds). Held, airborne and buried
+  items are still out.
+- **Blaze's flames reached the items before the deadline.** In `blaze_l3` a
+  fire patch 0.2 m from the document box lit at 221 s while the kitchen was
+  safe until 330 s; every level had one within 0.3 m of the medicine. The
+  judge still accepted the item and the flames said otherwise. A patch within
+  0.5 m of a rescue item now stays unlit until its room is lethal, in free
+  play and in a run alike (`test_blaze_fire.py`).
+- **Order words the judge did not enforce.** A delivered object stays
+  delivered, so "the medicine first, then the phone" judged as two ordered
+  placements passed in either order. A new `Not` predicate makes the first
+  delivery count only while the second is not yet there: blaze 2-4, the
+  stocktake's "in this order", and "the red one, then the blue one". Pantry
+  restock's "leave the jar where it is" is now a goal.
+- **Nobody at the counter.** "I'm at the middle seat" was spoken to an empty
+  stool in `counter_unspoken_request` and `counter_which_one`. A customer now
+  stands there: Alex's scan at 0.29 scale, since the café is built to the
+  robot's size (0.21 m stools, a 1.4 m ceiling) and a life-size resident
+  would stand through the roof.
 
 
 ## HARNESS or AGENT -- embodiment is a constraint, not a third verdict

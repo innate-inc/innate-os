@@ -18,7 +18,7 @@ CHALLENGE = Challenge(
         Goal(
             label="Blue cup to the middle seat",
             predicate=Hold(
-                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0223, max_z=0.0413),
+                inner=InCircle(target="counter_cup_blue", x=0.0, y=0.22, radius_m=0.27, min_z=0.0209, max_z=0.0413),
                 seconds=0.75,
             ),
         ),

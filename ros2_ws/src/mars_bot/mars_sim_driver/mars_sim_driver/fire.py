@@ -23,6 +23,14 @@ FIVE_MINUTE_REGIONS = (
 )
 
 
+# How close a flame may come to a rescue item before its room is lethal.
+KEEP_CLEAR_M = 0.5
+# Where Blaze's rescue items live: their sidecars' initial_pose, which every
+# challenge drops them at too (test_blaze_fire.py keeps the two in step). Free
+# play and a run keep the same flames clear, so they still burn identically.
+ITEM_HOMES = ((-2.55, 1.2), (1.85, 1.33), (-1.9, 1.37), (2.35, -1.75), (-2.6, -1.4))
+
+
 def _origin(bounds):
     x0, y0, x1, y1 = bounds
     if x1 < 0:
@@ -41,12 +49,12 @@ class FireEffect:
 
     def reset(self, t: float = 0):
         self._preview_started_t = float(t)
-        self.sources = self._spread(FIVE_MINUTE_REGIONS, 0) if self.enabled else []
+        self.sources = self._spread(FIVE_MINUTE_REGIONS, 0, ITEM_HOMES) if self.enabled else []
 
     def advance(self, t: float):
         """Called once per physics slice; no browser or active trial required."""
         if self.enabled and self._preview_started_t is not None:
-            self.sources = self._spread(FIVE_MINUTE_REGIONS, max(0, t - self._preview_started_t))
+            self.sources = self._spread(FIVE_MINUTE_REGIONS, max(0, t - self._preview_started_t), ITEM_HOMES)
 
     def sync(self, challenge, elapsed: float):
         if not self.enabled:
@@ -71,10 +79,16 @@ class FireEffect:
         # The judge owns progression until completion/abort; a physics tick
         # must never replace it with the free-play schedule.
         self._preview_started_t = None
-        self.sources = self._spread(regions(challenge.fail_if), elapsed)
+        items = [*ITEM_HOMES, *((drop.x, drop.y) for drop in challenge.setup)]
+        self.sources = self._spread(regions(challenge.fail_if), elapsed, items)
 
     @staticmethod
-    def _spread(regions, elapsed):
+    def _spread(regions, elapsed, items=()):
+        """`items`: where the rescue items start. A patch within
+        KEEP_CLEAR_M of one stays unlit until its room's deadline. Before
+        that the judge still accepts the item, and flames on it told the robot
+        otherwise: in blaze_l3 a patch 0.2 m from the document box lit at
+        221 s while the kitchen was safe until 330 s."""
         sources = []
         for deadline, bounds, ignition in regions:
             if elapsed < ignition:
@@ -91,6 +105,8 @@ class FireEffect:
             # see movement. New patches grow from zero instead of popping in.
             patches.sort(key=lambda point: math.dist(point, origin[:2]))
             for rank, (x, y) in enumerate(patches):
+                if elapsed < deadline and any(math.dist((x, y), item) < KEEP_CLEAR_M for item in items):
+                    continue
                 threshold = 0.12 + 0.11 * rank
                 strength = min(1, max(0, (progress - threshold) / (1 - threshold)))
                 if strength > 0:

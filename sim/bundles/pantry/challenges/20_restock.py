@@ -20,9 +20,16 @@ CHALLENGE = Challenge(
         Goal(
             label="Delivery on the blue box sorting mat",
             predicate=Hold(
-                inner=InCircle(target="pantry_carton_new", x=0, y=1.12, radius_m=0.24, min_z=0.036, max_z=0.055),
+                inner=InCircle(target="pantry_carton_new", x=0, y=1.12, radius_m=0.24, min_z=0.0209, max_z=0.0613),
                 seconds=0.75,
             ),
+        ),
+        # The brief's last instruction, which nothing used to check: a robot
+        # that tidied the jar away as well passed. 0.15 m allows a nudge while
+        # picking the carton 0.38 m away, not a move.
+        Goal(
+            label="Leave the jar where it is",
+            predicate=InCircle(target="pantry_jar_new", x=-0.82, y=-0.95, radius_m=0.15),
         ),
     ],
     time_limit_s=420,

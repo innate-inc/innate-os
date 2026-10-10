@@ -13,7 +13,7 @@ CHALLENGE = Challenge(
         Goal(
             label="Book on the lobby delivery mat",
             predicate=Hold(
-                inner=InCircle(target="rounds_book_bed", x=4.0, y=2.5, radius_m=0.42, min_z=0.008, max_z=0.027),
+                inner=InCircle(target="rounds_book_bed", x=4.0, y=2.5, radius_m=0.42, min_z=0.0079, max_z=0.0494),
                 seconds=0.75,
             ),
         ),

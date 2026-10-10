@@ -24,7 +24,8 @@ OFFER = "Sorry for the wait -- how can I help you?"
 
 def _engine(tmp_path):
     challenge = load_challenges([SIM / "bundles/counter/challenges"])["counter_unspoken_request"]
-    challenge = dataclasses.replace(challenge, reset_world=False)
+    # Judge only: no world to reset and no customer prop to place.
+    challenge = dataclasses.replace(challenge, reset_world=False, setup=[])
     sim = SimpleNamespace(data=SimpleNamespace(time=0.0))
     engine = ChallengeEngine(sim, threading.Lock(), roots=[], progress_path=tmp_path / "progress.json")
     engine.challenges = {challenge.id: challenge}
