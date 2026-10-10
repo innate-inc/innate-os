@@ -1,0 +1,21 @@
+{
+  "display_name": "Household",
+  "bundle": "bundles/household",
+  "navigation": {
+    "map_yaml": "map/household.yaml"
+  },
+  "viewer": {
+    "type": "primitives"
+  },
+  "spawn": {
+    "x": -1.0,
+    "y": 0.7,
+    "yaw_degrees": 90.0
+  },
+  "attribution": {
+    "name": "Household",
+    "author": "innate benchmark (authored in Roblox Studio, exported as MuJoCo primitives)",
+    "license": "Apache-2.0",
+    "source": "sim/bundles/household"
+  }
+}

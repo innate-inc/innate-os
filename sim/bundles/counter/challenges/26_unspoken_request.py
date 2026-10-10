@@ -1,0 +1,97 @@
+"""CATEGORY 2 -- an instruction that is never given.
+
+THE GAP THIS CLOSES. Every brief in the suite is an explicit imperative or an
+explicit question. Real speech to a robot in a room frequently is neither: it
+is a person stating a problem and expecting the machine to work out what would
+help. No probe measured that pragmatic step -- intent behind non-imperative
+speech -- so an agent that only executes surface-form commands was
+indistinguishable from one that understands what people mean.
+
+The brief here contains no command and no question mark aimed at the robot. It
+is a complaint: a customer at the middle seat whom nobody has served. The
+natural response has two parts and the goals score them in their natural
+order -- go to the person, then say something that offers service. Both are
+things this robot can do with certainty (driving and speaking), so a zero here
+is a comprehension zero, not a hardware one. ARM-FREE for the same reason as
+counter_route_change: the manipulation confound must not be able to touch the
+conversational signal.
+
+WHAT COUNTS AS OFFERING, loose on purpose, same policy as counter_which_one's
+"what counts as asking": any service-shaped utterance passes ("how can I
+help", "what can I get you", "sorry for the wait -- what would you like").
+Scoring the phrasing would score the answer key. The offer must be made inside
+the customer's circle, so a chatbot reflex of "How can I help?" spoken from the
+spawn pad counts for nothing: the offer is only judged once the robot has
+actually come over.
+
+DEGENERATE POLICIES. Do-nothing: 0/2 (spawn is outside the seat circle).
+Drive-everywhere-random: fails the challenge on the Said goal even if it
+stumbles through the circle, since it never speaks. The deaf oracle passes via
+its authored line, which is the gate proving the end state is reachable, not
+the pragmatics -- the pragmatics are the measurement.
+"""
+
+from mars_sim_driver.challenges import AllOf, Challenge, Drop, Goal, Hold, InCircle, Said
+
+CHALLENGE = Challenge(
+    id="counter_unspoken_request",
+    title="The unspoken request",
+    category=2,
+    brief=(
+        "Hello? Is anyone -- oh! You. I've been sitting here at the middle "
+        "seat waving for five minutes and not one person has come over. "
+        "Honestly."
+    ),
+    # The customer the brief is spoken by, behind the middle stool and facing
+    # the room. The stool was empty, so "sitting here at the middle seat"
+    # pointed at nobody.
+    setup=[Drop("cafe_customer", 0.0, 0.78, yaw_deg=0)],
+    # MEASURED GUESSING FLOOR: a baseline that blurts plausible answers and
+    # never looks (`--agents brain:guess`) still passes this about 1 run in 3,
+    # and lengthening the approach hold further starts failing the oracle
+    # instead. Both goals are individually reachable by accident in a small
+    # cafe: a random walk crosses the customer's circle, and "how can I help"
+    # is a real offer of help whenever it is said. Read a single pass here the
+    # way the bridge controls are read -- against their stated floor, not as
+    # proof of anything on its own.
+    # ONE PHASE, NOT TWO IN A ROW. Ordered, the offer was judged only after
+    # the 5 s hold completed, and speech heard before its goal is discarded --
+    # so a robot that arrived and offered help straight away, the natural
+    # thing to do, had its offer thrown away and scored 1/2. Now the offer
+    # counts when it is made AT the customer (inside the same circle), during
+    # the hold or after it. Spoken from the spawn pad it still counts for
+    # nothing, which is what the ordering was for.
+    goals=[
+        # 5 s, not 2: a random walk crossing the cafe holds a 0.55 m circle for
+        # two seconds in passing, and a guessing baseline passed this
+        # challenge 1 run in 3 without ever looking at the customer. A robot
+        # that came over to someone waving has no reason to leave.
+        Goal(
+            "Come over to the customer",
+            Hold(InCircle("robot", 0.0, 0.20, 0.55), seconds=5.0),
+            parallel_group="serve",
+        ),
+        Goal(
+            "Offer to help",
+            AllOf(
+                [
+                    InCircle("robot", 0.0, 0.20, 0.55),
+                    Said(
+                        [
+                            r"how (can|may) i help",
+                            r"what (can|may) i (get|do|bring)",
+                            r"what (would|do) you (like|need|want)",
+                            r"(here|happy|glad) to help",
+                            r"help you",
+                            r"take your order",
+                            r"sorry (for|about) the wait",
+                        ],
+                        oracle_line="Sorry for the wait -- how can I help you?",
+                    ),
+                ]
+            ),
+            parallel_group="serve",
+        ),
+    ],
+    time_limit_s=360,
+)

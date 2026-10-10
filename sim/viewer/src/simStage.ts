@@ -51,11 +51,35 @@ const ENVIRONMENT_ICONS: Record<string, string> = {
   backrooms: icon(
     '<path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z"/>',
   ),
+  blaze: icon(
+    '<path d="M12 3c1 4-2 5-2 8 0 1 .6 2 1.5 2.5C14 12 15 9.5 15 7c3.5 3 5 5.5 5 8a8 8 0 0 1-16 0c0-3 1.5-5.5 4-8 0 3 1 4 2 4"/><path d="M12 16c-1.5 1.5-2 2.5-2 3.5a2 2 0 0 0 4 0c0-1-.5-2-2-3.5Z"/>',
+  ),
+  bridge: icon(
+    '<path d="M2 16h20M6 4v17M18 4v17M2 11c2 0 4-3 4-7 3 10 9 10 12 0 0 4 2 7 4 7M9 10v6M12 11.5V16M15 10v6"/>',
+  ),
+  counter: icon(
+    '<path d="M3 15h18M5 15v6M19 15v6M6 4h8v6a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V4Z"/><path d="M14 5h2a2 2 0 0 1 0 4h-2"/>',
+  ),
+  gallery: icon(
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="16" cy="9" r="1.5"/><path d="m3 16 6-6 6 6 3-3 3 3"/>',
+  ),
+  household: icon(
+    '<path d="M5 10V7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v3M5 20v-2M19 20v-2"/><path d="M5 14v-2a2 2 0 0 0-4 0v4a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2v-4a2 2 0 0 0-4 0v2H5Z"/>',
+  ),
   intersection: icon(
     '<path d="M12 13v8"/><path d="M12 3v3"/><path d="M18 6a2 2 0 0 1 1.387.56l2.307 2.22a1 1 0 0 1 0 1.44l-2.307 2.22A2 2 0 0 1 18 13H6a2 2 0 0 1-1.387-.56l-2.306-2.22a1 1 0 0 1 0-1.44l2.306-2.22A2 2 0 0 1 6 6z"/>',
   ),
+  pantry: icon(
+    '<path d="M3 3v18M21 3v18M3 12h18M3 21h18"/><rect x="6" y="6" width="5" height="6" rx="1"/><path d="M6 4h5M15 6h3v6M6 21v-6h5v6M15 21v-5h3v5"/>',
+  ),
+  rounds: icon(
+    '<path d="M3 16V3h7v13H3ZM14 16V3h7v13h-7ZM7 9v1M18 9v1M6.5 19v2h11v-2"/>',
+  ),
   void: icon(
     '<path d="M10.1 2.18a9.93 9.93 0 0 1 3.8 0"/><path d="M17.6 3.71a9.95 9.95 0 0 1 2.69 2.7"/><path d="M21.82 10.1a9.93 9.93 0 0 1 0 3.8"/><path d="M20.29 17.6a9.95 9.95 0 0 1-2.7 2.69"/><path d="M13.9 21.82a9.94 9.94 0 0 1-3.8 0"/><path d="M6.4 20.29a9.95 9.95 0 0 1-2.69-2.7"/><path d="M2.18 13.9a9.93 9.93 0 0 1 0-3.8"/><path d="M3.71 6.4a9.95 9.95 0 0 1 2.7-2.69"/>',
+  ),
+  workshop: icon(
+    '<path d="m14.5 6.5 3 3 4-4a6 6 0 0 1-7.6 7.6l-6.8 6.8a2.1 2.1 0 0 1-3-3l6.8-6.8a6 6 0 0 1 7.6-7.6l-4 4Z"/>',
   ),
 };
 const ENVIRONMENT_ICON_FALLBACK = icon(
@@ -338,7 +362,7 @@ export function createSimStage(
   robotRow.className = "sim-view-aids";
   const robotRowLabel = document.createElement("span");
   robotRowLabel.textContent = "Robot";
-  const respawnChip = makeChip("Respawn", "Back to the spawn pose, arm home, every prop parked");
+  const respawnChip = makeChip("Respawn", "Reset the robot and restore the world’s default objects");
   respawnChip.onclick = () => {
     clearPlacementSelection();
     onRespawn();

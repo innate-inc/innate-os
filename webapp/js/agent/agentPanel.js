@@ -45,6 +45,12 @@ const THINKING_STALE_MS = 10_000;
  *   physical microphone (see micStream.js).
  * @returns {{
  *   destroy: () => void,
+ *   armedAgentId: () => string,
+ *   armAgent: (id: string) => void,
+ *   setCreateAgentHandler: (cb: () => void) => void,
+ *   directivesEl: HTMLElement,
+ *   dockDirectives: (host: HTMLElement | null) => void,
+ *   dockStartStop: (host: HTMLElement | null) => void,
  *   startMic: () => Promise<void>,
  *   stopMic: () => void,
  *   micMount: HTMLElement,
@@ -58,6 +64,7 @@ const THINKING_STALE_MS = 10_000;
  *   submitText: (text: string, how?: { replyContext?: string }) => Promise<boolean>,
  *   replyContext: () => string,
  *   robotSpokeLast: () => boolean,
+ *   runPrompt: (text: string, prepare: () => Promise<void>, signal: AbortSignal) => Promise<void>,
  *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
  *   setDisplayName: (name: string | null) => void,
  *   isBusy: () => boolean
@@ -167,9 +174,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
    * it goes. With `submit` the composer takes the answer itself; without, it is closed.
    * @type {{ placeholder: string, submit?: (text: string) => void } | null} */
   let ask = null;
+  let preparingChallenge = false;
   function syncComposerAction() {
     const empty = input.value.trim().length === 0;
-    const locked = !!ask && !ask.submit;
+    const locked = preparingChallenge || (!!ask && !ask.submit);
     input.disabled = locked;
     form.classList.toggle("asked", ask !== null);
     placeholder.textContent = ask?.placeholder ?? "Message MARS";
@@ -260,7 +268,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   /** When this page sent each text: the brain echoes user lines on chat_out, and one bubble is enough.
    * @type {Map<string, number>} */
   const sentTexts = new Map();
-  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean, replyContext?: string }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
+  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean, replyContext?: string, signal?: AbortSignal }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
   async function submitText(text, how = {}) {
     if (!text || sending) return false;
     sending = true;
@@ -279,11 +287,13 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }
     try {
       await directives.ensureRunning();
+      how.signal?.throwIfAborted();
       const frame = { data: JSON.stringify({ text, sender: "user", timestamp, origin: selfOrigin }) };
       let sent = rosClient.publish(CHAT_IN_TOPIC, frame);
       if (!sent) {
         // A reconnecting socket is the common case; one quiet retry covers it.
         await new Promise((resolve) => setTimeout(resolve, 700));
+        how.signal?.throwIfAborted();
         sent = rosClient.publish(CHAT_IN_TOPIC, frame);
       }
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
@@ -299,6 +309,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   }
 
   async function submit() {
+    if (preparingChallenge) return;
     const text = input.value.trim();
     if (!text) return;
     if (ask?.submit) {
@@ -503,6 +514,31 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     submitText,
     replyContext: () => lastRobotAt > lastUserAt ? replyContext : "",
     robotSpokeLast: () => lastRobotAt > lastUserAt,
+    async runPrompt(text, prepare, signal) {
+      if (sending || preparingChallenge) throw new Error("Wait for your current message to finish sending.");
+      if (ask) throw new Error("Finish the current conversation step before running a challenge.");
+      const draft = input.value;
+      preparingChallenge = true;
+      input.value = text;
+      input.style.height = "auto";
+      sheet.open();
+      syncComposerAction();
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      let sent = false;
+      try {
+        await prepare();
+        signal.throwIfAborted();
+        sent = await submitText(text, { quiet: true, signal });
+        if (!sent) throw new Error("The prompt could not be sent. Check the agent connection and try again.");
+      } finally {
+        preparingChallenge = false;
+        // Keep an unfinished message safe when a challenge borrows the composer.
+        input.value = draft || (sent ? "" : text);
+        input.style.height = "auto";
+        syncComposerAction();
+        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      }
+    },
     /** @param {string} text */
     narrate: (text, how = {}) => submitText(text, { ...how, narrator: true }),
     /** @param {string | null} name */

@@ -75,6 +75,45 @@ def absolute_to_local_nav_command(inputs: dict, robot_pose: Pose) -> dict:
     return adjusted
 
 
+def local_to_absolute_nav_command(inputs: dict, robot_pose: Pose) -> dict:
+    """The exact inverse of :func:`absolute_to_local_nav_command`.
+
+    Re-expresses a robot-relative goal in the frame ``robot_pose`` is given in,
+    and clears ``local_frame`` so navigate_to_position plans it against the map
+    instead of the rolling mapfree costmap. Absolute commands are returned
+    unchanged. The input dict is never mutated.
+
+    Used only under BENCH_MAP_FRAME_GOALS -- see sim/bench/FINDINGS.md
+    (patch_map_frame_goals).
+    """
+    if not inputs.get("local_frame", False):
+        return inputs
+
+    robot_x, robot_y, robot_theta = robot_pose
+    use_degrees = "theta" not in inputs and "theta_degrees" in inputs
+    local_theta = math.radians(inputs["theta_degrees"]) if use_degrees else inputs.get("theta", 0.0)
+    local_x = inputs.get("x", 0.0)
+    local_y = inputs.get("y", 0.0)
+
+    # Rotate by +theta and translate: the mirror of compute_pose_delta, which
+    # rotates by -theta after translating.
+    cos_t = math.cos(robot_theta)
+    sin_t = math.sin(robot_theta)
+    absolute_x = robot_x + local_x * cos_t - local_y * sin_t
+    absolute_y = robot_y + local_x * sin_t + local_y * cos_t
+    absolute_theta = math.atan2(math.sin(robot_theta + local_theta), math.cos(robot_theta + local_theta))
+
+    adjusted = inputs.copy()
+    adjusted["x"] = absolute_x
+    adjusted["y"] = absolute_y
+    if use_degrees:
+        adjusted["theta_degrees"] = math.degrees(absolute_theta)
+    else:
+        adjusted["theta"] = absolute_theta
+    adjusted["local_frame"] = False
+    return adjusted
+
+
 def adjust_local_nav_command(inputs: dict, delta: Delta) -> dict:
     """Re-express a local-frame navigation target after the robot has moved.
 

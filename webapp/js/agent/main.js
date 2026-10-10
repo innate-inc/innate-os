@@ -30,6 +30,7 @@ import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
+import { startChallengeAndWait } from "./challengeRun.js";
 import { createAgentStudio } from "./agentStudio.js";
 import { AVAILABLE_SKILLS_TOPIC, CANCEL_SKILL_SERVICE, SKILL_OVERLAY_TOPIC } from "../constants.js";
 import { createAgentMicControl } from "./agentMicControl.js";
@@ -194,7 +195,41 @@ function buildAgentView(root) {
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
-    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
+    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession, {
+      run: async (id, prompt, signal) => {
+        if (!panel.armedAgentId()) throw new Error("Choose an available agent in chat first.");
+        let requested = false;
+        let previousAttempt = "";
+        /** @type {any} */
+        let current = null;
+        const unsubscribe = simSession.onChallenge((/** @type {any} */ block) => { current = block.active; });
+        try {
+          await panel.runPrompt(prompt, async () => {
+            if (agentState.get().brainActive) {
+              await agentState.setDirective("");
+              if (agentState.get().brainActive) throw new Error("The agent could not pause. Try again once it has stopped.");
+            }
+            signal.throwIfAborted();
+            previousAttempt = current?.attempt_id ?? "";
+            requested = true;
+            await startChallengeAndWait(simSession, id, signal);
+          }, signal);
+        } catch (error) {
+          // Don't leave a countdown running after the launch failed.
+          if (requested && (!current || (current.id === id && current.attempt_id !== previousAttempt))) {
+            simSession.abortChallenge();
+          }
+          throw error;
+        } finally {
+          unsubscribe();
+        }
+      },
+      stop: async () => {
+        await agentState.setDirective("");
+        if (agentState.get().brainActive) throw new Error("The agent could not stop. Use Stop in chat and try again.");
+        simSession.abortChallenge();
+      },
+    }) : null;
   const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
     showView: (/** @type {string} */ id) => cameraSwitch.promote(id),
     revealCameras: () => cameraSwitch.revealCams(),

@@ -1,0 +1,21 @@
+{
+  "display_name": "Rounds",
+  "bundle": "bundles/rounds",
+  "navigation": {
+    "map_yaml": "map/rounds.yaml"
+  },
+  "viewer": {
+    "type": "primitives"
+  },
+  "spawn": {
+    "x": -5.2,
+    "y": -0.0,
+    "yaw_degrees": 0.0
+  },
+  "attribution": {
+    "name": "Rounds",
+    "author": "innate benchmark (authored in Roblox Studio, exported as MuJoCo primitives)",
+    "license": "Apache-2.0",
+    "source": "sim/bundles/rounds"
+  }
+}

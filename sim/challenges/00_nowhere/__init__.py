@@ -10,6 +10,7 @@ CHALLENGE = Challenge(
     id="nowhere",
     title="Nowhere",
     brief="MARS just woke up with nothing. Talk to it, give it what it asks for, and find the way out.",
+    prompt="Hello MARS. Let's find a way out together. Tell me what you need to get started.",
     environments=("void",),
     setup=[],
     goals=[Goal(act.label, ActDone(RUNTIME, index)) for index, act in enumerate(ACTS)],

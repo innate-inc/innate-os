@@ -119,3 +119,24 @@ def test_viewer_refresh_preserves_local_environment_packs(monkeypatch, tmp_path)
     assert local_scene.read_bytes() == b"custom scene"
     assert not (destination / "stale-published-file.txt").exists()
     assert (destination / "file.txt").read_text() == "contents"
+
+
+def test_tracked_bundle_models_survive_cached_and_refreshed_images(monkeypatch, tmp_path):
+    """The camera OBJ and browser GLB must update together even with an old
+    asset-image override, or the robot and person see different objects."""
+    source = tmp_path / "bundles/pantry/viewer/models/groceries/jar.glb"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"new jar")
+    target = tmp_path / "viewer/public/models/groceries/jar.glb"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"old image jar")
+    monkeypatch.setattr(runtime, "assets_image_ref", lambda config: "existing-image")
+    monkeypatch.setattr(runtime, "compute_geometry_inputs_hash", lambda repo: "hash")
+    monkeypatch.setattr(runtime, "install_layer_subtree", lambda *args, **kwargs: None)
+    config = {"sim_repo": tmp_path, "os_repo": tmp_path.parent, "environment_id": "pantry"}
+    runtime.ensure_viewer_public_assets(config)
+    assert target.read_bytes() == b"new jar"
+    assert runtime._stage_bundle_viewer_assets(tmp_path) == []
+    target.unlink()  # Image refresh discarded the checkout overlay.
+    runtime.ensure_viewer_public_assets(config)
+    assert target.read_bytes() == b"new jar"

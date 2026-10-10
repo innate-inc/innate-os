@@ -168,6 +168,15 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 - `INNATE_SIM_RENDER_SCALE=N` — render cameras at 1/N (helps software rendering)
 - `INNATE_SIM_HARDWARE_CAMERA_RATES=1` — render the raw camera topics at the robot's capture rates (head 15 fps, wrist 30 fps) while something subscribes to them, for recording datasets; needs native GL. See [lerobot/README.md](../lerobot/README.md#using-the-simulator)
 
+## Benchmark worlds
+
+The eight authored benchmark worlds — `counter`, `pantry`, `workshop`, `gallery`,
+`rounds`, `household`, `bridge` and `blaze` — are available in Scene setup or with
+`./innate-sim up --environment <name>`. Their props, primitive room geometry and
+challenges live in `sim/bundles/<name>`, named by `"bundle"` in each environment
+manifest. Navigation maps ship beside the manifests and are staged by `up`.
+See [the benchmark guide](bench/README.md) for the challenges and agent evaluation.
+
 ## Credits
 
 Crossroads and the traffic cars are original Innate geometry, generated from primitives. The other environments and characters are third-party works under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): the apartment by [SrMonteiro](https://sketchfab.com/crispimrafael), the backrooms by [carlcapu9](https://sketchfab.com/carlcapu9), the scenario human and the three household residents by [restore50](https://sketchfab.com/restore50), and the dog by [all of life](https://sketchfab.com/Xfdfgd).
