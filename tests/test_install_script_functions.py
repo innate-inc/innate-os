@@ -81,3 +81,54 @@ def test_no_orphaned_functions(script):
 
 def test_the_script_parses():
     subprocess.run(["sh", "-n", str(SCRIPT)], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize(
+    ("navigation", "backend", "prompt"),
+    [
+        (b"\r", "gemini", "Paste your Gemini API key"),
+        (b"\x1b[B\r", "openai", "Paste your OpenAI API key"),
+        (b"3\r", "innate", "Paste your Innate service key"),
+        (b"\x1b[A\r", "none", None),
+        (b"\x1b[A\x1b[B\x1b[B\r", "openai", "Paste your OpenAI API key"),
+    ],
+)
+def test_llm_menu_in_terminal(script, tmp_path, navigation, backend, prompt):
+    """Drive the actual raw-mode menu and masked key entry without installing anything."""
+    import os
+    import pty
+    import select
+    import time
+
+    harness = tmp_path / "menu.sh"
+    harness.write_text(
+        script[: script.rindex('\nmain "$@"')]
+        + '\nINTERACTIVE=1\nexec 3<&0\nask_llm_backend\nprintf "\\nSELECTED:%s KEYLEN:%s\\n" "$LLM_BACKEND" "${#LLM_KEY}"\n'
+    )
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(["sh", str(harness)], stdin=slave, stdout=slave, stderr=slave)
+    os.close(slave)
+    output = bytearray()
+
+    def read_until(marker):
+        deadline = time.monotonic() + 5
+        while marker not in output:
+            assert time.monotonic() < deadline, output.decode(errors="replace")
+            if select.select([master], [], [], 0.1)[0]:
+                output.extend(os.read(master, 65536))
+
+    try:
+        read_until(b"None                  run the simulator without an agent")
+        os.write(master, navigation)
+        if prompt:
+            read_until(prompt.encode())
+            os.write(master, b"sk-terminal-test-secret\r")
+        read_until(f"SELECTED:{backend}".encode())
+        assert proc.wait(timeout=5) == 0
+        assert b"sk-terminal-test-secret" not in output
+        assert f"KEYLEN:{len(b'sk-terminal-test-secret') if prompt else 0}".encode() in output
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        os.close(master)
