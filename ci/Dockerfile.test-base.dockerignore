@@ -18,3 +18,5 @@ ros2_ws/log/
 !config/**
 !workspace/
 !workspace/**
+!ci/
+!ci/build_workspace.sh
