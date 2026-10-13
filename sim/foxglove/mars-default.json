@@ -1,0 +1,265 @@
+{
+  "configById": {
+    "3D!18i6zy7": {
+      "layers": {
+        "845139cb-26bc-40b3-8161-8ab60af4baf5": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid",
+          "instanceId": "845139cb-26bc-40b3-8161-8ab60af4baf5",
+          "layerId": "foxglove.Grid",
+          "size": 10,
+          "divisions": 10,
+          "lineWidth": 1,
+          "color": "#248eff",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        },
+        "a1c2e3f4-5b6d-4e7f-8a9b-0c1d2e3f4a5b": {
+          "layerId": "foxglove.Urdf",
+          "instanceId": "a1c2e3f4-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+          "label": "MARS",
+          "visible": true,
+          "sourceType": "url",
+          "url": "package://mars_sim/urdf/mars.urdf",
+          "controlMode": "transforms",
+          "displayMode": "auto",
+          "fallbackColor": "#d9d9d9",
+          "showOutlines": false,
+          "opacity": 1,
+          "order": 2
+        }
+      },
+      "cameraState": {
+        "perspective": true,
+        "distance": 2.5,
+        "phi": 60,
+        "thetaOffset": -45,
+        "targetOffset": [
+          0,
+          0,
+          0.2
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/scan": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/mars/main_camera/points": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "rgb",
+          "colorMap": "turbo",
+          "stixelsEnabled": false
+        },
+        "/mars/arm/image_raw/compressed": {
+          "visible": false,
+          "cameraInfoTopic": "/mars/main_camera/left/camera_info",
+          "projectionFrameId": "base_link"
+        },
+        "/mars/main_camera/left/image_raw/compressed": {
+          "visible": false,
+          "cameraInfoTopic": "/mars/main_camera/left/camera_info",
+          "projectionFrameId": "base_link"
+        },
+        "/amcl_pose": {
+          "visible": false
+        },
+        "/mars/main_camera/left/image_raw": {
+          "visible": false
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {},
+      "followTf": "base_link"
+    },
+    "Image!3cjounn": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {
+        "imageTopic": "/mars/main_camera/left/image_raw/compressed"
+      }
+    },
+    "Image!u86viz": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {
+        "imageTopic": "/mars/arm/image_raw/compressed"
+      }
+    },
+    "RawMessages!1rp6yfr": {
+      "defaultExpanded": false,
+      "topicPath": "/robot_info"
+    },
+    "RawMessages!3rk2otp": {
+      "defaultExpanded": false,
+      "topicPath": "/joint_states"
+    },
+    "Teleop!4tel3op": {
+      "topic": "/cmd_vel",
+      "publishRate": 10,
+      "autoSendStopOnRelease": false,
+      "upButton": {
+        "field": "linear-x",
+        "value": 0.5
+      },
+      "downButton": {
+        "field": "linear-x",
+        "value": -0.5
+      },
+      "leftButton": {
+        "field": "angular-z",
+        "value": 1.0
+      },
+      "rightButton": {
+        "field": "angular-z",
+        "value": -1.0
+      },
+      "stopButton": {
+        "field": "linear-x",
+        "value": 0
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": "3D!18i6zy7",
+    "second": {
+      "first": "Image!3cjounn",
+      "second": {
+        "first": "Image!u86viz",
+        "second": {
+          "first": "RawMessages!1rp6yfr",
+          "second": {
+            "first": "RawMessages!3rk2otp",
+            "second": "Teleop!4tel3op",
+            "direction": "column"
+          },
+          "direction": "row"
+        },
+        "direction": "row"
+      },
+      "direction": "row"
+    },
+    "direction": "row",
+    "splitPercentage": 18.89335893243601
+  }
+}

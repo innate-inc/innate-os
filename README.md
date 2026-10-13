@@ -308,6 +308,13 @@ innate foxglove         # status
 
 Then connect Foxglove Studio to the printed `ws://` URL.
 
+A ready-made panel layout ships at [`sim/foxglove/mars-default.json`](sim/foxglove/mars-default.json)
+(**Layout → Import from file** in Foxglove Studio). It's tuned for the
+simulator's full-resolution topics — on a physical robot over Wi-Fi, repoint
+its Image/3D panels at the `/mars/main_camera/remote/*` topics first (see the
+warning below), or it will behave exactly like the raw topics do: seconds of
+lag.
+
 > **Over Wi-Fi, subscribe to the `/mars/main_camera/remote/*` topics, not the raw ones.** The raw camera images (~0.9 MB/frame) and point clouds (`/mars/main_camera/points`, ~10 MB/s) are far more than a Wi-Fi link can carry, so every panel — including `/cmd_vel` — falls seconds behind. The `remote/` namespace carries the same topics throttled to ~2 Hz (and images already compressed), which fits comfortably. Prefer `.../compressed` image topics and mono `remote/points` over `remote/points_color`.
 
 ---

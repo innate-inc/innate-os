@@ -357,7 +357,12 @@ To connect:
 1. Install and open [Foxglove Studio](https://foxglove.dev/download) (desktop or web).
 2. Choose **Open connection → Foxglove WebSocket**.
 3. Enter `ws://localhost:8765` and connect.
-4. Add panels (e.g. Image, 3D, Raw Messages) and pick the topics you want to see.
+4. **Layout → Import from file** → [`sim/foxglove/mars-default.json`](foxglove/mars-default.json)
+   gives you a ready dashboard: a 3D view (TF, `/scan`, the main camera's point
+   cloud), both camera feeds, and raw-message panels for `/robot_info` and
+   `/joint_states`. Prefer to build your own? Add panels (e.g. Image, 3D, Raw
+   Messages) and pick the topics you want to see instead — see
+   [`sim/foxglove/README.md`](foxglove/README.md) for the topic list.
 
 > **Which port?** The sim's startup log always prints the exact address to use.
 > To force a specific port or network interface, set `SIM_FOXGLOVE_PORT` /
