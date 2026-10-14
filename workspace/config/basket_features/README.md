@@ -199,3 +199,10 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
 Feature drop: lock one stationary basket pose in odometry. When more than 20 degrees oblique, drive to the 26cm frontal staging point and face the basket. Then drive to the existing final distance along its normal and face it for release. Every segment and the release geometry use the same locked pose, without new feature calls or replanning. Existing odometry freshness, cancellation, grip and arm checks remain.
 
 Optional pick_sock_pile_yoloe_features excludes the physical 50x33cm basket footprint plus 10cm and overlapping image detections above the rim. Feature drop shares its basket pose through /tmp/innate-feature-basket.json (same boot, at most 30s old at pickup start). During pickup, a missing detection preserves the known world position; fresh search detections update it. Unknown basket position keeps searching, while API failure without memory stops. Basket must remain stationary; odometry drift/reset can invalidate the remembered position. The original pickup and agent are unchanged.
+
+## Supported demo agent and local routing
+
+Use `qwen_socks_demo_3_features` for feature-based pickup exclusion and basket drop.
+For both supported agents and ignored local endpoint settings, see
+[the NVIDIA demo guide](../../NVIDIA_DEMO.md). `runtime.local.json`, when present,
+replaces `runtime.json` completely, including authentication configuration.

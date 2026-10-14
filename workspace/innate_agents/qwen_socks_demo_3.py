@@ -1,14 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-from innate_agents.qwen_sock_demo_2 import QwenSockDemo2
+from innate import Agent
+from innate_skills.drop_in_box_aruco import DropInBoxAruco
+from innate_skills.wave import Wave
 from innate_skills.pick_sock_pile_yoloe import PickSockPileYoloe
-from innate_skills.pick_sock_yoloe import PickSockYoloe
 from innate_skills.turn_in_place import TurnInPlace
 
 
-class QwenSocksDemo3(QwenSockDemo2):
-    model = 'openai-chat:Qwen3.8-Flash-Next'
+class QwenSocksDemo3(Agent):
     """Collect handfuls from a sock pile, with app instructions and wave support."""
+
+    model = "openai-chat:Qwen3.8-Flash-Next"
+    model_extra_body = '{"chat_template_kwargs":{"enable_thinking":false}}'
+    minimal_system_prompt = True
+    wait_for_skill_completion = True
+    history_max_entries = 12
+    history_max_image_turns = 0
 
     @property
     def id(self) -> str:
@@ -22,7 +29,10 @@ class QwenSocksDemo3(QwenSockDemo2):
         return []
 
     def get_skills(self):
-        return [PickSockPileYoloe if skill is PickSockYoloe else skill for skill in super().get_skills()] + [TurnInPlace]
+        return [PickSockPileYoloe, DropInBoxAruco, Wave, TurnInPlace]
+
+    def uses_gaze(self) -> bool:
+        return False
 
     def get_prompt(self) -> str:
         return """Collect as many socks as possible per grasp from a floor pile; tools only.

@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import numpy as np
 import cv2
 from innate_skills.basket_features import BasketDetector, Camera
+from innate_skills.demo_config import load_demo_config
 from innate_skills.box_marker import camera_in_base, marker_image
 from innate_skills.box_nav2 import PointController, in_odom, wrap
 
@@ -88,11 +89,7 @@ class FeatureObserver:
     def __init__(self, assets=ASSETS, api_url=None, api_token=None):
         self.assets = Path(assets)
         runtime = self.assets / "runtime.json"
-        config = (
-            json.loads(runtime.read_text())
-            if api_url is None and runtime.exists()
-            else {}
-        )
+        config = load_demo_config(runtime) if api_url is None else {}
         self.api_url = (
             os.environ.get("BASKET_POSE_API_URL", config.get("api_url", ""))
             if api_url is None

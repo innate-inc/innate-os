@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from innate_skills.approach import settled_frame
+from innate_skills.demo_config import load_demo_config
 from innate_skills.pick_sock_fast import PickSockFast
 
 from innate import SkillReturn
@@ -93,13 +94,13 @@ class PickSockYoloe(PickSockFast):
             "Content-Type: image/jpeg\r\n\r\n"
         ).encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
         config_path = Path(__file__).resolve().parents[1] / "config" / "sock_detector.json"
-        config = json.loads(config_path.read_text()) if config_path.exists() else {}
+        config = load_demo_config(config_path)
         # Explicit environment routing must not inherit another endpoint's credential.
         if os.environ.get("SOCK_YOLOE_URL"):
             endpoint = os.environ["SOCK_YOLOE_URL"]
             api_key = os.environ.get("SOCK_YOLOE_API_KEY", "")
         else:
-            endpoint = config.get("url", "http://100.107.224.18:8765")
+            endpoint = config.get("url", "http://mars-spark-sff.local:8765")
             api_key = config.get("api_key", "")
         url = endpoint.rstrip("/") + "/detect?confidence=0.05"
         headers = {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"}
