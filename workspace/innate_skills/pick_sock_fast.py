@@ -171,11 +171,15 @@ class PickSockFast(PickAnyObject):
             raise ArmFailed("Sock close-and-twist trajectory failed")
         return True
 
+    def _object_held(self):
+        """Grasp evidence hook; thin-object skills can use wrist vision."""
+        return fresh_sock_held(self)
+
     def _close_twist_lift(self, x, y, roll, pitch, yaw):
         for attempt in range(3):
             self.check_cancelled()
             super()._close_twist_lift(x, y, roll, pitch, yaw)
-            if fresh_sock_held(self):
+            if self._object_held():
                 return
             self._holding = False
             if attempt == 2:
@@ -189,10 +193,10 @@ class PickSockFast(PickAnyObject):
         self.mobility.stop()
         self.overlay.stage("verify")
         # Checked immediately after lifting above; check again after folding
-        # to catch a sock that slips during the carry motion, with no model.
+        # to catch an object that slips during the carry motion.
         self._fold_to_carry()
         self._join_fold()
-        return fresh_sock_held(self)
+        return self._object_held()
 
     def _hover_reachable(self, xy):
         p = self._p

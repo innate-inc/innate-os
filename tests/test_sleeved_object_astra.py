@@ -89,3 +89,56 @@ def test_cancel_after_model_never_returns_target():
     with patch.object(m,'settled_frame',return_value=frame()):
         with pytest.raises(SkillCancelled):h._detect_candidates('toy')
     h._box_exclusion.filter.assert_not_called()
+
+@pytest.mark.parametrize('answer,expected',[('true',True),('false',False),(' true\n',True)])
+def test_visual_grip_boolean(answer,expected):
+    h=host();h.wrist_image='old';h.wait_for=Mock(return_value='fresh')
+    h._grip_llm=Mock();h._grip_llm.ask.return_value=answer;h._holding=True
+    assert h._object_held() is expected
+    assert h._holding
+    assert h._grip_llm.ask.call_args.args[0]=='fresh'
+    assert h._grip_llm.ask.call_args.kwargs['retries']==1
+
+@pytest.mark.parametrize('answer',[None,'','maybe','true false','{"held":true}'])
+def test_unknown_grip_preserves_hold(answer):
+    h=host();h.wrist_image='old';h.wait_for=Mock(return_value='fresh')
+    h._grip_llm=Mock();h._grip_llm.ask.return_value=answer;h._holding=True
+    with pytest.raises(SkillFailed,match='unknown'):h._object_held()
+    assert h._holding
+
+def test_stale_wrist_never_calls_model():
+    h=host();h.wrist_image='old';h._holding=True;h._grip_llm=Mock()
+    def wait(read,timeout):
+        assert read() is None
+        return None
+    h.wait_for=wait
+    with pytest.raises(SkillFailed,match='fresh wrist'):h._object_held()
+    assert h._holding
+    h._grip_llm.ask.assert_not_called()
+
+def test_both_pickup_stages_use_grip_hook():
+    from innate_skills.pick_any_object import PickAnyObject
+    h=host();h._object_held=Mock(return_value=True)
+    h._fold_to_carry=Mock();h._join_fold=Mock();h._overlay=Mock()
+    with patch.object(PickAnyObject,'_close_twist_lift') as lift:
+        h._close_twist_lift(1,2,0,0,0)
+    lift.assert_called_once()
+    assert h._grasp_verified('sleeve',None)
+    assert h._object_held.call_count==2
+    h._join_fold.assert_called_once()
+
+def test_negative_grip_keeps_existing_retry_path():
+    from innate_skills.pick_any_object import PickAnyObject
+    h=host();h._object_held=Mock(side_effect=[False,True]);h._overlay=Mock()
+    h._claw_open=Mock();h._push_to_floor=Mock();h.manipulation=Mock()
+    with patch.object(PickAnyObject,'_close_twist_lift') as lift:
+        h._close_twist_lift(1,2,0,0,0)
+    assert lift.call_count==2
+    h._claw_open.assert_called_once()
+
+def test_sock_default_still_uses_joint_evidence():
+    from innate_skills import pick_sock_fast as sock
+    h=object.__new__(sock.PickSockFast)
+    with patch.object(sock,'fresh_sock_held',return_value=True) as check:
+        assert h._object_held()
+    check.assert_called_once_with(h)

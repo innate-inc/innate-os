@@ -95,5 +95,9 @@ filter the single candidate; the existing identity gate still prevents switching
 targets during a run. Empty scenes resume search; invalid replies fail without a
 target. No YOLOE request is used. Logs include request and total detector times.
 
-The existing sock grip threshold and carry motion remain in use: this detector
-alternative does not resolve the toy slipping/empty-grip verification issue.
+The sleeve skill verifies occupancy with a fresh wrist image and a separate
+Astra Ultrafast boolean call after lifting and after carrying. It does not use the
+sock joint-spacing threshold. True preserves the grasp; false follows the existing
+empty-grasp retry/failure path. Missing fresh images, failed API calls, or invalid
+answers fail as unknown while preserving the grip. Carry motion is unchanged.
+Other pickup and drop skills still use their existing joint-based checks.
