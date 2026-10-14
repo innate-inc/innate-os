@@ -32,6 +32,7 @@ def inspect_roster():
     # Physical refs are backed by metadata; deployment checks must also confirm
     # recording files, which are intentionally not bundled into these tests.
     available = dict(skills)
+    assert "innate-os/pick_up_pile_little_toy_astra" in available
     assert "innate-os/pick_up_pile_little_toy" in available
     assert "innate-os/pick_sock_yoloe" not in available
     assert not any("yoloe_pickup_base" in name for name in available)

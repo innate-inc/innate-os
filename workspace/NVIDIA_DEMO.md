@@ -78,3 +78,24 @@ The skill retains the ArUco basket exclusion and existing approach/grip settings
 Finger spacing confirms obstruction, not an exact one-toy count; toy grasp
 quality and grip calibration need physical rehearsal. The sock agents retain
 their original tool lists; this skill is separately selectable.
+
+`pick_up_pile_little_toy_astra` is the alternative detector: pinned
+`openai:gpt-6-astra`, low reasoning, `service_tier=ultrafast`, through the OpenAI
+Responses route (independent of the Qwen RunPod endpoint). It sends one settled
+high-resolution frame and requires the same native-pixel JSON fields consumed
+from YOLOE: `image.{width,height}` and `detections` containing `confidence`,
+`bbox_xyxy`, and `grasp_point_xy`. Astra supplies a visually estimated grasp point,
+not a segmentation mask. Output is validated and converted to the same 640x480
+candidate tuples and reference image. Basket exclusion is applied before initial
+selection by projected floor distance. Subsequent looks use the existing target
+identity gate; empty scenes resume search, while missing/invalid API results fail
+without producing a grasp target. No YOLOE request is used by this skill.
+
+Logs include request and complete detector-stage times under `[AstraToyPickup]`.
+Three perception-only runs on MARS-47 measured requests at 5.74/3.73/3.34 seconds,
+and total detector times at 6.53/4.56/4.07 seconds. All three responses confirmed
+Ultrafast. These are a small sample through the Innate proxy, not a latency SLA;
+the first call also renewed authentication. The pile was partly clipped by the
+camera edge and independent initial selections varied between neighboring toys.
+The existing sock grip threshold and carry motion remain in use: this detector
+alternative does not resolve the toy slipping/empty-grip verification issue.
