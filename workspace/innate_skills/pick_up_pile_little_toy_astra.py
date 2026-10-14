@@ -3,7 +3,6 @@
 """Astra alternative to YOLOE with the same detector and tracker contracts."""
 import base64
 import json
-import math
 import time
 
 import cv2
@@ -17,31 +16,30 @@ from innate_skills.pick_up_pile_little_toy import PickUpPileLittleToy, encode_jp
 from innate_skills.yoloe_pickup_base import detection_candidates
 
 DETECTION_SCHEMA = {
-    'type': 'object', 'additionalProperties': False,
-    'required': ['image', 'detections'],
-    'properties': {
-        'image': {'type': 'object', 'additionalProperties': False,
-                  'required': ['width', 'height'],
-                  'properties': {'width': {'type': 'integer'}, 'height': {'type': 'integer'}}},
-        'detections': {'type': 'array', 'items': {
-            'type': 'object', 'additionalProperties': False,
-            'required': ['confidence', 'bbox_xyxy', 'grasp_point_xy'],
-            'properties': {
-                'confidence': {'type': 'number'},
-                'bbox_xyxy': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 4, 'maxItems': 4},
-                'grasp_point_xy': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2},
-            },
-        }},
-    },
+    'type': 'object', 'additionalProperties': False, 'required': ['box'],
+    'properties': {'box': {'anyOf': [
+        {'type': 'null'},
+        {'type': 'array', 'items': {'type': 'number'}, 'minItems': 4, 'maxItems': 4},
+    ]}},
 }
 
 
 def parse_candidates(text, width, height):
-    payload = json.loads(text)
-    if payload['image'] != {'width': width, 'height': height}:
-        raise ValueError('Detector dimensions differ from camera image')
-    # Identical native-pixel JSON contract to YOLOE. Astra estimates a grasp
-    # point visually; it does not produce a segmentation mask.
+    result = json.loads(text)
+    if not isinstance(result, dict) or set(result) != {'box'}:
+        raise ValueError('Expected one box or null')
+    box = result['box']
+    detections = []
+    if box is not None:
+        if (not isinstance(box, list) or len(box) != 4 or
+                any(type(v) not in (int, float) for v in box)):
+            raise ValueError('Expected four numeric box coordinates')
+        x1, y1, x2, y2 = box
+        detections = [{'bbox_xyxy': box, 'grasp_point_xy': [(x1+x2)/2, (y1+y2)/2],
+                       'confidence': 1.0}]
+    # Preserve the downstream YOLOE contract locally. Confidence is a synthetic
+    # adapter value, not a model probability; the grasp point is the box center.
+    payload = {'image': {'width': width, 'height': height}, 'detections': detections}
     return detection_candidates(payload), payload
 
 
@@ -75,17 +73,8 @@ class PickUpPileLittleToyAstra(PickUpPileLittleToy):
                 raise ValueError('Invalid toy camera JPEG')
             height, width = image.shape[:2]
             question = (
-                f'Robot head camera, {width} pixels wide by {height} pixels high. '
-                'Locate the individual small soft toys lying on the floor in front of the robot, '
-                'including toys in a pile. Return up to six nearest visible individual toys. '
-                'Exclude objects inside baskets or boxes, objects held by the gripper, robot hardware, '
-                'and background furniture. Never return a box around a whole pile. '
-                'For each toy give a tight bbox_xyxy [left,top,right,bottom] and grasp_point_xy [x,y] '
-                'on the visible body of that same toy, not empty space or a gap between toys. '
-                'Use absolute pixels in THIS image, not 0-1000 coordinates. '
-                'Confidence is from 0 to 1. Set image width and height to the supplied dimensions. '
-                'Return an empty detections list if no individual floor toy is visible. '
-                'Return only the specified JSON object.'
+                f'{width}x{height} image. Box the closest individual small toy on the floor. '
+                'Exclude baskets and held objects. Pixels [left,top,right,bottom]; null if absent.'
             )
             request_started = time.monotonic()
             text = self.llm.ask(frame, question, logger=self.logger, retries=1)
@@ -98,11 +87,7 @@ class PickUpPileLittleToyAstra(PickUpPileLittleToy):
         except (OSError, ValueError, KeyError, TypeError, cv2.error) as error:
             raise SkillFailed(f'Astra toy detection failed: {error}') from error
         candidates = self._box_exclusion.filter(candidates, tracking_image)
-        projected = [(c, pixel_to_floor(c[0], c[1], self._p['tilt_deg'])) for c in candidates]
-        candidates = [c for c, xy in sorted(
-            ((c, xy) for c, xy in projected if xy is not None),
-            key=lambda pair: math.hypot(*pair[1]),
-        )]
+        candidates = [c for c in candidates if pixel_to_floor(c[0], c[1], self._p['tilt_deg']) is not None]
         self._astra_payload = payload
         self._astra_timing = {'request_seconds': request_seconds, 'total_seconds': time.monotonic() - started}
         self.logger.info(f'[AstraToyPickup] model=gpt-6-astra requested_tier=ultrafast '

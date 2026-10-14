@@ -9,7 +9,7 @@ import pytest
 
 from innate.exceptions import SkillCancelled, SkillFailed
 from innate_skills import pick_up_pile_little_toy_astra as m
-from test_little_toy_pickup import detection, payload, frame
+from test_little_toy_pickup import frame
 
 
 def host():
@@ -31,40 +31,44 @@ def test_pins_responses_astra_ultrafast_and_strict_detector_format():
 
 
 def test_same_yolo_native_pixel_response_and_tracker_tuple():
-    p = payload([detection([600,400,800,600],[700,500])],1280,720)
-    c, returned = m.parse_candidates(json.dumps(p),1280,720)
-    assert returned == p
+    c, returned = m.parse_candidates('{"box":[600,400,800,600]}',1280,720)
+    assert returned['image'] == {'width':1280,'height':720}
+    assert returned['detections'][0]['grasp_point_xy'] == [700,500]
     assert c[0][0] == 350
     assert c[0][1] == pytest.approx(500*480/720)
     assert c[0][2] is None
     assert c[0][3] == pytest.approx((300,400*480/720,400,400))
 
 
-@pytest.mark.parametrize('text', ['not json', '{}', json.dumps(payload([],640,480)),
-    json.dumps(payload([detection([600,400,800,600],[900,500])],1280,720))])
+@pytest.mark.parametrize('text', ['not json', '{}', '[]',
+    '{"box":[1,2,3]}', '{"box":[0,0,1300,500]}', '{"box":[5,5,4,4]}',
+    '{"box":[0,0,NaN,4]}', '{"box":[true,0,4,4]}',
+    '{"box":[[1,2,3,4],[5,6,7,8]]}', '{"box":null,"extra":1}'])
 def test_invalid_responses_rejected(text):
     with pytest.raises((ValueError, KeyError)):
         m.parse_candidates(text,1280,720)
 
 
-def test_real_pipeline_sorts_nearest_not_confidence_and_scales_reference():
+def test_real_pipeline_single_box_and_scales_reference():
     h=host()
-    h.llm.ask.return_value=json.dumps(payload([
-        detection([100,300,200,400],[150,350],.99),
-        detection([500,500,600,600],[550,550],.7),
-        detection([10,10,20,20],[15,15],.9)],1280,720))
-    def floor(u,v,tilt):return None if v<100 else (2,0) if u<100 else (.4,.1)
-    with patch.object(m,'settled_frame',return_value=frame()),patch.object(m,'pixel_to_floor',side_effect=floor):
+    h.llm.ask.return_value='{"box":[500,500,600,600]}'
+    with patch.object(m,'settled_frame',return_value=frame()),patch.object(m,'pixel_to_floor',return_value=(.4,.1)):
         c,image=h._detect_candidates('toy')
-    assert len(c)==2 and c[0][0]==275
+    assert len(c)==1 and c[0][0]==275
     assert cv2.imdecode(np.frombuffer(base64.b64decode(image),np.uint8),1).shape[:2]==(480,640)
     assert h.llm.ask.call_args.kwargs['retries']==1
-    assert 'not 0-1000' in h.llm.ask.call_args.args[1]
+    assert len(h.llm.ask.call_args.args[1]) < 200
     h._box_exclusion.filter.assert_called_once()
 
 
+def test_unprojectable_box_does_not_become_target():
+    h=host();h.llm.ask.return_value='{"box":[0,0,10,10]}'
+    with patch.object(m,'settled_frame',return_value=frame()),patch.object(m,'pixel_to_floor',return_value=None):
+        assert h._detect_candidates('toy')[0]==[]
+
+
 def test_empty_scene_returns_no_candidate():
-    h=host();h.llm.ask.return_value=json.dumps(payload([],1280,720))
+    h=host();h.llm.ask.return_value='{"box":null}'
     with patch.object(m,'settled_frame',return_value=frame()):
         assert h._detect_candidates('toy')[0]==[]
 

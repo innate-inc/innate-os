@@ -80,22 +80,20 @@ quality and grip calibration need physical rehearsal. The sock agents retain
 their original tool lists; this skill is separately selectable.
 
 `pick_up_pile_little_toy_astra` is the alternative detector: pinned
-`openai:gpt-6-astra`, low reasoning, `service_tier=ultrafast`, through the OpenAI
-Responses route (independent of the Qwen RunPod endpoint). It sends one settled
-high-resolution frame and requires the same native-pixel JSON fields consumed
-from YOLOE: `image.{width,height}` and `detections` containing `confidence`,
-`bbox_xyxy`, and `grasp_point_xy`. Astra supplies a visually estimated grasp point,
-not a segmentation mask. Output is validated and converted to the same 640x480
-candidate tuples and reference image. Basket exclusion is applied before initial
-selection by projected floor distance. Subsequent looks use the existing target
-identity gate; empty scenes resume search, while missing/invalid API results fail
-without producing a grasp target. No YOLOE request is used by this skill.
+`openai:gpt-6-astra`, low reasoning (Astra's minimum), `service_tier=ultrafast`,
+through OpenAI Responses independently of Qwen RunPod. The system prompt is
+empty. A short image instruction asks only for the closest individual floor toy,
+excluding baskets and held objects. Its strict output is
+`{"box":[left,top,right,bottom]}` in native pixels, or `{"box":null}`.
 
-Logs include request and complete detector-stage times under `[AstraToyPickup]`.
-Three perception-only runs on MARS-47 measured requests at 5.74/3.73/3.34 seconds,
-and total detector times at 6.53/4.56/4.07 seconds. All three responses confirmed
-Ultrafast. These are a small sample through the Innate proxy, not a latency SLA;
-the first call also renewed authentication. The pile was partly clipped by the
-camera edge and independent initial selections varied between neighboring toys.
+The adapter supplies image dimensions, a synthetic confidence of 1.0 (not a
+model probability), and the box-center grasp point locally. It preserves the
+YOLOE-compatible payload and the same 640x480 tracker tuples and reference image.
+Astra estimates a box, not a segmentation mask: its center can differ from the
+best grasp location on irregular toys. Basket exclusion and floor projection
+filter the single candidate; the existing identity gate still prevents switching
+targets during a run. Empty scenes resume search; invalid replies fail without a
+target. No YOLOE request is used. Logs include request and total detector times.
+
 The existing sock grip threshold and carry motion remain in use: this detector
 alternative does not resolve the toy slipping/empty-grip verification issue.
