@@ -81,6 +81,15 @@ def test_demo_three_no_longer_inherits_retired_agents(roster):
     assert roster["qwen_socks_demo_3"]["mro"] == ["QwenSocksDemo3", "Agent", "ABC", "object"]
 
 
+def test_retired_demo_agents_are_not_discoverable(roster):
+    retired = {
+        "gemini_sock_agent", "gemini_sock_stationary_agent", "lego_demo_agent",
+        "mapped_sock_agent", "sock_demo_agent", "qwen_sock_agent",
+        "qwen_sock_demo_2", "sock_rehearsed_agent",
+    }
+    assert not retired.intersection(roster)
+    assert "demo_agent" in roster
+
 
 if __name__ == "__main__" and sys.argv[1:] == ["--inspect"]:
     print(json.dumps(inspect_roster()))

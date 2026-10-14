@@ -119,13 +119,14 @@ baskets, arbitrary views, and robot-motion performance remain unverified.
 Like the ArUco routine, it lifts first, searches right for the basket, uses a
 26 cm frontal waypoint when the face is more than 20 degrees oblique, then
 performs final docking, release and retreat. It does not plan around obstacles.
-The original ArUco skill is unchanged.
+The feature skill inherits the shared ArUco arm routines.
 
-The checked-in `runtime.json` selects the RTX Spark GPU backend at
-`http://10.61.14.242:9071`, without a bearer token. The configuration is
-read whenever the skill starts; no ROS restart is required. The service reports
-`rootsift_full_resolution_cuda_sift`. Original frame and calibration hashes are
-still verified by the client. Qwen and YOLOE endpoints are unchanged.
+Put deployment-specific endpoint and authentication settings in ignored
+`runtime.local.json`. It replaces the tracked `runtime.json` default in full.
+The configuration is read whenever the skill starts; no ROS restart is required.
+Original frame and calibration hashes are verified by the client. The selected
+server determines whether feature extraction uses CPU or GPU; this repository's
+Python API alone does not establish GPU acceleration.
 
 `BASKET_POSE_API_URL` and `BASKET_POSE_API_TOKEN_FILE` can override runtime settings.
 Without runtime configuration or an environment URL, inference runs locally.
@@ -135,13 +136,10 @@ API errors retain the existing retry behavior without switching backends.
 For a stationary live probe on MARS-47:
 
 ```sh
-python scripts/basket_pose_probe.py --live --frames 3   --api-url http://10.61.14.242:9071 --output /tmp/basket-api-check
+python scripts/basket_pose_probe.py --live --frames 3   --api-url http://<basket-host>:9071 --output /tmp/basket-api-check
 ```
 
-The previous Mac configuration is retained on this robot in
-`/tmp/basket-runtime-before-spark.json` for rollback; its token remains outside Git.
-
-During basket search the robot turns continuously right while API requests run, using at most one request at a time. A recognized basket stops the turn; a new stationary frame supplies the metric pose. Moving detections never supply navigation or release coordinates. Camera/API errors stop the turn and reuse stationary retries. Docking still stops and settles before each metric observation. The skill uses ArUco's injected MainHighResImage/MainImage stream and waits for a new frame object
+During basket search the robot turns continuously right while API requests run, using at most one request at a time. A recognized basket stops the turn; a new stationary frame supplies the metric pose. Moving detections never supply navigation or release coordinates. Camera/API errors stop the turn and reuse stationary retries. A fresh stationary metric pose is locked before docking; docking does not visually replan. The skill uses ArUco's injected MainHighResImage/MainImage stream and waits for a new frame object
 after settling (the same three-second stalled-stream bound as ArUco). It sends
 the original JPEG bytes to the API, without reconnecting to rosbridge or decoding
 and re-encoding. Calibration comes from the saved snapshot; the standalone live
@@ -150,10 +148,8 @@ timestamp, so the skill does not claim a sensor-time capture-age check. Inferenc
 cancellable wait; its worker has no hardware handles. Motion during inference
 invalidates the result. API responses must identify the exact input image and
 calibration. A fresh missing-basket result starts rightward rotation without
-translation, followed by another stopped observation. Search stops after a full
-odometry-measured revolution or the inherited phase timeout: 175 seconds for
-initial acquisition/repositioning, 50 seconds for final docking/recovery.
-The initial search is capped at 0.70 rad/s; close recovery at 0.40 rad/s.
+translation, followed by another stopped observation. Search stops after a full odometry-measured revolution or the 175-second
+controller deadline shared by search and docking. Search is capped at 0.70 rad/s.
 Camera/API errors do not authorize blind search and retain three consecutive
 stationary retries. If the basket is recognized but its pose fit is missing or
 ambiguous, the robot waits for fresh observations until the existing phase
@@ -163,13 +159,14 @@ an individual observation has a 45-second limit. A failed head-settle check
 stops before lifting. Existing grip, arm-pose, and clearance safeguards remain.
 
 The visible face centre and inward normal are transformed with measured head
-pitch into base_link. The base approaches a point 16 cm in front of that centre,
-in steps of at most 15 cm at up to 0.10 m/s (the ArUco final-approach cap). Position tolerance is 4.5 cm and
-normal-heading tolerance is 0.13 radians. After checking the held sock, it
-reobserves before calculating release. If another move is needed, it checks
-the held sock again after that move. Wrist release is 13 cm
-inside the face and 8 cm to its right, preserving the rehearsed arm offset.
-Thus docking is centred; release is deliberately offset inside the basket.
+pitch into base_link and then locked in odometry coordinates. For oblique views
+(over 20 degrees), the base first reaches a point 26 cm in front of the face,
+then docks 21 cm in front of it. The existing point controller handles motion
+and tolerances. After docking it checks the held sock, then transforms the
+locked basket pose using current odometry to calculate release; it does not
+re-detect the basket. Keep the basket stationary throughout this sequence.
+Wrist release is 13 cm inside the face and 8 cm to its right, preserving the
+rehearsed arm offset. Docking is centred; release is offset inside the basket.
 Arm motion, pitch selection, entry arc, release/shake, clearance, folding and
 retreat inherit the ArUco implementation. Wrist heights are unchanged at
 32 cm entry, 18 cm release, and 26 cm clearance. These inherited heights have

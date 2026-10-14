@@ -54,3 +54,11 @@ creating hardware nodes or issuing motion. Before deployment, rehearse both
 agents on hardware: pickup, basket approach/drop, repeat, stop during pickup and
 drop, failure recovery, and wave/app instructions. Local tests cannot establish
 physical grasp quality, calibration accuracy, or successful basket landing.
+
+## Retired attempts
+
+Earlier Gemini, stationary, mapped, single-sock Qwen, Demo 2, and LEGO-specific
+agent attempts have been removed. Their source and old configuration snapshots
+remain in Git history. The general `demo_agent` and its LEGO pickup tool remain
+available, as do unrelated custom agents. Shared pickup, ArUco, navigation, and
+arm helpers remain implementation dependencies of the two supported sock agents.
