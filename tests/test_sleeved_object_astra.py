@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from innate.exceptions import SkillCancelled, SkillFailed
-from innate_skills import pick_up_pile_little_toy_astra as m
+from innate_skills import pick_up_sleeved_object_astra as m
 from test_little_toy_pickup import frame
 
 
 def host():
-    h = object.__new__(m.PickUpPileLittleToyAstra)
+    h = object.__new__(m.PickUpSleevedObjectAstra)
     h.mobility = Mock(); h.check_cancelled = Mock(); h.logger = Mock(); h.llm = Mock()
     h._box_exclusion = Mock(); h._box_exclusion.filter.side_effect = lambda c, image: c
     h._last_seen = None
@@ -21,13 +21,13 @@ def host():
 
 
 def test_pins_responses_astra_ultrafast_and_strict_detector_format():
-    llm = m.PickUpPileLittleToyAstra.llm
+    llm = m.PickUpSleevedObjectAstra.llm
     assert llm.model == 'openai:gpt-6-astra'
     extra = json.loads(llm._extra_body)
     assert extra['service_tier'] == 'ultrafast'
     assert extra['text']['format']['strict'] is True
     assert extra['text']['format']['schema'] == m.DETECTION_SCHEMA
-    assert m.PickUpPileLittleToyAstra.requires_llm
+    assert m.PickUpSleevedObjectAstra.requires_llm
 
 
 def test_same_yolo_native_pixel_response_and_tracker_tuple():
@@ -57,7 +57,11 @@ def test_real_pipeline_single_box_and_scales_reference():
     assert len(c)==1 and c[0][0]==275
     assert cv2.imdecode(np.frombuffer(base64.b64decode(image),np.uint8),1).shape[:2]==(480,640)
     assert h.llm.ask.call_args.kwargs['retries']==1
-    assert len(h.llm.ask.call_args.args[1]) < 200
+    question = h.llm.ask.call_args.args[1]
+    assert len(question) < 240
+    assert 'protective sleeve' in question and 'floor ahead' in question
+    assert 'Exclude unsleeved objects' in question
+    assert 'protective sleeve' in m.PickUpSleevedObjectAstra.detection_prompt
     h._box_exclusion.filter.assert_called_once()
 
 

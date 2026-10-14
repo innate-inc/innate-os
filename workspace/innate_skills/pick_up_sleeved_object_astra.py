@@ -43,21 +43,22 @@ def parse_candidates(text, width, height):
     return detection_candidates(payload), payload
 
 
-class PickUpPileLittleToyAstra(PickUpPileLittleToy):
-    """Pick the closest visible individual small soft toy on the floor using Astra Ultrafast."""
+class PickUpSleevedObjectAstra(PickUpPileLittleToy):
+    """Pick the closest object in a protective sleeve on the floor ahead using Astra Ultrafast."""
 
+    detection_prompt = 'an object in a protective sleeve on the floor in front of the robot'
     requires_llm = True
     llm: Llm = Llm(
         'openai:gpt-6-astra', thinking='low',
         extra_body=json.dumps({
             'service_tier': 'ultrafast',
-            'text': {'format': {'type': 'json_schema', 'name': 'toy_detections',
+            'text': {'format': {'type': 'json_schema', 'name': 'sleeved_object',
                                 'schema': DETECTION_SCHEMA, 'strict': True}},
         }),
     )
 
     def execute(self) -> SkillReturn:
-        """Locate the nearest floor toy with Astra, track it, then pick it up."""
+        """Locate the nearest sleeved object ahead with Astra, track it, then pick it up."""
         return super().execute()
 
     def _detect_candidates(self, prompt):
@@ -66,15 +67,15 @@ class PickUpPileLittleToyAstra(PickUpPileLittleToy):
         frame = settled_frame(self, self._p['settle_s'], read=lambda: self.main_highres_image)
         self.check_cancelled()
         if not frame:
-            raise SkillFailed('No high-resolution camera image for Astra toy pickup')
+            raise SkillFailed('No high-resolution camera image for Astra sleeved-object pickup')
         try:
             image = cv2.imdecode(np.frombuffer(base64.b64decode(frame, validate=True), np.uint8), cv2.IMREAD_COLOR)
             if image is None:
-                raise ValueError('Invalid toy camera JPEG')
+                raise ValueError('Invalid sleeved-object camera JPEG')
             height, width = image.shape[:2]
             question = (
-                f'{width}x{height} image. Box the closest individual small toy on the floor. '
-                'Exclude baskets and held objects. Pixels [left,top,right,bottom]; null if absent.'
+                f'{width}x{height} image. Box the closest object in a protective sleeve on the floor ahead. '
+                'Exclude unsleeved objects, baskets and held objects. Pixels [left,top,right,bottom]; null if absent.'
             )
             request_started = time.monotonic()
             text = self.llm.ask(frame, question, logger=self.logger, retries=1)
@@ -85,11 +86,11 @@ class PickUpPileLittleToyAstra(PickUpPileLittleToy):
             candidates, payload = parse_candidates(text, width, height)
             tracking_image = base64.b64encode(encode_jpeg(cv2.resize(image, (IMG_W, IMG_H)))).decode()
         except (OSError, ValueError, KeyError, TypeError, cv2.error) as error:
-            raise SkillFailed(f'Astra toy detection failed: {error}') from error
+            raise SkillFailed(f'Astra sleeved-object detection failed: {error}') from error
         candidates = self._box_exclusion.filter(candidates, tracking_image)
         candidates = [c for c in candidates if pixel_to_floor(c[0], c[1], self._p['tilt_deg']) is not None]
         self._astra_payload = payload
         self._astra_timing = {'request_seconds': request_seconds, 'total_seconds': time.monotonic() - started}
-        self.logger.info(f'[AstraToyPickup] model=gpt-6-astra requested_tier=ultrafast '
+        self.logger.info(f'[AstraSleevedPickup] model=gpt-6-astra requested_tier=ultrafast '
                          f'timing={self._astra_timing} candidates={len(candidates)} detections={payload}')
         return candidates, tracking_image

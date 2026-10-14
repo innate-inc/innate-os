@@ -79,18 +79,18 @@ Finger spacing confirms obstruction, not an exact one-toy count; toy grasp
 quality and grip calibration need physical rehearsal. The sock agents retain
 their original tool lists; this skill is separately selectable.
 
-`pick_up_pile_little_toy_astra` is the alternative detector: pinned
+`pick_up_sleeved_object_astra` is the alternative detector: pinned
 `openai:gpt-6-astra`, low reasoning (Astra's minimum), `service_tier=ultrafast`,
 through OpenAI Responses independently of Qwen RunPod. The system prompt is
-empty. A short image instruction asks only for the closest individual floor toy,
-excluding baskets and held objects. Its strict output is
+empty. A short image instruction asks only for the closest object in a protective sleeve on the floor ahead,
+excluding unsleeved objects, baskets and held objects. Its strict output is
 `{"box":[left,top,right,bottom]}` in native pixels, or `{"box":null}`.
 
 The adapter supplies image dimensions, a synthetic confidence of 1.0 (not a
 model probability), and the box-center grasp point locally. It preserves the
 YOLOE-compatible payload and the same 640x480 tracker tuples and reference image.
 Astra estimates a box, not a segmentation mask: its center can differ from the
-best grasp location on irregular toys. Basket exclusion and floor projection
+best grasp location on irregular objects. Basket exclusion and floor projection
 filter the single candidate; the existing identity gate still prevents switching
 targets during a run. Empty scenes resume search; invalid replies fail without a
 target. No YOLOE request is used. Logs include request and total detector times.
