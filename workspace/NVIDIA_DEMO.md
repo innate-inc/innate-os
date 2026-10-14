@@ -57,6 +57,9 @@ physical grasp quality, calibration accuracy, or successful basket landing.
 
 ## Retired attempts
 
+The standalone `pick_sock_yoloe` tool is retired; its shared implementation is
+now a private base for the two supported pile-pickup tools.
+
 Earlier Gemini, stationary, mapped, single-sock Qwen, Demo 2, and LEGO-specific
 agent attempts have been removed. Their source and old configuration snapshots
 remain in Git history. The general `demo_agent` and its LEGO pickup tool remain

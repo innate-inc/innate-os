@@ -61,16 +61,16 @@ class SkillTests(unittest.TestCase):
   from innate_skills import pick_sock_pile_yoloe_features as skill
   from innate.exceptions import SkillCancelled
   h=NS()
-  with patch.object(skill,'FeatureBasketExclusion') as exclusion,patch.object(skill.PickSockYoloe,'execute',side_effect=SkillCancelled('stop')):
+  with patch.object(skill,'FeatureBasketExclusion') as exclusion,patch.object(skill._YoloePickupBase,'execute',side_effect=SkillCancelled('stop')):
    with self.assertRaises(SkillCancelled):skill.PickSockPileYoloeFeatures.execute(h)
    exclusion.return_value.close.assert_called_once()
  def test_empty_filter_result_returns_to_existing_search(self):
   from innate_skills.pick_sock_pile_yoloe_features import PickSockPileYoloeFeatures
-  from innate_skills.pick_sock_yoloe import PickSockYoloe
+  from innate_skills.yoloe_pickup_base import _YoloePickupBase
   h=object.__new__(PickSockPileYoloeFeatures)
   # Bypass hardware construction; the candidate pipeline is the real inherited path.
   h._box_exclusion=Mock();h._box_exclusion.filter.return_value=[]
-  with patch.object(PickSockYoloe,'_detect_candidates',return_value=([(1,2,None,(0,0,3,4))],'image')),patch.object(PickSockPileYoloeFeatures,'logger',new_callable=lambda:Mock(),create=True):
+  with patch.object(_YoloePickupBase,'_detect_candidates',return_value=([(1,2,None,(0,0,3,4))],'image')),patch.object(PickSockPileYoloeFeatures,'logger',new_callable=lambda:Mock(),create=True):
    self.assertEqual(h._detect_candidates('pile'),([], 'image'))
 
 if __name__=='__main__':unittest.main()

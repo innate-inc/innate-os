@@ -31,6 +31,8 @@ def inspect_roster():
     # Physical refs are backed by metadata; deployment checks must also confirm
     # recording files, which are intentionally not bundled into these tests.
     available = dict(skills)
+    assert "innate-os/pick_sock_yoloe" not in available
+    assert not any("yoloe_pickup_base" in name for name in available)
     for package, namespace in (("innate_skills", "innate-os"), ("custom_skills", "local")):
         for metadata in (ROOT / "workspace" / package).rglob("metadata.json"):
             available[f"{namespace}/{metadata.parent.name}"] = json.loads(metadata.read_text())

@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from innate_skills.approach import FloorApproach
-from innate_skills.pick_sock_yoloe import PickSockYoloe
+from innate_skills.yoloe_pickup_base import _YoloePickupBase
 from innate_skills.sock_box_exclusion import SockBoxExclusion
 
 from innate import SkillReturn
 from innate.geometry import floor_to_pixel, pixel_to_floor
 
 
-class PickSockPileYoloe(PickSockYoloe):
+class PickSockPileYoloe(_YoloePickupBase):
     """Track and grasp one selected YOLO mask point on a floor pile."""
 
 
     detection_prompt = "a pile of socks"
     detection_prompts = ("a pile of socks", "a pile of clothes")
     # The rehearsed pile is left of the box; positive yaw searches left.
-    _p = {**PickSockYoloe._p, "search_turns_deg": (0, 90, 90, 90)}
+    _p = {**_YoloePickupBase._p, "search_turns_deg": (0, 90, 90, 90)}
 
     def execute(self) -> SkillReturn:
         """Track and grasp the same YOLO mask point on a floor pile."""

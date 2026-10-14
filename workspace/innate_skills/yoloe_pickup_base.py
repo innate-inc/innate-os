@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Rehearsed green-sock pickup using the remote YOLOE detector."""
+"""Shared YOLOE detection and tracking implementation for pile pickup."""
 import base64
 import json
 import math
@@ -53,8 +53,8 @@ def detection_candidates(payload, threshold=0.05):
     return [candidate for _, candidate in sorted(found, key=lambda pair: pair[0], reverse=True)]
 
 
-class PickSockYoloe(PickSockFast):
-    """Search by turning, then approach and pick a green floor sock using YOLOE."""
+class _YoloePickupBase(PickSockFast):
+    """Private implementation base; only the pile skills are selectable."""
 
     detection_prompt = "green sock"
     requires_llm = False
