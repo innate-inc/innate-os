@@ -51,8 +51,11 @@ class DropInBoxAruco(DropInBoxFast):
         # A live target is already 13 cm inside along the box normal. Testing
         # robot-X against the taught edge would reject valid oblique targets.
 
+    def _object_held(self):
+        return fresh_sock_held(self, timeout=None)
+
     def _holding(self, closed):
-        return closed and fresh_sock_held(self, timeout=None)
+        return closed and self._object_held()
 
     def _lift_out(self) -> None:
         """Complete the clearance lift without a fixed measured-height gate."""
@@ -202,14 +205,14 @@ class DropInBoxAruco(DropInBoxFast):
             self.overlay.begin("marker box", stages=["approach", "release"], frame=tuple(config["image_size"]))
             self.overlay.stage("approach")
             dock_via_point(self, config)
-            if not fresh_sock_held(self, timeout=None):
+            if not self._object_held():
                 raise SkillFailed("Sock slipped during approach; refusing an empty drop")
             final_dock.search_before_approach = True
             final_dock.approach_timeout = 50
             follower = MarkerFollower(self.mobility)
             follower.final_approach()
             final_dock.run(follower)
-            if not fresh_sock_held(self, timeout=None):
+            if not self._object_held():
                 raise SkillFailed("Sock slipped during final alignment; refusing an empty drop")
             release_x, release_y, _box_yaw = observe_box_release(
                 self, final_dock.detector, self.DROP_RIGHT_M, self._p["drop_inset"],

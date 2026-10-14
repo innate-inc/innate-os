@@ -99,3 +99,13 @@ def test_retired_demo_agents_are_not_discoverable(roster):
 
 if __name__ == "__main__" and sys.argv[1:] == ["--inspect"]:
     print(json.dumps(inspect_roster()))
+
+
+def test_keychain_voice_agent_is_single_delivery_and_gemini(roster):
+    agent=roster['keychain_assistant']
+    assert agent['model']=='google:gemini-3.8-flash'
+    assert agent['skills']==['innate-os/pick_up_sleeved_object_astra','innate-os/drop_sleeved_object_in_box']
+    assert agent['inputs'] and agent['wait'] and not agent['gaze']
+    assert 'Never repeat the cycle automatically' in agent['prompt']
+    assert 'never drop after failed pickup' in agent['prompt']
+    assert 'Can you please bring me the keychain?' in agent['prompt']

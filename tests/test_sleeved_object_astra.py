@@ -142,3 +142,14 @@ def test_sock_default_still_uses_joint_evidence():
     with patch.object(sock,'fresh_sock_held',return_value=True) as check:
         assert h._object_held()
     check.assert_called_once_with(h)
+
+@pytest.mark.parametrize('verdict',[True,False])
+def test_sleeved_drop_uses_visual_not_joint_check(verdict):
+    from innate_skills import drop_sleeved_object_in_box as drop
+    from innate_skills import drop_in_box_aruco as aruco
+    h=object.__new__(drop.DropSleevedObjectInBox)
+    with patch.object(drop,'visual_grip_held',return_value=verdict) as visual, patch.object(aruco,'fresh_sock_held',side_effect=AssertionError('joint threshold used')):
+        assert h._holding(True) is verdict
+        assert h._object_held() is verdict
+        assert h._holding(False) is False
+        assert visual.call_count==2

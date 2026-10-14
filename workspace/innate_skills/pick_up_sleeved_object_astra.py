@@ -43,6 +43,32 @@ def parse_candidates(text, width, height):
     return detection_candidates(payload), payload
 
 
+def visual_grip_held(host):
+    host.mobility.stop()
+    stale = host.wrist_image
+    def fresh_frame():
+        image = host.wrist_image
+        return image if image and image is not stale else None
+    image = host.wait_for(fresh_frame, timeout=1.0)
+    host.check_cancelled()
+    if not image:
+        raise SkillFailed('Grasp verification unknown: no fresh wrist image; preserving grip')
+    started = time.monotonic()
+    answer = host._grip_llm.ask(
+        image,
+        'Is any object held between or hanging from the gripper fingers? '
+        'Ignore background objects. Return only true or false.',
+        logger=host.logger, retries=1,
+    )
+    host.check_cancelled()
+    answer = answer.strip().lower() if isinstance(answer, str) else None
+    host.logger.info(f'[AstraGrip] answer={answer!r} seconds={time.monotonic()-started:.3f}')
+    if answer not in ('true', 'false'):
+        # Do not clear _holding: the normal failure cleanup keeps the grip.
+        raise SkillFailed('Grasp verification unknown: invalid or failed Astra response; preserving grip')
+    return answer == 'true'
+
+
 class PickUpSleevedObjectAstra(PickUpPileLittleToy):
     """Pick the closest object in a protective sleeve on the floor ahead using Astra Ultrafast."""
 
@@ -62,29 +88,7 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
                     extra_body=json.dumps({'service_tier': 'ultrafast', 'max_output_tokens': 256}))
 
     def _object_held(self):
-        self.mobility.stop()
-        stale = self.wrist_image
-        def fresh_frame():
-            image = self.wrist_image
-            return image if image and image is not stale else None
-        image = self.wait_for(fresh_frame, timeout=1.0)
-        self.check_cancelled()
-        if not image:
-            raise SkillFailed('Grasp verification unknown: no fresh wrist image; preserving grip')
-        started = time.monotonic()
-        answer = self._grip_llm.ask(
-            image,
-            'Is any object held between or hanging from the gripper fingers? '
-            'Ignore background objects. Return only true or false.',
-            logger=self.logger, retries=1,
-        )
-        self.check_cancelled()
-        answer = answer.strip().lower() if isinstance(answer, str) else None
-        self.logger.info(f'[AstraGrip] answer={answer!r} seconds={time.monotonic()-started:.3f}')
-        if answer not in ('true', 'false'):
-            # Do not clear _holding: the normal failure cleanup keeps the grip.
-            raise SkillFailed('Grasp verification unknown: invalid or failed Astra response; preserving grip')
-        return answer == 'true'
+        return visual_grip_held(self)
 
     def execute(self) -> SkillReturn:
         """Locate the nearest sleeved object ahead with Astra, track it, then pick it up."""

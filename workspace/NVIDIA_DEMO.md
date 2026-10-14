@@ -100,4 +100,17 @@ Astra Ultrafast boolean call after lifting and after carrying. It does not use t
 sock joint-spacing threshold. True preserves the grasp; false follows the existing
 empty-grasp retry/failure path. Missing fresh images, failed API calls, or invalid
 answers fail as unknown while preserving the grip. Carry motion is unchanged.
-Other pickup and drop skills still use their existing joint-based checks.
+Other pickup skills and the original sock drop skills retain their joint-based checks.
+
+## Keychain voice assistant
+
+`keychain_assistant` (Keychain Assistant) uses `google:gemini-3.8-flash` and
+microphone input. A request such as "Can you please bring me the keychain?"
+starts one narrated `pick_up_sleeved_object_astra` → `drop_sleeved_object_in_box`
+cycle. It waits for pickup success before dropping, stops on failure, and waits
+for a new request after delivery. Startup and idle time must not trigger motion.
+Astra still performs pickup perception and wrist occupancy checks. The dedicated
+sleeve drop variant uses wrist vision for all three grip checks, retaining the
+ArUco approach, reachability, clearance and release behavior. Existing sock agents
+and their drop skill retain joint-based checks. Speech is brief at each stage;
+landing is not visually verified.
