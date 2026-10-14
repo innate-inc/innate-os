@@ -1128,5 +1128,4 @@ class PickAnyObject(Skill):
         finally:
             self.mobility.stop()
             self._rest_arm(keep_grip=self._holding)
-            if self._p.get("reset_head_after_skill", True):
-                self.head.set_position(0)
+            self.head.set_position(0)

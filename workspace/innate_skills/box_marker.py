@@ -494,6 +494,7 @@ class MarkerDock:
         lock = lost = 0
         last_offset = None
         near_box = arrival_latched = False
+        self.near_box = False
         recovery = MarkerOvershootRecovery(24 if not self.stationary else self.horizontal_tolerance)
         try:
             if self.search_before_approach:
@@ -565,6 +566,7 @@ class MarkerDock:
                     last_offset = float(du)
                     size_error = 1 - features[2] / self.goal[2]
                     near_box = near_box or size_error <= 0.25
+                    self.near_box = near_box
                     if lock >= 1:
                         arrived = (self.stationary and abs(du) <= self.horizontal_tolerance) or (
                             not self.stationary and size_error <= 0.04

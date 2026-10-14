@@ -6,7 +6,6 @@ from innate_skills.approach import FloorApproach
 from innate_skills.box_features import (
     FeatureObserver,
     dock_features,
-    dock_features_via_point,
     release_target,
 )
 from innate_skills.drop_in_box_aruco import DropInBoxAruco
@@ -23,9 +22,11 @@ class DropInBoxFeatures(DropInBoxAruco):
 
     Start holding a sock with a clear approach path; searches right for the basket.
     Matches its natural texture, with no marker or language-model localization.
-    Stops to observe between short moves; fails holding the sock if no reliable
+    Searches continuously, locks one stationary pose, then positions in front and docks; fails holding the sock if no reliable
     pose is available. Experimental: physical docking/drop is not yet validated.
     """
+
+    FINAL_DISTANCE_M = 0.21  # 5 cm extra basket-face clearance, feature variant only
 
     head_position: HeadState
 
@@ -68,20 +69,13 @@ class DropInBoxFeatures(DropInBoxAruco):
                 "feature basket", stages=["approach", "release"], frame=(1280, 720)
             )
             self.overlay.stage("approach")
-            dock_features_via_point(self, observer)
-            if not fresh_sock_held(self, timeout=None):
-                raise SkillFailed(
-                    "Sock slipped during approach; refusing an empty drop"
-                )
-
             def verify_hold():
                 if not fresh_sock_held(self, timeout=None):
                     raise SkillFailed(
                         "Sock slipped during feature approach; refusing an empty drop"
                     )
 
-            # Docking reobserves after the grip check and repeats that check
-            # if a new pose requires any further base movement.
+            # One locked basket pose drives both approach and release geometry.
             center, normal = dock_features(self, observer, verify_hold=verify_hold)
             self._box_release_xy = release_target(
                 center, normal, self._p["drop_inset"], self.DROP_RIGHT_M

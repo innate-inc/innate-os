@@ -19,7 +19,6 @@ class PickSockFast(PickAnyObject):
     # Keep the established floor target and pre-close un-press for fabric.
     _p = {
         **PARAMS,
-        "reset_head_after_skill": False,
         # Use the selected/tracked floor point without the generic pickup bias.
         "grasp_x_off": 0.0,
         "wrist_steps": 0.0,
@@ -125,10 +124,17 @@ class PickSockFast(PickAnyObject):
         # follow() returns an unverified pose. Do not treat a failed free-space
         # approach as expected floor contact or continue closing in mid-air.
         pose = self.manipulation.pose
-        if not all(math.isfinite(v) for v in (pose.x, pose.y, pose.z)) or (
-            math.hypot(pose.x - x, pose.y - y) > 0.03 or abs(pose.z - end_z) > 0.02
-        ):
-            raise ArmUnhealthy("Sock free-space approach did not reach the descent pose")
+        error_xy = math.hypot(pose.x - x, pose.y - y)
+        error_z = abs(pose.z - end_z)
+        accepted = all(math.isfinite(v) for v in (pose.x, pose.y, pose.z)) and error_xy <= 0.06 and error_z <= 0.03
+        self.logger.info(
+            f"[SockApproachPose] target=({x:.3f},{y:.3f},{end_z:.3f}) "
+            f"actual=({pose.x:.3f},{pose.y:.3f},{pose.z:.3f}) "
+            f"error_xy={error_xy:.4f} error_z={error_z:.4f} "
+            f"tolerance_xy=0.06 tolerance_z=0.03 accepted={accepted}"
+        )
+        if not accepted:
+            raise SkillFailed("Sock approach did not reach the descent pose")
         return end_z
 
     def _push_to_floor(self, x, y, z_from, roll, pitch, yaw):

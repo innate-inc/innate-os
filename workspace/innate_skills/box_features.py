@@ -15,9 +15,9 @@ import numpy as np
 import cv2
 from innate_skills.basket_features import BasketDetector, Camera
 from innate_skills.box_marker import camera_in_base, marker_image
-from innate_skills.box_nav2 import PointController, approach_goal, in_odom, wrap
+from innate_skills.box_nav2 import PointController, in_odom, wrap
 
-from innate.exceptions import SkillFailed
+from innate.exceptions import SkillCancelled, SkillFailed
 
 ASSETS = Path(__file__).resolve().parents[1] / "config" / "basket_features"
 
@@ -127,7 +127,7 @@ class FeatureObserver:
                 self._request_lock.release()
 
     @staticmethod
-    def fresh_frame(host, controller):
+    def fresh_frame(host, controller, tick=None):
         """Read the same injected stream as ArUco, after settling.
 
         Image identity changes once per received frame. Do not reconnect to
@@ -138,6 +138,8 @@ class FeatureObserver:
         while True:
             host.check_cancelled()
             controller.fresh_odom()  # preserve the phase deadline
+            if tick is not None:
+                tick()
             frame = marker_image(host)
             if frame is not None and frame is not previous:
                 return frame.jpeg
@@ -208,6 +210,37 @@ class FeatureObserver:
             raise ValueError("Invalid camera JPEG")
         return self.detector.detect(image)
 
+    def recognize(self, host, controller, tick):
+        """Detect during a search turn; never use a moving frame as a pose."""
+        encoded = self.fresh_frame(host, controller, tick=tick)
+        output = queue.Queue(maxsize=1)
+
+        def run():
+            try:
+                output.put((True, self.capture(encoded)))
+            except Exception as exc:
+                output.put((False, exc))
+
+        started = time.monotonic()
+        threading.Thread(target=run, daemon=True).start()
+        while output.empty():
+            host.check_cancelled()
+            tick()
+            host.sleep(0.05)
+            if time.monotonic() - started > 45:
+                raise TimeoutError("Basket observation timed out")
+        host.check_cancelled()
+        ok, result = output.get_nowait()
+        if not ok:
+            raise result
+        host.logger.info(
+            f"[FeatureSearch] detected={result.get('detected')} "
+            f"features={result.get('query_features')} "
+            f"candidates={len(result.get('candidates', []))} "
+            f"api_s={time.monotonic() - started:.3f}"
+        )
+        return result.get("detected") is True
+
     def observe(self, host, controller, *, search=False):
         """Retry pose fitting within the phase deadline; sensor errors get three tries."""
         reason = "No observation"
@@ -265,7 +298,14 @@ class FeatureObserver:
             if search and value.get("detected") is False:
                 raise BasketMissing("Basket not visible in fresh frame")
             try:
-                return face_in_base(value, tilt)
+                face = face_in_base(value, tilt)
+                # Best-effort shared exclusion memory for the optional pickup variant.
+                try:
+                    from innate_skills.feature_basket_exclusion import remember
+                    remember(host, value, tilt)
+                except (OSError, ValueError, TypeError, KeyError, SkillFailed) as error:
+                    host.logger.info(f"[FeatureSockBox] could not share basket pose: {error}")
+                return face
             except (ValueError, TypeError, KeyError) as exc:
                 reason = str(exc)
                 host.logger.info(f"[FeaturePose] stationary retry {attempts}: {reason}")
@@ -290,85 +330,93 @@ class FeatureController(PointController):
 
 
 def find_features(host, observer, controller, speed=0.4):
-    """ArUco's rightward search/recovery, paused for full-quality inference."""
+    """Search continuously; stop and reobserve before using a metric pose."""
     swept = 0.0
+    last = controller.fresh_odom()
     old_speed = controller.follower.max_angular
     controller.follower.max_angular = speed
+
+    def tick():
+        nonlocal swept, last
+        host.check_cancelled()
+        now = controller.fresh_odom()
+        swept += abs(wrap(now.theta - last.theta))
+        last = now
+        if swept >= 2 * math.pi:
+            raise SkillFailed(
+                "Basket not found after looking around; stopped holding sock"
+            )
+        controller.follower._send_cmd(0.0, -speed)
+
     try:
         while True:
+            # Initial view, reacquisition and API-error retries are stationary.
             try:
                 return observer.observe(host, controller, search=True)
             except BasketMissing:
-                if swept >= 2 * math.pi:
-                    raise SkillFailed(
-                        "Basket not found after looking around; stopped holding sock"
+                pass
+            last = controller.fresh_odom()
+            host.logger.info(
+                "[FeatureDock] basket missing; continuous rightward search, no translation"
+            )
+            while True:
+                tick()
+                try:
+                    found = observer.recognize(host, controller, tick)
+                except (SkillFailed, SkillCancelled):
+                    raise
+                except Exception as exc:
+                    # Do not continue blind on transport/decoder failures.
+                    # Reuse observe's existing stationary retry behavior.
+                    host.logger.info(f"[FeatureSearch] API error; stopping: {exc}")
+                    controller.follower._stop()
+                    break
+                if found:
+                    controller.follower._stop()
+                    host.logger.info(
+                        "[FeatureSearch] basket found; stopping for a fresh stationary pose"
                     )
-                odom = controller.fresh_odom()
-                # The inherited turn controller stops within 0.12 rad. Include
-                # that tolerance so each actual rightward step covers ~20 deg.
-                step = min(math.radians(20) + 0.12, 2 * math.pi - swept + 0.12)
-                host.logger.info(
-                    "[FeatureDock] basket missing; searching right, no translation"
-                )
-                controller.turn(wrap(odom.theta - step))
-                after = controller.fresh_odom()
-                swept += abs(wrap(after.theta - odom.theta))
+                    break
     finally:
         controller.follower.max_angular = old_speed
         controller.follower._stop()
 
 
-def dock_features_via_point(host, observer):
-    """Same search -> 26 cm frontal waypoint decision as dock_via_point."""
+def dock_features(host, observer, verify_hold=None):
+    """Lock one stationary basket pose; reach the frontal docking point without visual replanning."""
     controller = FeatureController(host, timeout=175)
-    controller.follower.fast_approach()
-    controller.follower.max_linear = 0.30
-    controller.follower.max_angular = 0.90
-    controller.follower.angular_braking = 1.80
     try:
         center, normal = find_features(host, observer, controller, speed=0.70)
-        yaw = math.atan2(normal[1], normal[0])
-        if abs(wrap(yaw - math.atan2(center[1], center[0]))) <= math.radians(20):
-            return
         odom = controller.fresh_odom()
         origin = odom.x, odom.y, odom.theta
+        yaw = math.atan2(normal[1], normal[0])
         basket = in_odom([(center[0], center[1], yaw)], origin)[0]
-        destination = in_odom([approach_goal(center, yaw)], origin)[0]
-        controller.drive(destination)
+        final = in_odom([(*(center - host.FINAL_DISTANCE_M * normal), yaw)], origin)[0]
+        approach_angle = wrap(yaw - math.atan2(center[1], center[0]))
+        host.logger.info(f"[FeatureDock] locked basket_odom={basket}; frontal angle={math.degrees(approach_angle):.1f}; final={final}; no re-detection")
+        if abs(approach_angle) > math.radians(20):
+            # Match ArUco's frontal staging distance, using only the locked pose.
+            staging = in_odom([(*(center - 0.26 * normal), yaw)], origin)[0]
+            host.logger.info(f"[FeatureDock] frontal staging target={staging}")
+            controller.drive(staging)
+            host.mobility.stop()
+            controller.turn(basket[2])
+        # A second segment finishes along the face normal rather than the
+        # original oblique camera ray. drive() handles its existing 4cm tolerance.
+        host.logger.info(f"[FeatureDock] final docking target={final}")
+        controller.drive(final)
         host.mobility.stop()
-        host.sleep(0.15)
-        odom = controller.fresh_odom()
-        controller.turn(math.atan2(basket[1] - odom.y, basket[0] - odom.x))
-    finally:
-        controller.close()
-
-
-def dock_features(host, observer, verify_hold=None):
-    """Stop, measure, move <=15 cm, stop and remeasure. Return a final fresh face."""
-    controller = FeatureController(host)
-    hold_checked = verify_hold is None
-    try:
-        while True:
-            center, normal = find_features(host, observer, controller)
-            yaw = math.atan2(normal[1], normal[0])
-            goal = center - host.FINAL_DISTANCE_M * normal
-            if np.linalg.norm(goal) <= 0.045 and abs(yaw) <= 0.13:
-                if hold_checked:
-                    return center, normal
-                verify_hold()
-                hold_checked = True
-                continue  # Fresh basket observation after a possibly slow grip check.
-            hold_checked = verify_hold is None
-            odom = controller.fresh_odom()
-            origin = odom.x, odom.y, odom.theta
-            if np.linalg.norm(goal) > 0.045:
-                goal *= min(1, 0.15 / np.linalg.norm(goal))
-                controller.drive(in_odom([(goal[0], goal[1], 0)], origin)[0])
-                # Reface the observed basket after the bounded translation.
-                basket = in_odom([(center[0], center[1], yaw)], origin)[0]
-                now = controller.fresh_odom()
-                controller.turn(math.atan2(basket[1] - now.y, basket[0] - now.x))
-            else:
-                controller.turn(wrap(odom.theta + yaw))
+        controller.turn(basket[2])
+        if verify_hold is not None:
+            verify_hold()
+        host.check_cancelled()
+        now = controller.fresh_odom()
+        c, s = math.cos(now.theta), math.sin(now.theta)
+        dx, dy = basket[0] - now.x, basket[1] - now.y
+        center = np.array([c * dx + s * dy, -s * dx + c * dy])
+        angle = basket[2] - now.theta
+        normal = np.array([math.cos(angle), math.sin(angle)])
+        host.logger.info(f"[FeatureDock] arrived; release from locked pose center={center.tolist()} normal={normal.tolist()}")
+        return center, normal
     finally:
         controller.close()

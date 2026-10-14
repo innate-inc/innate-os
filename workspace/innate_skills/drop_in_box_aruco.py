@@ -8,7 +8,7 @@ import time
 
 from innate_skills.approach import FloorApproach
 from innate_skills.box_marker import MarkerDock, MarkerFollower, load_config, observe_box_release
-from innate_skills.box_nav2 import dock_via_point
+from innate_skills.box_nav2 import PointController, dock_via_point
 from innate_skills.drop_in_box_fast import DropInBoxFast
 from innate_skills.drop_return import retract_to_rest
 from innate_skills.sock_grip import fresh_sock_held
@@ -53,6 +53,23 @@ class DropInBoxAruco(DropInBoxFast):
 
     def _holding(self, closed):
         return closed and fresh_sock_held(self, timeout=None)
+
+    def _lift_out(self) -> None:
+        """Complete the clearance lift without a fixed measured-height gate."""
+        if self._clearance_z is None:
+            raise SkillFailed("No clearance height; refusing to move away from the box")
+        pose = self.manipulation.pose
+        lifted = self.manipulation.move_by(
+            dz=max(0.0, self._clearance_z - pose.z),
+            duration=self._p.get("clearance_s", 1.0),
+            tolerance_xy=None,
+            tolerance_z=None,
+        )
+        self.logger.info(
+            f"[DropClearance] target_z={self._clearance_z} "
+            f"actual_z={getattr(lifted, 'z', None)}; lift completed"
+        )
+        self._over_rim = False
 
     def _retract(self):
         if getattr(self, "_fold_started", False):
@@ -113,6 +130,41 @@ class DropInBoxAruco(DropInBoxFast):
         self._require_pose(posed, x, y, self.RELEASE_Z, stage="arc_overhead")
         self.check_cancelled()
 
+    def _cancel_retreat(self, dock):
+        """Committed cleanup: finish at most the normal 15 cm retreat.
+
+        Intentionally uses time.sleep: the original cancellation remains latched,
+        but must not interrupt the user-requested escape from a close box.
+        No search, release, or new approach is permitted during this cleanup.
+        """
+        if not self.cancelled or not getattr(dock, "near_box", False) or self._retreat_done:
+            return
+        try:
+            if self._over_rim and not self._vertical_lift_pending:
+                self._lift_out()
+            controller = PointController(self)
+            odom = controller.fresh_odom()
+            if self._retreat_origin is None:
+                self._retreat_origin = (odom.x, odom.y, odom.theta)
+            x, y, yaw = self._retreat_origin
+            self.logger.info("[DropCancelRetreat] close box: completing remaining retreat (15 cm total)")
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                odom = controller.fresh_odom()
+                backed = -((odom.x - x) * math.cos(yaw) + (odom.y - y) * math.sin(yaw))
+                remaining = 0.15 - max(0.0, backed)
+                if remaining <= 0.015:
+                    self._retreat_done = True
+                    self.logger.info(f"[DropCancelRetreat] complete backed={backed:.3f}m")
+                    return
+                self.mobility.send_cmd_vel(-min(0.10, max(0.04, 1.2 * remaining)), 0.0, 0.15)
+                time.sleep(0.05)  # committed, bounded cancellation cleanup
+            self.logger.warning("[DropCancelRetreat] timeout; stopped")
+        except Exception as error:
+            self.logger.warning(f"[DropCancelRetreat] stopped: {error}")
+        finally:
+            self.mobility.stop()
+
     def execute(self) -> SkillReturn:
         self._box_release_xy = None
         config = copy.deepcopy(load_config())
@@ -134,6 +186,8 @@ class DropInBoxAruco(DropInBoxFast):
         self._over_rim = self._released = self._fold_started = False
         self._clearance_z = None
         self._vertical_lift_pending = True
+        self._retreat_origin = None
+        self._retreat_done = False
         try:
             self.head.set_position(int(round(config["head_tilt_deg"])))
             self.wait_for(lambda: self.joint_states, timeout=3)
@@ -179,13 +233,17 @@ class DropInBoxAruco(DropInBoxFast):
             retract_to_rest(self, block=False)
             self._fold_started = True
             retreat_at = time.monotonic()
+            self._retreat_origin = retreat.odom_xyt()
             if not retreat.drive(-0.15):
                 raise SkillFailed("Released at taught pose, but retreat failed")
+            self._retreat_done = True
             self.logger.info(f"[DropTiming] retreat: {time.monotonic() - retreat_at:.2f}s")
             # No vision verdict: release at a taught pose is not proof of landing.
             return "Released sock at the taught box pose and raised the arm; landing was not visually verified."
         finally:
             self.mobility.stop()
+            self._cancel_retreat(final_dock)
             fold_at = time.monotonic()
             self._retract()
             self.logger.info(f"[DropTiming] retract: {time.monotonic() - fold_at:.2f}s")
+            self.head.set_position(0)

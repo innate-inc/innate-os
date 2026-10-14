@@ -11,7 +11,7 @@ from innate import vision
 from innate.exceptions import SkillFailed
 
 
-def box_vertices(pose, width=0.45, depth=0.15, height=0.12, margin=0.03):
+def box_vertices(pose, width=0.50, depth=0.33, height=0.15, margin=0.03):
     inward = -np.asarray(pose)[:2, 2]
     norm = np.linalg.norm(inward)
     if norm < 1e-6:
@@ -52,7 +52,12 @@ def projected_hull(vertices, tilt):
     if len(visible) < 3:
         return None
     pixels = np.asarray(visible) @ camera_matrix().T
-    return cv2.convexHull((pixels[:, :2] / pixels[:, 2:]).astype(np.float32))
+    projected = (pixels[:, :2] / pixels[:, 2:]).astype(np.float32)
+    # Socks can protrude arbitrarily above the rim. Exclude the entire image
+    # column over the basket, while preserving the projected lower boundary.
+    above = projected.copy()
+    above[:, 1] = np.minimum(above[:, 1], 0)
+    return cv2.convexHull(np.vstack((projected, above)))
 
 
 class SockBoxExclusion:

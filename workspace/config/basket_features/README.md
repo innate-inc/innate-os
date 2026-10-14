@@ -121,33 +121,27 @@ Like the ArUco routine, it lifts first, searches right for the basket, uses a
 performs final docking, release and retreat. It does not plan around obstacles.
 The original ArUco skill is unchanged.
 
-The checked-in `runtime.json` selects MARS-47's Mac backend at
-`http://axel-mac.local:9071`. It stores an endpoint and a token-file path;
-the token itself lives outside Git at `~/.config/innate/basket-pose-api.token`.
-The configuration is read when the skill starts, so no ROS restart is required.
-`BASKET_POSE_API_URL` and `BASKET_POSE_API_TOKEN_FILE` can override those settings.
+The checked-in `runtime.json` selects the RTX Spark GPU backend at
+`http://10.61.14.242:9071`, without a bearer token. The configuration is
+read whenever the skill starts; no ROS restart is required. The service reports
+`rootsift_full_resolution_cuda_sift`. Original frame and calibration hashes are
+still verified by the client. Qwen and YOLOE endpoints are unchanged.
+
+`BASKET_POSE_API_URL` and `BASKET_POSE_API_TOKEN_FILE` can override runtime settings.
 Without runtime configuration or an environment URL, inference runs locally.
 Explicit `FeatureObserver(api_url="")` selects local inference for diagnostics.
-API errors are retried without silently switching backends.
+API errors retain the existing retry behavior without switching backends.
 
-The Mac API runs as the login agent `com.innate.basket-pose-api`, with its
-isolated runtime and code in `~/Library/Application Support/Innate/BasketPose`.
-It starts at login and restarts after a process failure. The Mac must be awake
-and reachable on the same network. Direct LAN access uses `--token-file` on the
-server; HTTP/1.1 connections are reused across skill observations. Idle clients
-do not block other clients, while detector access remains serialized. Errors
-close the connection; transport failures use the existing fresh-frame retry.
-Health and detection requests both require the corresponding bearer
-token. Tokens must be transferred privately and must never be committed.
-For a live authenticated probe on MARS-47:
+For a stationary live probe on MARS-47:
 
 ```sh
-python scripts/basket_pose_probe.py --live --frames 3 \
-  --api-url http://axel-mac.local:9071 \
-  --token-file ~/.config/innate/basket-pose-api.token --output /tmp/basket-api-check
+python scripts/basket_pose_probe.py --live --frames 3   --api-url http://10.61.14.242:9071 --output /tmp/basket-api-check
 ```
 
-The robot stops and settles before every image. The skill uses ArUco's injected MainHighResImage/MainImage stream and waits for a new frame object
+The previous Mac configuration is retained on this robot in
+`/tmp/basket-runtime-before-spark.json` for rollback; its token remains outside Git.
+
+During basket search the robot turns continuously right while API requests run, using at most one request at a time. A recognized basket stops the turn; a new stationary frame supplies the metric pose. Moving detections never supply navigation or release coordinates. Camera/API errors stop the turn and reuse stationary retries. Docking still stops and settles before each metric observation. The skill uses ArUco's injected MainHighResImage/MainImage stream and waits for a new frame object
 after settling (the same three-second stalled-stream bound as ArUco). It sends
 the original JPEG bytes to the API, without reconnecting to rosbridge or decoding
 and re-encoding. Calibration comes from the saved snapshot; the standalone live
@@ -200,3 +194,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
   tests/test_drop_in_box_features.py tests/test_basket_features.py \
   tests/test_basket_pose_api.py
 ```
+
+
+Feature drop: lock one stationary basket pose in odometry. When more than 20 degrees oblique, drive to the 26cm frontal staging point and face the basket. Then drive to the existing final distance along its normal and face it for release. Every segment and the release geometry use the same locked pose, without new feature calls or replanning. Existing odometry freshness, cancellation, grip and arm checks remain.
+
+Optional pick_sock_pile_yoloe_features excludes the physical 50x33cm basket footprint plus 10cm and overlapping image detections above the rim. Feature drop shares its basket pose through /tmp/innate-feature-basket.json (same boot, at most 30s old at pickup start). During pickup, a missing detection preserves the known world position; fresh search detections update it. Unknown basket position keeps searching, while API failure without memory stops. Basket must remain stationary; odometry drift/reset can invalidate the remembered position. The original pickup and agent are unchanged.

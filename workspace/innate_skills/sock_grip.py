@@ -8,8 +8,8 @@ import time
 from innate.exceptions import SkillFailed
 
 # Operator-selected threshold for the rehearsed fabric demo. This is not a
-# universal gripper calibration; small closed gaps can count as held.
-EMPTY_J6 = -0.05
+# universal calibration. Empty grips observed at -0.0491 rad must not pass.
+EMPTY_J6 = -0.03
 MAX_HELD_J6 = 0.8
 
 

@@ -107,7 +107,6 @@ class ExecutionTests(unittest.TestCase):
             "FeatureObserver",
             "lift_vertical",
             "dock_features",
-            "dock_features_via_point",
             "fresh_sock_held",
             "FloorApproach",
             "retract_to_rest",
@@ -204,6 +203,21 @@ class ObserverTests(unittest.TestCase):
         self.odom = NS(x=0, y=0, theta=0)
         self.controller = NS(fresh_odom=Mock(side_effect=lambda: self.odom))
         self.observer = bf.FeatureObserver(api_url="")
+
+    def test_recognize_keeps_ticking_during_inference(self):
+        def capture(encoded):
+            time.sleep(0.04)
+            return detection()
+        self.observer.capture = capture
+        tick = Mock()
+        self.assertTrue(self.observer.recognize(self.h, self.controller, tick))
+        self.assertGreater(tick.call_count, 2)
+        self.h.mobility.stop.assert_not_called()
+
+    def test_recognize_cancel_propagates(self):
+        self.h.check_cancelled.side_effect = SkillCancelled("stop")
+        with self.assertRaises(SkillCancelled):
+            self.observer.recognize(self.h, self.controller, Mock())
 
     def test_three_missing_results_fail_without_moving(self):
         self.observer.capture = Mock(return_value={"detected": False})
@@ -337,65 +351,56 @@ class ObserverTests(unittest.TestCase):
 
 
 class DockTests(unittest.TestCase):
-    def test_bounded_translation_then_reobserve_before_release(self):
+    def test_one_pose_direct_target_and_release_transform(self):
         h = host()
         observer = Mock()
-        observer.observe.side_effect = [
-            (np.array([0.6, 0.1]), np.array([1, 0])),
-            (np.array([0.16, 0]), np.array([1, 0])),
-        ]
+        observer.observe.side_effect = [(np.array([0.6, 0.2]), np.array([0.8, 0.6])), AssertionError("Must not reobserve")]
+        state = NS(x=2., y=-1., theta=0.7)
         with patch.object(bf, "FeatureController") as factory:
             c = factory.return_value
-            c.fresh_odom.return_value = NS(x=0, y=0, theta=0)
-            bf.dock_features(h, observer)
-            self.assertEqual(observer.observe.call_count, 2)
-            x, y, _ = c.drive.call_args.args[0]
-            self.assertLessEqual(math.hypot(x, y), 0.150001)
+            c.fresh_odom.side_effect = lambda: NS(x=state.x,y=state.y,theta=state.theta)
+            def drive(goal):
+                state.x,state.y=goal[:2]
+            c.drive.side_effect=drive
+            c.turn.side_effect=lambda yaw:setattr(state,'theta',yaw)
+            verify=Mock()
+            center,normal=bf.dock_features(h,observer,verify)
+            self.assertEqual(observer.observe.call_count,1)
+            self.assertEqual(c.drive.call_count,1);verify.assert_called_once()
+            np.testing.assert_allclose(center,[h.FINAL_DISTANCE_M,0],atol=1e-9)
+            expected_angle=0.0
+            np.testing.assert_allclose(normal,[math.cos(expected_angle),math.sin(expected_angle)])
             c.close.assert_called_once()
 
-    def test_target_loss_after_grip_check_never_returns_release_pose(self):
-        observer = Mock()
-        observer.observe.side_effect = [
-            (np.array([0.16, 0]), np.array([1, 0])),
-            SkillFailed("gone"),
-        ]
-        verify = Mock()
-        with patch.object(bf, "FeatureController") as factory:
-            with self.assertRaises(SkillFailed):
-                bf.dock_features(host(), observer, verify_hold=verify)
-            verify.assert_called_once()
-            factory.return_value.drive.assert_not_called()
-            factory.return_value.close.assert_called_once()
+    def test_already_close_skips_translation_and_does_not_reobserve(self):
+        observer=Mock()
+        observer.observe.side_effect=[(np.array([.16,0]),np.array([1,0])),AssertionError("No retry")]
+        with patch.object(bf,"FeatureController") as factory:
+            c=factory.return_value;c.fresh_odom.return_value=NS(x=0,y=0,theta=0)
+            bf.dock_features(host(),observer)
+            self.assertEqual(c.drive.call_count,1);np.testing.assert_allclose(c.drive.call_args.args[0][:2],[0,0],atol=1e-9);self.assertEqual(observer.observe.call_count,1)
 
-    def test_grip_rechecked_after_further_movement(self):
-        observer = Mock()
-        aligned = (np.array([0.16, 0]), np.array([1, 0]))
-        observer.observe.side_effect = [
-            aligned,
-            (np.array([0.4, 0]), np.array([1, 0])),
-            aligned,
-            aligned,
-        ]
-        verify = Mock()
-        with patch.object(bf, "FeatureController") as factory:
-            factory.return_value.fresh_odom.return_value = NS(x=0, y=0, theta=0)
-            bf.dock_features(host(), observer, verify_hold=verify)
-            self.assertEqual(verify.call_count, 2)
-            self.assertEqual(observer.observe.call_count, 4)
+    def test_oblique_pose_uses_two_fixed_frontal_segments(self):
+        h=host();observer=Mock()
+        normal=np.array([math.cos(.8),math.sin(.8)])
+        observer.observe.side_effect=[(np.array([.8,0]),normal),AssertionError("No re-detection")]
+        with patch.object(bf,"FeatureController") as factory:
+            c=factory.return_value;c.fresh_odom.return_value=NS(x=0,y=0,theta=0)
+            bf.dock_features(h,observer)
+            self.assertEqual(c.drive.call_count,2)
+            np.testing.assert_allclose(c.drive.call_args_list[0].args[0][:2],np.array([.8,0])-.26*normal)
+            np.testing.assert_allclose(c.drive.call_args_list[1].args[0][:2],np.array([.8,0])-h.FINAL_DISTANCE_M*normal)
+            self.assertEqual(observer.observe.call_count,1)
+            self.assertEqual(c.turn.call_count,2)
+            self.assertAlmostEqual(c.turn.call_args.args[0],.8)
 
-    def test_aligned_pose_never_commands_drive(self):
-        with patch.object(bf, "FeatureController") as factory:
-            bf.dock_features(
-                host(),
-                NS(
-                    observe=lambda *args, **kwargs: (
-                        np.array([0.16, 0]),
-                        np.array([1, 0]),
-                    )
-                ),
-            )
-            factory.return_value.drive.assert_not_called()
-            factory.return_value.close.assert_called_once()
+    def test_movement_failure_stops_without_retargeting(self):
+        observer=Mock();observer.observe.return_value=(np.array([.6,0]),np.array([1,0]))
+        with patch.object(bf,"FeatureController") as factory:
+            c=factory.return_value;c.fresh_odom.return_value=NS(x=0,y=0,theta=0)
+            c.drive.side_effect=SkillFailed("stale odom")
+            with self.assertRaisesRegex(SkillFailed,"stale odom"):bf.dock_features(host(),observer)
+            c.close.assert_called_once();self.assertEqual(observer.observe.call_count,1)
 
     def test_deadline_rejects_even_if_odometry_exists(self):
         with patch.object(bf.PointController, "__init__", return_value=None):
@@ -411,6 +416,7 @@ class SearchTests(unittest.TestCase):
         state = NS(x=0, y=0, theta=0)
         c.fresh_odom.side_effect = lambda: NS(x=state.x, y=state.y, theta=state.theta)
         c.turn.side_effect = lambda angle: setattr(state, "theta", angle)
+        c.follower._send_cmd.side_effect = lambda linear, angular: setattr(state, "theta", state.theta + angular * 0.1)
         c.follower.max_angular = 0.6
         return c
 
@@ -421,7 +427,8 @@ class SearchTests(unittest.TestCase):
         observer.observe.side_effect = [bf.BasketMissing("missing"), expected]
         result = bf.find_features(host(), observer, c, speed=0.7)
         self.assertIs(result, expected)
-        self.assertLess(c.turn.call_args.args[0], 0)
+        self.assertLess(c.follower._send_cmd.call_args.args[1], 0)
+        c.turn.assert_not_called()
         c.drive.assert_not_called()
         self.assertEqual(observer.observe.call_count, 2)
         self.assertEqual(c.follower.max_angular, 0.6)
@@ -458,17 +465,19 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(
             all(linear == 0 and angular <= 0 for linear, angular in commands)
         )
-        self.assertLess(state.theta, -0.3)
+        # Mock inference finishes immediately; real async coverage is below.
+        self.assertLessEqual(state.theta, 0)
         self.assertEqual(state.velocity, 0)
 
     def test_full_scan_stops_without_translation(self):
         c = self.controller()
         observer = Mock()
         observer.observe.side_effect = bf.BasketMissing("missing")
+        observer.recognize.return_value = False
         with self.assertRaisesRegex(SkillFailed, "after looking around"):
             bf.find_features(host(), observer, c)
-        self.assertGreater(c.turn.call_count, 10)
-        self.assertLess(c.turn.call_count, 20)
+        self.assertGreater(c.follower._send_cmd.call_count, 50)
+        c.turn.assert_not_called()
         c.drive.assert_not_called()
 
     def test_sensor_error_and_cancel_do_not_initiate_search(self):
@@ -479,29 +488,34 @@ class SearchTests(unittest.TestCase):
             c.turn.assert_not_called()
             c.follower._stop.assert_called()
 
-    def test_oblique_face_uses_same_26cm_waypoint_as_aruco(self):
-        center = np.array([0.6, 0])
-        normal = np.array([math.cos(0.6), math.sin(0.6)])
+    def test_moving_detection_requires_new_stationary_pose(self):
         c = self.controller()
-        with (
-            patch.object(bf, "FeatureController", return_value=c),
-            patch.object(bf, "find_features", return_value=(center, normal)),
-        ):
-            bf.dock_features_via_point(host(), Mock())
-            target = c.drive.call_args.args[0]
-            np.testing.assert_allclose(target[:2], center - 0.26 * normal)
-            c.turn.assert_called_once()
+        observer = Mock()
+        expected = (np.array([0.3, 0]), np.array([1, 0]))
+        observer.observe.side_effect = [bf.BasketMissing("missing"), expected]
+        observer.recognize.return_value = True
+        self.assertIs(bf.find_features(host(), observer, c), expected)
+        self.assertEqual(observer.observe.call_count, 2)
+        observer.recognize.assert_called_once()
 
-    def test_frontal_face_skips_waypoint_like_aruco(self):
+    def test_search_api_failure_stops_and_uses_stationary_retry(self):
         c = self.controller()
-        with (
-            patch.object(bf, "FeatureController", return_value=c),
-            patch.object(
-                bf, "find_features", return_value=(np.array([0.6, 0]), np.array([1, 0]))
-            ),
-        ):
-            bf.dock_features_via_point(host(), Mock())
-            c.drive.assert_not_called()
+        observer = Mock()
+        observer.observe.side_effect = [bf.BasketMissing("missing"), SkillFailed("API unavailable")]
+        observer.recognize.side_effect = OSError("connection lost")
+        with self.assertRaisesRegex(SkillFailed, "API unavailable"):
+            bf.find_features(host(), observer, c)
+        self.assertGreaterEqual(c.follower._stop.call_count, 2)
+
+    def test_cancel_during_search_stops_immediately(self):
+        c = self.controller()
+        observer = Mock()
+        observer.observe.side_effect = bf.BasketMissing("missing")
+        observer.recognize.side_effect = SkillCancelled("stop")
+        with self.assertRaises(SkillCancelled):
+            bf.find_features(host(), observer, c)
+        self.assertEqual(observer.observe.call_count, 1)
+        c.follower._stop.assert_called()
 
     def test_arm_motion_and_heights_are_inherited_from_aruco(self):
         from innate_skills.drop_in_box_aruco import DropInBoxAruco
