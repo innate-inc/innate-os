@@ -130,7 +130,7 @@ Robot software sees the world only through the driver. Humans and tools see it o
 
 ## Foxglove and ROS
 
-The sim starts a Foxglove bridge for you. Connect [Foxglove Studio](https://foxglove.dev) to `ws://localhost:8765`. Because this is localhost, full-resolution cameras and point clouds are fine — unlike a physical robot on Wi-Fi, where you want the `/mars/main_camera/remote/*` topics. See the [Foxglove docs](https://docs.innate.bot/software/foxglove-setup).
+The sim starts a Foxglove bridge for you. Connect [Foxglove Studio](https://foxglove.dev) to `ws://localhost:8765`. Because this is localhost, full-resolution cameras and point clouds are fine — unlike a physical robot on Wi-Fi, where you want the `/mars/main_camera/remote/*` topics (start the camera stack with `remote_rviz:=true` to enable them). See the [Foxglove docs](https://docs.innate.bot/software/foxglove-setup).
 
 A rosbridge server is at `ws://localhost:9090`.
 

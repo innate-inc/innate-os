@@ -175,6 +175,15 @@ class MarsArmNode : public rclcpp::Node {
     // Control timer
     rclcpp::TimerBase::SharedPtr control_timer_;
     double control_frequency_;
+    // The loop reads the bus faster than any consumer wants the result:
+    // state topics go out every Nth tick, the command echo and the head
+    // position only when they change.
+    int arm_state_publish_divisor_{1};
+    int joint_state_publish_divisor_{1};
+    unsigned publish_tick_{0};
+    std::vector<int> last_published_command_;
+    int last_published_head_encoder_{-1};
+    std::chrono::steady_clock::time_point last_head_publish_time_{};
 
     // Callback groups for parallel execution
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;

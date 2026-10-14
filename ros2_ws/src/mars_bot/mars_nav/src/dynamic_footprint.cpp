@@ -18,7 +18,6 @@
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "std_msgs/msg/string.hpp"
-#include "std_msgs/msg/float64.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -54,9 +53,6 @@ class DynamicFootprint : public rclcpp::Node {
 
         // Create publisher for footprint (Polygon type for costmaps)
         footprint_publisher_ = this->create_publisher<geometry_msgs::msg::Polygon>("/footprint", 10);
-
-        // Create publisher for robot height
-        height_publisher_ = this->create_publisher<std_msgs::msg::Float64>("/footprint/height", 10);
 
         // Create publisher for arm collision points in camera optical frame
         camera_footprint_publisher_ =
@@ -166,7 +162,6 @@ class DynamicFootprint : public rclcpp::Node {
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
     rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr height_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr camera_footprint_publisher_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_points_publisher_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_boxes_publisher_;
@@ -450,6 +445,17 @@ class DynamicFootprint : public rclcpp::Node {
                 continue;
             }
 
+            // One TF lookup per link; every corner of every box on it shares it.
+            geometry_msgs::msg::TransformStamped link_tf;
+            try {
+                link_tf =
+                    tf_buffer_.lookupTransform("base_link", link_name, tf2::TimePointZero, tf2::durationFromSec(0.1));
+            } catch (const tf2::TransformException& ex) {
+                RCLCPP_WARN(this->get_logger(), "Could not transform '%s' to base_link: %s", link_name.c_str(),
+                            ex.what());
+                continue;
+            }
+
             for (size_t i = 0; i < link->collision_array.size(); ++i) {
                 const auto& collision = link->collision_array[i];
 
@@ -501,11 +507,11 @@ class DynamicFootprint : public rclcpp::Node {
                     corners[c].point.z = link_pt.z();
                 }
 
-                try {
+                {
                     // Transform all corners to base_link
                     for (size_t c = 0; c < 8; ++c) {
                         geometry_msgs::msg::PointStamped transformed;
-                        transformed = tf_buffer_.transform(corners[c], "base_link", tf2::durationFromSec(0.1));
+                        tf2::doTransform(corners[c], transformed, link_tf);
                         // Track max Z before projecting to XY plane
                         if (transformed.point.z > max_z) {
                             max_z = transformed.point.z;
@@ -542,7 +548,7 @@ class DynamicFootprint : public rclcpp::Node {
                         // Re-transform for marker points
                         for (size_t c = 0; c < 8; ++c) {
                             geometry_msgs::msg::PointStamped transformed;
-                            transformed = tf_buffer_.transform(corners[c], "base_link", tf2::durationFromSec(0.1));
+                            tf2::doTransform(corners[c], transformed, link_tf);
                             transformed.point.z = 0.0;
                             points_marker.points.push_back(transformed.point);
                         }
@@ -552,7 +558,7 @@ class DynamicFootprint : public rclcpp::Node {
                         // Add 3D points (with actual Z values)
                         for (size_t c = 0; c < 8; ++c) {
                             geometry_msgs::msg::PointStamped transformed;
-                            transformed = tf_buffer_.transform(corners[c], "base_link", tf2::durationFromSec(0.1));
+                            tf2::doTransform(corners[c], transformed, link_tf);
                             points_marker_3d.points.push_back(transformed.point);
                         }
                         points_array.markers.push_back(points_marker_3d);
@@ -560,10 +566,6 @@ class DynamicFootprint : public rclcpp::Node {
 
                     RCLCPP_DEBUG(this->get_logger(), "Link '%s' collision[%zu] BOX - 8 corners transformed",
                                  link_name.c_str(), i);
-
-                } catch (const tf2::TransformException& ex) {
-                    RCLCPP_WARN(this->get_logger(), "Could not transform '%s' to base_link: %s", link_name.c_str(),
-                                ex.what());
                 }
             }
         }
@@ -613,15 +615,6 @@ class DynamicFootprint : public rclcpp::Node {
 
                 // Publish arm-only footprint projected into camera optical frame
                 publishCameraFootprint(arm_corners_3d);
-
-                // Publish the max height of the robot collision geometry
-                {
-                    std_msgs::msg::Float64 height_msg;
-                    height_msg.data = max_z + padding;
-                    height_publisher_->publish(height_msg);
-                    RCLCPP_DEBUG(this->get_logger(), "Published /footprint/height: %.3f m (max_z=%.3f, padding=%.3f)",
-                                 height_msg.data, max_z, padding);
-                }
 
                 // Only publish hull marker if debug mode
                 if (debug_mode) {

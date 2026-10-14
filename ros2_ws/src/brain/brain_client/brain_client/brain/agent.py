@@ -80,6 +80,10 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
+_HEARING_STALE_SEC = 1.0  # the mic reports every 0.2 s; quiet past this means it stopped, not the user
+_MAX_HOLD_SEC = 10.0  # per utterance: background talk (a TV) must not hold the brain forever
+_TRANSCRIPT_GRACE_SEC = 0.8  # an utterance's transcript lands ~0.3 s after it closes
+_HOLD_POLL_SEC = 0.05
 
 
 def _retry_note(error: Exception) -> str:
@@ -179,8 +183,13 @@ class BrainAgent:
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
-        self._user_spoke = asyncio.Event()  # urgent wake: user speech or skill completion
+        self._user_spoke = asyncio.Event()  # transcripts only; the speech hold waits on this
+        self._urgent_event = asyncio.Event()  # user speech or a terminal skill result
         self._skill_finished = asyncio.Event()
+        self._user_started = asyncio.Event()  # utterance opened before any transcript
+        self._hearing_until = 0.0
+        self._utterance_opened_at = 0.0
+        self._words_heard = 0  # only USER events spend the speech rerun budget
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -351,21 +360,39 @@ class BrainAgent:
         if context is None:
             return await self._heartbeat()  # no transport: telemetry only, no turns
         heartbeat = asyncio.ensure_future(self._heartbeat())
-        turn = spoke = None
+        turn = spoke = started = finished = None
         reruns = 0
+        speech_abandoned = False
+        words_at_turn = 0
         try:
             while True:
                 await self._await_skill_completion()
                 await self._await_camera()
+                await self._await_user_done()
+                if speech_abandoned and self._words_heard > words_at_turn:
+                    reruns += 1  # a cough cancels a turn too; only an abandon that words followed counts
                 self._user_spoke.clear()
                 self._skill_finished.clear()
+                self._user_started.clear()
+                words_at_turn = self._words_heard
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
-                await asyncio.wait((turn, spoke), return_when=asyncio.FIRST_COMPLETED)
+                started = asyncio.ensure_future(self._user_started.wait())
+                finished = asyncio.ensure_future(self._skill_finished.wait())
+                await asyncio.wait((turn, spoke, started, finished), return_when=asyncio.FIRST_COMPLETED)
                 spoke.cancel()
-                if (self._skill_finished.is_set() or reruns < _MAX_RERUNS) and self._abandon(turn):
+                started.cancel()
+                abandoned = (self._skill_finished.is_set() or reruns < _MAX_RERUNS) and self._abandon(turn)
+                if not abandoned and not turn.done():
+                    # Speech may no longer preempt (already speaking or budget
+                    # spent), but a terminal skill result still invalidates the
+                    # supervision turn. Keep watching it until the turn ends.
+                    await asyncio.wait((turn, finished), return_when=asyncio.FIRST_COMPLETED)
+                    abandoned = self._skill_finished.is_set() and self._abandon(turn)
+                speech_abandoned = abandoned and not self._skill_finished.is_set()
+                finished.cancel()
+                if abandoned:
                     await asyncio.wait({turn})  # fully unwound before the rerun looks
-                    reruns += 1
                     continue
                 await turn
                 reruns = 0
@@ -380,14 +407,15 @@ class BrainAgent:
             heartbeat.cancel()
             if self._speaker is not None:
                 self._speaker.mute()
-            for task in (turn, spoke):
+            for task in (turn, spoke, started, finished):
                 if task is not None:
                     task.cancel()  # stop() can land mid-race; the turn dies with the loop
 
     def _abandon(self, turn: asyncio.Task[None]) -> bool:
-        """Cancel a thinking turn the user just talked over — unless it already
-        holds the floor. try_abandon is atomic with the reply stream: a plain
-        check-then-mute could let the first sentence slip out after the decision.
+        """Preempt for a skill result, or for speech before the reply holds the floor.
+
+        try_abandon is atomic with the reply stream: a plain check-then-mute
+        could let the first sentence slip out after the decision.
         """
         speaker = self._speaker  # _turn publishes it before its first await
         if turn.done() or speaker is None:
@@ -531,12 +559,12 @@ class BrainAgent:
             getattr(self._state.current_directive, "wait_for_skill_completion", False)
             and self._state.primitive_running is not None
         ):
-            self._user_spoke.clear()
+            self._urgent_event.clear()
             if any(event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events):
                 return
             # Feedback/motion remain queued, but cannot start model requests.
             # stop() cancels this await; terminal results and user input wake it.
-            await self._user_spoke.wait()
+            await self._urgent_event.wait()
 
     async def _await_camera(self) -> None:
         """Hold turns while the camera feed is down; tell the user if it stays down."""
@@ -551,12 +579,29 @@ class BrainAgent:
             await asyncio.sleep(0.2)
         self._chat.emit_system("✅ Camera feed is back.")
 
+    async def _await_user_done(self) -> None:
+        """Hold the next turn while the user is mid-utterance, then briefly for its transcript, and
+        again if they resumed meanwhile: a turn started in between would only be abandoned once
+        the words land."""
+        give_up = time.monotonic() + _MAX_HOLD_SEC  # each reopening restarts the per-utterance cap
+        while self._user_holds_floor(give_up):
+            self._user_spoke.clear()
+            while self._user_holds_floor(give_up):
+                await asyncio.sleep(_HOLD_POLL_SEC)
+            grace = min(_TRANSCRIPT_GRACE_SEC, give_up - time.monotonic())
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._user_spoke.wait(), grace)
+
+    def _user_holds_floor(self, give_up: float) -> bool:
+        now = time.monotonic()
+        return now < self._hearing_until and now < min(self._utterance_opened_at + _MAX_HOLD_SEC, give_up)
+
     async def _pause(self, seconds: float, *, seen: int = 0, user_only: bool = False) -> None:
         """Sleep up to ``seconds``; the queue growing past ``seen`` events ends it early.
 
         ``user_only`` limits waking to user speech or a terminal skill result.
         """
-        wake = self._user_spoke if user_only else self._new_event
+        wake = self._urgent_event if user_only else self._new_event
         wake.clear()
         if any(not user_only or event.kind in (EventKind.USER, EventKind.SKILL_RESULT) for event in self._events[seen:]):
             return
@@ -789,7 +834,22 @@ class BrainAgent:
         if kind == EventKind.SKILL_RESULT:
             self._skill_finished.set()
         if kind in (EventKind.USER, EventKind.SKILL_RESULT):
+            self._urgent_event.set()
+        if kind == EventKind.USER:
+            self._words_heard += 1
             self._user_spoke.set()
+
+    def on_user_speaking(self, speaking: bool) -> None:
+        """The mic's endpointer state, every ~0.2 s: an utterance opening preempts an unspoken
+        reply, and while it stays open no new turn starts."""
+        self._runtime.post(self._hear, speaking)
+
+    def _hear(self, speaking: bool) -> None:
+        now = time.monotonic()
+        if speaking and now >= self._hearing_until:
+            self._utterance_opened_at = now
+            self._user_started.set()
+        self._hearing_until = now + _HEARING_STALE_SEC if speaking else 0.0
 
     def on_user_message(self, text: str) -> None:
         self.add_event(f'The user says: "{text}"', kind=EventKind.USER)

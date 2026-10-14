@@ -10,7 +10,6 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>diagnostic_msgs</depend>
   <depend>mars_msgs</depend>
   <depend>cloud_clients</depend>
 

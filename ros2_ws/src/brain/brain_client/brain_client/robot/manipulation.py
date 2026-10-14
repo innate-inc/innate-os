@@ -144,10 +144,8 @@ class Manipulation:
     # Pose samples arrive slower and less evenly than the slew loop ticks; an
     # unsmoothed loop reaches each target in one tick and then stalls.
     STREAM_POSE_SMOOTHING_S = 0.1
-    # A new IK solution this far from the streamed target is another elbow or
-    # wrist branch, not the hand's motion: recorded phone teleop never moved a
-    # joint more than 0.55 rad per sample; other branches sit a median 1.6 away.
-    STREAM_MAX_JUMP_RAD = 0.8
+    # A streamed pose the IK lands further than this from is out of reach.
+    STREAM_REACH_TOLERANCE_M = 0.005
 
     # A motion completes on ARRIVAL, and motions serialize in the driver, so a
     # queued one waits out whatever is already moving before its own duration
@@ -174,6 +172,7 @@ class Manipulation:
         self._ik_lock = threading.Lock()
 
         self._ik_target_pub = self.node.create_publisher(Twist, "/ik_delta", 10)
+        self._ik_stream_pub = self.node.create_publisher(Twist, "/ik_stream", 10)
 
         # stream_joints state: the latest requested target, what the slew loop
         # last published, and the thread that walks one toward the other.
@@ -592,27 +591,37 @@ class Manipulation:
         yaw: float,
         grip: float | None = None,
     ) -> bool:
-        """One cartesian streaming step: solve IK and hand the joints to
-        :meth:`stream_joints`, with ``grip`` (j6 radians; None keeps the
-        standing grip). False, moving nothing, when the pose has no solution
-        within one stream tick, or only one on another IK branch."""
-        joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
-        if joints is None or self._branch_jump(joints):
-            return False
-        self.stream_joints(joints if grip is None else [*joints, grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
-        return True
+        """One cartesian streaming step toward the pose, or as near it as the
+        joint limits allow, handed to :meth:`stream_joints` with ``grip`` (j6
+        radians; None keeps the standing grip). True when the pose itself is
+        reached; False when it is out of reach (the arm goes as near as it can)
+        or the IK gave no answer within one stream tick (the arm holds, the
+        grip still applies).
 
-    def _branch_jump(self, joints: Sequence[float]) -> bool:
-        """Whether ``joints`` lie more than STREAM_MAX_JUMP_RAD from where the
-        stream is heading (or, with no stream running, from where the arm is)."""
+        No guard against far answers: /ik_stream descends from the current
+        posture, so it cannot hop IK branches, and the slew loop's speed clamp
+        turns a far answer into a ramp. A guard here froze the arm for good
+        once one fast swing was refused."""
+        reply = self._ask_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S, stream=True)
+        if reply is None:
+            if grip is not None:
+                self._hold_arm_with_grip(grip)
+            return False
+        joints = list(reply.position)
+        self.stream_joints(joints if grip is None else [*joints, grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
+        return bool(reply.effort) and reply.effort[0] <= self.STREAM_REACH_TOLERANCE_M  # effort[0]: the miss (m)
+
+    def _hold_arm_with_grip(self, grip: float) -> None:
+        """Stream ``grip`` while the arm holds where the stream is heading (or,
+        with none running, where it is)."""
         with self._stream_lock:
-            reference = self._stream_target
-        if reference is None:
+            heading = self._stream_target
+        if heading is None:
             state = self._arm_state
             if state is None:
-                return False  # stream_joints refuses to start without a measurement
-            reference = list(state.position)
-        return any(abs(a - b) > self.STREAM_MAX_JUMP_RAD for a, b in zip(joints, reference[:5], strict=True))
+                return  # stream_joints refuses to start without a measurement
+            heading = list(state.position)
+        self.stream_joints([*heading[:5], grip], smoothing_s=self.STREAM_POSE_SMOOTHING_S)
 
     def stream_stop(self) -> None:
         """Stop streaming; the arm holds its current position. Idempotent.
@@ -804,24 +813,42 @@ class Manipulation:
         yaw: float = 0.0,
         timeout: float = 2.0,
     ) -> list[float] | None:
-        """IK for a cartesian pose: the 5 arm joints, or None on failure.
+        """IK for a cartesian pose: the 5 arm joints, or None on failure."""
+        reply = self._ask_ik(x, y, z, roll, pitch, yaw, timeout=timeout)
+        return None if reply is None else list(reply.position)
 
-        The IK node speaks topics (/ik_delta in, /ik_solution out) with no
-        correlation id, so requests serialize on _ik_lock and failure
-        surfaces as a timeout.
+    def _ask_ik(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        timeout: float,
+        stream: bool = False,
+    ) -> JointState | None:
+        """The IK node's reply carrying the 5 arm joints, or None on failure;
+        ``stream`` asks /ik_stream for the best-effort answer instead.
+
+        The IK node speaks topics (/ik_delta or /ik_stream in, /ik_solution
+        out) with no correlation id, so requests serialize on _ik_lock and
+        failure surfaces as a timeout.
         """
         with self._ik_lock:
             self._ik_solution = None
             key = f"{x:.4f} {y:.4f} {z:.4f} {roll:.4f} {pitch:.4f} {yaw:.4f}"  # as mars_arm/ik.py echoes it
+            if stream:
+                key = f"stream {key}"
 
-            target = Twist()  # /ik_delta is an ABSOLUTE pose despite the name
+            target = Twist()  # an ABSOLUTE pose despite /ik_delta's name
             target.linear.x = x
             target.linear.y = y
             target.linear.z = z
             target.angular.x = roll
             target.angular.y = pitch
             target.angular.z = yaw
-            self._ik_target_pub.publish(target)
+            (self._ik_stream_pub if stream else self._ik_target_pub).publish(target)
 
             start_time = time.time()
             while time.time() - start_time < timeout:
@@ -831,15 +858,14 @@ class Manipulation:
                     if reply.header.frame_id and reply.header.frame_id != key:
                         self._ik_solution = None  # another client's reply on the shared topic
                         continue
-                    joint_positions = list(reply.position)
-                    if len(joint_positions) == 0:
+                    if len(reply.position) == 0:
                         return None  # the IK node's "unreachable" reply
                     # Callers append j6 unconditionally, so anything but the
                     # 5 arm joints would build a malformed 6-joint command.
-                    if len(joint_positions) != 5:
-                        self.logger.error(f"[Manipulation] IK returned {len(joint_positions)} joints, expected 5")
+                    if len(reply.position) != 5:
+                        self.logger.error(f"[Manipulation] IK returned {len(reply.position)} joints, expected 5")
                         return None
-                    return joint_positions
+                    return reply
 
         self.logger.debug(f"[Manipulation] IK solution timeout after {timeout}s")  # callers raise or skip
         return None

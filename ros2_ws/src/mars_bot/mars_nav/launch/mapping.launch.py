@@ -18,7 +18,7 @@ def generate_launch_description():
 
     # Declare launch arguments.
     declare_use_sim_time_argument = DeclareLaunchArgument(
-        "use_sim_time", default_value="true", description="Use simulation/Gazebo clock"
+        "use_sim_time", default_value="false", description="Use simulation/Gazebo clock"
     )
 
     # Configure the asynchronous slam_toolbox node using the parameter file.

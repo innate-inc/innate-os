@@ -44,7 +44,10 @@ void MarsArmNode::controlTimerCallback() {
         arm_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
         arm_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
         arm_state_msg_.effort = std::vector<double>(efforts.begin(), efforts.begin() + 6);
-        arm_state_pub_->publish(arm_state_msg_);
+        ++publish_tick_;
+        if (publish_tick_ % arm_state_publish_divisor_ == 0) {
+            arm_state_pub_->publish(arm_state_msg_);
+        }
 
         // Store latest joint positions for trajectory planning
         {
@@ -73,7 +76,9 @@ void MarsArmNode::controlTimerCallback() {
         std::vector<double> all_efforts(efforts.begin(), efforts.begin() + 6);
         all_efforts.push_back(efforts[6]);
         joint_state_msg_.effort = all_efforts;
-        joint_state_pub_->publish(joint_state_msg_);
+        if (publish_tick_ % joint_state_publish_divisor_ == 0) {
+            joint_state_pub_->publish(joint_state_msg_);
+        }
         ts[5] = std::chrono::steady_clock::now();
 
         // ========== PERIODIC GAIN DUMP (every 2s) ==========
@@ -271,15 +276,18 @@ void MarsArmNode::controlTimerCallback() {
 
                 robot_->setGoalPos(full_command);
 
-                // Publish command (in radians, external convention)
-                sensor_msgs::msg::JointState cmd_msg;
-                cmd_msg.header.stamp = this->now();
-                cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-                cmd_msg.position.resize(6);
-                for (size_t i = 0; i < 6; ++i) {
-                    cmd_msg.position[i] = jointRad(full_command[i], i);
+                if (full_command != last_published_command_) {
+                    last_published_command_ = full_command;
+                    // Publish command (in radians, external convention)
+                    sensor_msgs::msg::JointState cmd_msg;
+                    cmd_msg.header.stamp = this->now();
+                    cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+                    cmd_msg.position.resize(6);
+                    for (size_t i = 0; i < 6; ++i) {
+                        cmd_msg.position[i] = jointRad(full_command[i], i);
+                    }
+                    arm_command_state_pub_->publish(cmd_msg);
                 }
-                arm_command_state_pub_->publish(cmd_msg);
             } else if (has_head_command_.load()) {
                 int head_enc = 0;
                 {

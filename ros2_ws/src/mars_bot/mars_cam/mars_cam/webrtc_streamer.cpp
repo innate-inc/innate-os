@@ -641,6 +641,10 @@ void WebRTCStreamer::publish_status() {
         cam->prev_input_frames = in;
         cam->prev_encoded_frames = encoded;
     }
+    // After the sampling: a viewer joining later must get a 2 s rate, not one averaged over the idle gap.
+    if (active_streams_pub_->get_subscription_count() == 0) {
+        return;
+    }
 
     nlohmann::json clients = nlohmann::json::array();
     {

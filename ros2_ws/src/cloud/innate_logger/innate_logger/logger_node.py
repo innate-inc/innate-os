@@ -14,7 +14,6 @@ from collections.abc import Callable
 import psutil
 import rclpy
 from auth_client import AuthError, AuthProvider
-from diagnostic_msgs.msg import DiagnosticArray
 from dotenv import find_dotenv, load_dotenv
 from mars_msgs.msg import ArmStatus
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -81,9 +80,10 @@ class LoggerNode(Node):
         auth_issuer: str = str(self.get_parameter("auth_issuer_url").value)
 
         if not service_key:
-            message = "INNATE_SERVICE_KEY is required; set it in the environment or .env and restart the node"
-            self.get_logger().fatal(message)
-            raise RuntimeError(message)
+            self.get_logger().error(
+                "INNATE_SERVICE_KEY is not set; telemetry stays off until it is configured and the node restarted"
+            )
+            return
 
         # ── Auth + telemetry client ─────────────────────────────────
         auth = AuthProvider(issuer_url=auth_issuer, service_key=service_key)
@@ -102,7 +102,6 @@ class LoggerNode(Node):
 
         # ── Subscriptions ───────────────────────────────────────────
         self._latest_battery: BatteryState | None = None
-        self._latest_diagnostics: DiagnosticArray | None = None
         self._robot_id: str | None = None
         self._mac_address: str | None = None
         self._hardware_revision: str | None = None
@@ -119,7 +118,6 @@ class LoggerNode(Node):
 
         self.create_subscription(ArmStatus, "/mars/arm/status", self._on_arm_status, 1)
         self.create_subscription(BatteryState, "/battery_state", self._on_battery, 1)
-        self.create_subscription(DiagnosticArray, "/diagnostics", self._on_diagnostics, 1)
         self.create_subscription(String, "/brain/set_directive", self._on_directive, 10)
         self.create_subscription(String, "/robot/info", self._on_robot_info, 1)
 
@@ -182,9 +180,6 @@ class LoggerNode(Node):
 
     def _on_arm_status(self, msg: ArmStatus) -> None:
         self._latest_arm = msg
-
-    def _on_diagnostics(self, msg: DiagnosticArray) -> None:
-        self._latest_diagnostics = msg
 
     def _on_robot_info(self, msg: String) -> None:
         """Cache robot identity from mars_control's /robot/info.
@@ -299,16 +294,6 @@ class LoggerNode(Node):
             if not self._latest_arm.is_ok:
                 vitals["arm_error"] = self._latest_arm.error
                 summary += f" | arm {self._latest_arm.error}"
-
-        if self._latest_diagnostics is not None:
-            diag = self._latest_diagnostics
-            if diag.status:
-                entry = diag.status[0]
-                level = entry.level[0] if isinstance(entry.level, bytes) else entry.level
-                vitals["diagnostics_status"] = level
-                vitals["diagnostics_message"] = entry.message
-                vitals["diagnostics_hardware_id"] = entry.hardware_id
-                summary += f" | diag [{level}] {entry.name}: {entry.message}"
 
         # One concise health line; full vitals still stream to the cloud every tick.
         self.get_logger().info(f"vitals: {summary}", throttle_duration_sec=30.0)

@@ -59,20 +59,8 @@ class DatasetEncoder(Node):
         self.declare_parameter("scan_period_sec", 60.0)
 
         self.skills_root = os.path.expanduser(self.get_parameter("skills_root").value)
-        # Also scan the legacy in-place skill locations the brain still reports
-        # ($INNATE_OS_ROOT/skills, ~/skills; used through 0.5.x), else datasets
-        # recorded there never get encoded. realpath (like the media server's
-        # resolve) so symlinked roots dedup correctly.
-        innate_os_root = os.environ.get("INNATE_OS_ROOT", os.path.expanduser("~/innate-os"))
-        self.skills_roots = []
-        for root in (
-            self.skills_root,
-            os.path.join(innate_os_root, "skills"),
-            os.path.expanduser("~/skills"),
-        ):
-            root = os.path.realpath(root)
-            if root not in self.skills_roots:
-                self.skills_roots.append(root)
+        # realpath (like the media server's resolve) so a symlinked root matches.
+        self.skills_roots = [os.path.realpath(self.skills_root)]
         self.nice_level = int(self.get_parameter("nice_level").value)
         self.encode_threads = int(self.get_parameter("encode_threads").value)
         self.idle_io = bool(self.get_parameter("idle_io").value)

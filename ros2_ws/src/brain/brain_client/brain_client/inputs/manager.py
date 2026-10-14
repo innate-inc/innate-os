@@ -90,9 +90,9 @@ class InputDeviceManager:
                 self._custom_pub.publish(msg)
                 self._logger.debug(f"📤 Published custom data from '{device_name}'")
             elif data_type == "telemetry":
-                # UI-only status (e.g. the webapp's VAD meter) — the brain subscribes
-                # to /input_manager/custom, so telemetry must not ride that topic or
-                # it lands in every model turn's input.
+                # Status the model must not see (the webapp's VAD meter; the brain node
+                # reads only utterance_open) — /input_manager/custom lands in every
+                # model turn's input.
                 self._telemetry_pub.publish(msg)
             else:
                 self._logger.warning(

@@ -3,6 +3,7 @@
 // arm_node.cpp — Constructor, main()
 #include "mars_arm/arm_node.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -81,6 +82,8 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     // Declare parameters
     this->declare_parameter("baud_rate", 1000000);
     this->declare_parameter("control_frequency", 100.0);
+    this->declare_parameter("arm_state_publish_rate", 50.0);
+    this->declare_parameter("joint_state_publish_rate", 25.0);
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
@@ -88,6 +91,12 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
+    auto publish_divisor = [this](const char* rate_param) {
+        const double rate = this->get_parameter(rate_param).as_double();
+        return rate > 0.0 ? std::max(1, static_cast<int>(std::lround(control_frequency_ / rate))) : 1;
+    };
+    arm_state_publish_divisor_ = publish_divisor("arm_state_publish_rate");
+    joint_state_publish_divisor_ = publish_divisor("joint_state_publish_rate");
     auto joint_names_param = this->get_parameter("joints").as_string_array();
 
     // Load joint configurations from sub-parameters (nav2 style)
@@ -161,7 +170,9 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
 
     // ── HEAD publishers / subscribers / services ──
     RCLCPP_DEBUG(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
-    head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
+    // Latched: published on change, so a subscriber that starts later still gets the standing value.
+    head_position_pub_ =
+        this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", rclcpp::QoS(1).transient_local());
     joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     head_position_sub_ = this->create_subscription<std_msgs::msg::Int32>(
         "/mars/head/set_position", 10, std::bind(&MarsArmNode::headPositionCallback, this, std::placeholders::_1));
