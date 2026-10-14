@@ -65,3 +65,16 @@ agent attempts have been removed. Their source and old configuration snapshots
 remain in Git history. The general `demo_agent` and its LEGO pickup tool remain
 available, as do unrelated custom agents. Shared pickup, ArUco, navigation, and
 arm helpers remain implementation dependencies of the two supported sock agents.
+
+## Small toy pickup
+
+`pick_up_pile_little_toy` is an operator-invoked skill for the colorful soft toys
+in the floor pile. It locates a pile with YOLOE, inspects a padded native-image
+crop for individual toys, and maps the selected mask point back into the normal
+640x480 tracking coordinates. Boxes covering at least half the pile box are
+rejected; an unresolved pile returns to search instead of using its center.
+The existing instance-memory gate keeps re-detections on the selected toy.
+The skill retains the ArUco basket exclusion and existing approach/grip settings.
+Finger spacing confirms obstruction, not an exact one-toy count; toy grasp
+quality and grip calibration need physical rehearsal. The sock agents retain
+their original tool lists; this skill is separately selectable.

@@ -53,6 +53,37 @@ def detection_candidates(payload, threshold=0.05):
     return [candidate for _, candidate in sorted(found, key=lambda pair: pair[0], reverse=True)]
 
 
+def request_yoloe(jpeg, prompts):
+    """Use the shared authenticated detector endpoint for an immutable JPEG."""
+    boundary = uuid.uuid4().hex
+    prompt_fields = "".join(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{label}\r\n"
+        for label in prompts
+    )
+    body = (prompt_fields +
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"frame.jpg\"\r\n"
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
+    config_path = Path(__file__).resolve().parents[1] / "config" / "sock_detector.json"
+    config = load_demo_config(config_path)
+    # Explicit environment routing must not inherit another endpoint's credential.
+    if os.environ.get("SOCK_YOLOE_URL"):
+        endpoint = os.environ["SOCK_YOLOE_URL"]
+        api_key = os.environ.get("SOCK_YOLOE_API_KEY", "")
+    else:
+        endpoint = config.get("url", "http://mars-spark-sff.local:8765")
+        api_key = config.get("api_key", "")
+    url = endpoint.rstrip("/") + "/detect?confidence=0.05"
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    request = urllib.request.Request(
+        url, data=body, headers=headers
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.load(response)
+
+
 class _YoloePickupBase(PickSockFast):
     """Private implementation base; only the pile skills are selectable."""
 
@@ -85,34 +116,9 @@ class _YoloePickupBase(PickSockFast):
         except OSError as error:
             self.logger.warning(f"[YOLOE] image audit unavailable: {error}")
         prompts = getattr(self, "detection_prompts", (self.detection_prompt,))
-        prompt_fields = "".join(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{label}\r\n"
-            for label in prompts
-        )
-        body = (prompt_fields +
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"frame.jpg\"\r\n"
-            "Content-Type: image/jpeg\r\n\r\n"
-        ).encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
-        config_path = Path(__file__).resolve().parents[1] / "config" / "sock_detector.json"
-        config = load_demo_config(config_path)
-        # Explicit environment routing must not inherit another endpoint's credential.
-        if os.environ.get("SOCK_YOLOE_URL"):
-            endpoint = os.environ["SOCK_YOLOE_URL"]
-            api_key = os.environ.get("SOCK_YOLOE_API_KEY", "")
-        else:
-            endpoint = config.get("url", "http://mars-spark-sff.local:8765")
-            api_key = config.get("api_key", "")
-        url = endpoint.rstrip("/") + "/detect?confidence=0.05"
-        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"}
-        if api_key:
-            headers["Authorization"] = "Bearer " + api_key
-        request = urllib.request.Request(
-            url, data=body, headers=headers
-        )
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                payload = json.load(response)
+            payload = request_yoloe(jpeg, prompts)
             self.check_cancelled()
             candidates = detection_candidates(payload)
         except (OSError, ValueError, KeyError, TypeError) as error:

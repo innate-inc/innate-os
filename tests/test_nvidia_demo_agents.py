@@ -19,18 +19,20 @@ def inspect_roster():
     sys.path[:0] = [str(ROOT / "workspace"), str(ROOT / "ros2_ws/src/brain/brain_client")]
     os.environ["INNATE_OS_ROOT"] = str(ROOT)
     from brain_client.agents import loader
-    from brain_client.skills.workspace_import import registered_workspace_skills
+    from brain_client.skills.workspace_import import import_workspace_packages, registered_workspace_skills
 
     # Custom agents are operator-owned and can have unrelated dependencies.
     loader.get_custom_agents_dir = lambda: ROOT / "tests/nonexistent_custom_agents"
     logger = logging.getLogger(__name__)
     classes, errors = loader.discover_agent_classes(logger)
     assert not errors, errors
+    import_workspace_packages(logger)
     skills, rejected = registered_workspace_skills(logger)
     assert not rejected, rejected
     # Physical refs are backed by metadata; deployment checks must also confirm
     # recording files, which are intentionally not bundled into these tests.
     available = dict(skills)
+    assert "innate-os/pick_up_pile_little_toy" in available
     assert "innate-os/pick_sock_yoloe" not in available
     assert not any("yoloe_pickup_base" in name for name in available)
     for package, namespace in (("innate_skills", "innate-os"), ("custom_skills", "local")):
