@@ -20,11 +20,24 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
 
 ## What you can build
 
-| Agentic task execution | Spatial memory |
-| --- | --- |
-| Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. [See the demo agent →](workspace/innate_agents/demo_agent.py) | Ask about a place or object the robot has seen. Search remembered views for an image, map coordinates, and when it was seen, then navigate to the match. [See memory search →](workspace/innate_skills/search_memory.py) |
-| **Learned manipulation** | **Simulation → hardware** |
-| Record demonstrations, train a LeRobot policy, and deploy it as a skill alongside Python code and recorded motions. [Explore training →](https://docs.innate.bot/training/overview) | Build with the same agents, skills, and web app in the simulator and on MARS. Simulated hardware replaces physical drivers. [Build in simulation →](https://docs.innate.bot/simulator/building-with-the-simulator) |
+<table>
+  <tr>
+    <th align="center">Agentic task execution</th>
+    <th align="center">Spatial memory</th>
+  </tr>
+  <tr>
+    <td align="left">Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. <a href="workspace/innate_agents/demo_agent.py">See the demo agent →</a></td>
+    <td align="left">Ask about a place or object the robot has seen. Search remembered views for an image, map coordinates, and when it was seen, then navigate to the match. <a href="workspace/innate_skills/search_memory.py">See memory search →</a></td>
+  </tr>
+  <tr>
+    <th align="center">Learned manipulation</th>
+    <th align="center">Simulation → hardware</th>
+  </tr>
+  <tr>
+    <td align="left">Record demonstrations, train a LeRobot policy, and deploy it as a skill alongside Python code and recorded motions. <a href="https://docs.innate.bot/training/overview">Explore training →</a></td>
+    <td align="left">Build with the same agents, skills, and web app in the simulator and on MARS. Simulated hardware replaces physical drivers. <a href="https://docs.innate.bot/simulator/building-with-the-simulator">Build in simulation →</a></td>
+  </tr>
+</table>
 
 <table>
   <tr>
