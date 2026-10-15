@@ -110,45 +110,55 @@ Agents let the robot act on its own. One combines a set of skills, a prompt, inp
   <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent chaining pick-up and put-away skills to clean a room" width="520">
 </p>
 
-### Example: An agent that remembers where it saw things
+### Example: An agent that picks up and puts away socks
 
-“Go to where you saw the guitar.” The agent searches memory, then navigates to the matching location.
+“Put the socks in the low box.” Combine memory, navigation, turning, pick-up, and drop-off skills.
+
+<details>
+<summary>Show Python example</summary>
 
 ```python
 from innate import Agent, InputRef, SkillRef
+from innate_skills.drop_in_box import DropInBox
 from innate_skills.navigate_to_position import NavigateToPosition
+from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
+from innate_skills.turn_in_place import TurnInPlace
 from inputs.micro_input import MicroInput
 
 
-class FindPlaceAgent(Agent):
+class SockCleanupAgent(Agent):
     @property
     def id(self) -> str:
-        return "find_place_agent"
+        return "sock_cleanup_agent"
 
     @property
     def display_name(self) -> str:
-        return "Find a remembered place"
+        return "Sock cleanup"
 
     def get_skills(self) -> list[SkillRef]:
-        return [SearchMemory, NavigateToPosition]
+        return [SearchMemory, NavigateToPosition, TurnInPlace,
+                PickAnyObject, DropInBox]
 
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]
 
     def get_prompt(self) -> str:
-        return (
-            "When asked to find a place or object, search memory first. "
-            "Navigate to the returned map coordinates with local_frame=false. "
-            "If there is no match, ask the user to show you rather than guessing. "
-            "On arrival, check the camera and report what you see. "
-            "If the user says stop, stop immediately and do not retry."
-        )
+        return """Put socks into the low box the user identifies, one at a time.
+Search memory for socks or the box when out of view. Navigate to remembered
+map coordinates with local_frame=false, then confirm the target on camera.
+Turn in small steps to look around only when there is clearance to rotate.
+PickAnyObject(prompt="the sock") picks up a visible sock. After a successful
+pick-up, find the box and call DropInBox(prompt="the low box") only when it
+is visible and within arm reach. Confirm the sock landed inside, then repeat.
+If a target is missing, an action fails, or the result is unclear, ask for help.
+Stop immediately when asked; do not retry. Report when no more socks are found.
+"""
 ```
 
-List skills and inputs as the classes themselves, so your editor catches a typo before the robot does.
+Save as `workspace/custom_agents/sock_cleanup_agent.py` and select **Sock cleanup** in the web app. Memory needs recorded views on the current map; use a low container the arm can reach over.
 
-Save it as `workspace/custom_agents/find_place_agent.py` and select **Find a remembered place** in the web app. Memory needs recorded views from the current map; if nothing matches, the agent asks you to show it.
+</details>
 
 Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
