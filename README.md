@@ -51,20 +51,17 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
 </table>
 
-## See it in action
+## Run on Innate Robots
 
-<table>
-  <tr>
-    <td width="50%"><a href="https://docs.innate.bot/software/skills"><img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Physical skills on MARS: moving a chess piece and opening a door" width="420"></a></td>
-    <td width="50%"><img src="docs/assets/readme/mars-agent-demo.webp" alt="A real MARS navigating to, picking up, and dropping a blue sock" width="420"></td>
-  </tr>
-  <tr>
-    <td><strong>Move a chess piece. Open a door.</strong><br>Reusable skills on a real MARS.</td>
-    <td><strong>Find and pick up a sock.</strong><br>Give MARS a goal through the web app.</td>
-  </tr>
-</table>
+<p align="center">
+  <a href="https://github.com/innate-inc/mars"><img src="docs/assets/readme/mars-compatible.png" alt="MARS, Innate's open-source mobile robot with an arm" width="360"></a>
+</p>
 
-MARS is the supported reference hardware today. Innate OS separates agents, skills, and inputs from the robot drivers; ports to other robots are welcome and require hardware integration. [MARS quick start →](https://docs.innate.bot/get-started/mars-quick-start)
+Open-source robots from Innate:
+
+- **[MARS](https://github.com/innate-inc/mars)** — a mobile robot with an arm, and the reference hardware for Innate OS. [Hardware designs and build files →](https://github.com/innate-inc/mars) · [Quick start →](https://docs.innate.bot/get-started/mars-quick-start)
+
+Ports to other robots are welcome and require hardware integration.
 
 ## Try it without a robot
 
@@ -87,10 +84,6 @@ Open [https://localhost](https://localhost) to drive, run skills, and talk to th
 ## Skills
 
 Skills are the unit of action on an Innate robot — a software call, a motion, or a learned policy.
-
-<p align="center">
-  <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Two standalone skills: moving a chess piece, then opening a door" width="520">
-</p>
 
 Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
@@ -152,10 +145,6 @@ Built-in skills live in `workspace/innate_skills/`. You can also [record a motio
 
 Agents let the robot act on its own. One combines a set of skills, a prompt, inputs, and a loop that turns observations into actions.
 
-<p align="center">
-  <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent chaining pick-up and put-away skills to clean a room" width="520">
-</p>
-
 ### Example: An agent that finds a remembered place
 
 Short pseudocode showing the composition; the expanded example below uses the full Python API.
@@ -171,7 +160,7 @@ agent = Agent(
 )
 ```
 
-For a fuller example matching the video, add turning, pick-up, and drop-off:
+For a fuller example, add turning, pick-up, and drop-off:
 
 “Put the socks in the low box.” Combine memory, navigation, turning, pick-up, and drop-off skills.
 
