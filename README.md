@@ -81,7 +81,13 @@ Skills are the unit of action on an Innate robot — a software call, a motion, 
 
 Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
-### Example: A skill that nods
+<table>
+  <tr>
+    <th width="50%">A skill that nods</th>
+    <th width="50%">A skill that searches memory</th>
+  </tr>
+  <tr>
+    <td valign="top">
 
 ```python
 from innate import Head, Skill
@@ -97,10 +103,8 @@ class Nod(Skill):
         return "Nodded"
 ```
 
-Uses the same head control as [HeadEmotion](workspace/innate_skills/head_emotion.py). For a richer example, search remembered views:
-
-<details>
-<summary><strong>Read the memory-search skill</strong> — <em>click to expand</em></summary>
+</td>
+    <td valign="top">
 
 ```python
 from innate import Skill, SkillOutput, SpatialMemory
@@ -119,9 +123,13 @@ class SearchMemory(Skill):
         return SkillOutput(verdict.message, image=verdict.image)
 ```
 
-Condensed from [SearchMemory](workspace/innate_skills/search_memory.py). A search with no match returns that result; timeouts and errors fail the skill.
-
-</details>
+</td>
+  </tr>
+  <tr>
+    <td>Uses the head control from <a href="workspace/innate_skills/head_emotion.py">HeadEmotion</a>.</td>
+    <td>Condensed from <a href="workspace/innate_skills/search_memory.py">SearchMemory</a>, including timeout and error handling.</td>
+  </tr>
+</table>
 
 Built-in skills live in `workspace/innate_skills/`. You can also [record a motion and train a policy](https://docs.innate.bot/training/overview), then deploy it as a skill.
 
@@ -210,9 +218,6 @@ Stream new data into a running agent — a custom sensor, a webhook, an API. Dev
 
 ### Example: An input that reports an arm fault
 
-<details>
-<summary><strong>Read the arm-health input</strong> — <em>click to expand</em></summary>
-
 Simplified pseudocode: `subscribe` and `unsubscribe` stand in for ROS subscription setup and cleanup.
 
 ```python
@@ -238,9 +243,13 @@ class ArmVitalsInput(InputDevice):
 
 Based on [ArmVitalsInput](workspace/inputs/arm_vitals_input.py). It reports each transition into failure once, rather than repeating the alert on every status update. Add `ArmVitalsInput` to your agent's `get_inputs()` list to use the real implementation.
 
-</details>
-
 **[Input devices →](https://docs.innate.bot/software/inputs)**
+
+## Train with Innate
+
+Record demonstrations in the phone or web app, train an ACT policy on Innate’s GPUs, and deploy it as a skill your agents can call. No local GPU setup required.
+
+**[Record → train → deploy](https://docs.innate.bot/training/overview)**
 
 ## LeRobot
 
