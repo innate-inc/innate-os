@@ -81,22 +81,31 @@ Skills are the unit of action on an Innate robot — a software call, a motion, 
 
 Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
+### Example: A skill that searches spatial memory
+
+<details>
+<summary><strong>Read the memory-search skill</strong> — <em>click to expand</em></summary>
+
 ```python
-from innate import Mobility, Skill, SkillReturn
+from innate import Skill, SkillOutput, SpatialMemory
 
+class SearchMemory(Skill):
+    """Find a remembered place or object on the current map."""
+    memory: SpatialMemory
 
-class MoveForward(Skill):
-    """Move the robot forward by a given distance."""
-
-    mobility: Mobility
-
-    def execute(self, distance_m: float = 0.5) -> SkillReturn:
-        speed = 0.2
-        duration = distance_m / speed
-        self.mobility.send_cmd_vel(linear_x=speed, duration=duration)
-        self.sleep(duration)
-        return f"Moved forward {distance_m} m"
+    def execute(self, query: str):
+        recall = self.memory.begin(query)
+        verdict = self.wait_for(recall, timeout=150.0)
+        if verdict is None:
+            self.fail("memory search timed out")
+        if verdict.error:
+            self.fail(verdict.message)
+        return SkillOutput(verdict.message, image=verdict.image)
 ```
+
+Condensed from [SearchMemory](workspace/innate_skills/search_memory.py). A search with no match returns that result; timeouts and errors fail the skill.
+
+</details>
 
 Built-in skills live in `workspace/innate_skills/`. You can also [record a motion and train a policy](https://docs.innate.bot/training/overview), then deploy it as a skill.
 
@@ -166,17 +175,39 @@ Because the robot lives in the physical world, agents observe continuously and c
 
 ## Inputs
 
-Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by class:
+Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by class.
+
+### Example: An input that reports an arm fault
+
+<details>
+<summary><strong>Read the arm-health input</strong> — <em>click to expand</em></summary>
+
+Simplified pseudocode: `subscribe` and `unsubscribe` stand in for ROS subscription setup and cleanup.
 
 ```python
-from inputs.arm_vitals_input import ArmVitalsInput
+# Pseudocode adapted from ArmVitalsInput.
+class ArmVitalsInput(InputDevice):
+    name = "arm_vitals"
 
-from innate import InputRef
+    def on_open(self):
+        self.was_ok = True
+        self.subscription = subscribe("/mars/arm/status", self.on_status)
 
+    def on_status(self, status):
+        if not self.is_active():
+            return
+        if self.was_ok and not status.is_ok:
+            self.send_data(f"Arm servo failed: {status.error}",
+                           data_type="chat_in")
+        self.was_ok = status.is_ok
 
-def get_inputs(self) -> list[InputRef]:
-    return [ArmVitalsInput]
+    def on_close(self):
+        unsubscribe(self.subscription)
 ```
+
+Based on [ArmVitalsInput](workspace/inputs/arm_vitals_input.py). It reports each transition into failure once, rather than repeating the alert on every status update. Add `ArmVitalsInput` to your agent's `get_inputs()` list to use the real implementation.
+
+</details>
 
 **[Input devices →](https://docs.innate.bot/software/inputs)**
 
