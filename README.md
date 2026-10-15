@@ -115,7 +115,7 @@ Agents let the robot act on its own. One combines a set of skills, a prompt, inp
 “Put the socks in the low box.” Combine memory, navigation, turning, pick-up, and drop-off skills.
 
 <details>
-<summary>Show Python example</summary>
+<summary><strong>Read the sock-cleanup agent</strong> — <em>click to expand</em></summary>
 
 ```python
 from innate import Agent, InputRef, SkillRef
