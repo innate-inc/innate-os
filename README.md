@@ -81,7 +81,23 @@ Skills are the unit of action on an Innate robot — a software call, a motion, 
 
 Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
-### Example: A skill that searches spatial memory
+### Example: A skill that nods
+
+```python
+from innate import Head, Skill
+
+class Nod(Skill):
+    """Give a small nod."""
+    head: Head
+
+    def execute(self):
+        self.head.set_position(10)
+        self.sleep(0.4)
+        self.head.set_position(0)
+        return "Nodded"
+```
+
+Uses the same head control as [HeadEmotion](workspace/innate_skills/head_emotion.py). For a richer example, search remembered views:
 
 <details>
 <summary><strong>Read the memory-search skill</strong> — <em>click to expand</em></summary>
@@ -119,7 +135,22 @@ Agents let the robot act on its own. One combines a set of skills, a prompt, inp
   <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent chaining pick-up and put-away skills to clean a room" width="520">
 </p>
 
-### Example: An agent that picks up and puts away socks
+### Example: An agent that finds a remembered place
+
+Short pseudocode showing the composition; the expanded example below uses the full Python API.
+
+```python
+# Pseudocode: compose skills, an input, and instructions.
+agent = Agent(
+    skills=[SearchMemory, NavigateToPosition],
+    inputs=[MicroInput],
+    prompt="Search memory for the requested place. "
+           "Navigate to its map coordinates with local_frame=false. "
+           "If nothing matches, ask for help. Stop when asked.",
+)
+```
+
+For a fuller example matching the video, add turning, pick-up, and drop-off:
 
 “Put the socks in the low box.” Combine memory, navigation, turning, pick-up, and drop-off skills.
 
