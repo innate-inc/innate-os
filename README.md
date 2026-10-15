@@ -110,38 +110,47 @@ Agents let the robot act on its own. One combines a set of skills, a prompt, inp
   <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent chaining pick-up and put-away skills to clean a room" width="520">
 </p>
 
+### Example: An agent that remembers where it saw things
+
+“Go to where you saw the guitar.” The agent searches memory, then navigates to the matching location.
+
 ```python
+from innate import Agent, InputRef, SkillRef
 from innate_skills.navigate_to_position import NavigateToPosition
+from innate_skills.search_memory import SearchMemory
 from inputs.micro_input import MicroInput
 
-from innate import Agent, InputRef, SkillRef
 
-
-class NavigateAgent(Agent):
+class FindPlaceAgent(Agent):
     @property
     def id(self) -> str:
-        return "navigate_agent"
+        return "find_place_agent"
 
     @property
     def display_name(self) -> str:
-        return "Navigate"
+        return "Find a remembered place"
 
     def get_skills(self) -> list[SkillRef]:
-        return [NavigateToPosition]
+        return [SearchMemory, NavigateToPosition]
 
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]
 
     def get_prompt(self) -> str:
         return (
-            "You are a helpful robot. When asked, navigate "
-            "to the requested location."
+            "When asked to find a place or object, search memory first. "
+            "Navigate to the returned map coordinates with local_frame=false. "
+            "If there is no match, ask the user to show you rather than guessing. "
+            "On arrival, check the camera and report what you see. "
+            "If the user says stop, stop immediately and do not retry."
         )
 ```
 
 List skills and inputs as the classes themselves, so your editor catches a typo before the robot does.
 
-Save it in `workspace/custom_agents/`. Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
+Save it as `workspace/custom_agents/find_place_agent.py` and select **Find a remembered place** in the web app. Memory needs recorded views from the current map; if nothing matches, the agent asks you to show it.
+
+Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
 **[Agents documentation →](https://docs.innate.bot/software/agents)**
 
