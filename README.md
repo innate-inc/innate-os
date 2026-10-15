@@ -30,7 +30,7 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
     <th align="center">Spatial memory</th>
   </tr>
   <tr>
-    <td align="left"><img src="docs/assets/readme/agent-task-execution-square.gif" alt="Full recording of a MARS agent coordinating sock pickup and drop-off, accelerated 48 times" width="360"><br><sub>Full recording · 48× speed</sub><br><br>Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. <a href="workspace/innate_agents/demo_agent.py">See the demo agent →</a></td>
+    <td align="left"><img src="docs/assets/readme/agent-task-execution-horizontal.gif" alt="MARS agents coordinating sock pickup and drop-off, accelerated 48 times" width="360"><br><sub>48× speed</sub><br><br>Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. <a href="workspace/innate_agents/demo_agent.py">See the demo agent →</a></td>
     <td align="left">Ask about a place or object the robot has seen. Search remembered views for an image, map coordinates, and when it was seen, then navigate to the match. <a href="workspace/innate_skills/search_memory.py">See memory search →</a></td>
   </tr>
   <tr>
