@@ -10,7 +10,6 @@
 Build autonomous robots from reusable skills, continuous perception, spatial memory, and learned policies. Run your agents in simulation, then on physical hardware.
 
 [![Try in browser](https://img.shields.io/badge/Try_in_browser-401FFB?style=for-the-badge)](https://sim.innate.bot)
-[![Run locally](https://img.shields.io/badge/Run_locally-000000?style=for-the-badge)](#run-locally)
 
 **No robot required to get started.**
 
@@ -44,41 +43,23 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
 <table>
   <tr>
     <td width="50%"><a href="https://docs.innate.bot/software/skills"><img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Physical skills on MARS: moving a chess piece and opening a door" width="420"></a></td>
-    <td width="50%"><a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Try the simulator: a virtual MARS and its browser controls" width="420"></a></td>
+    <td width="50%"><img src="docs/assets/readme/mars-agent-demo.webp" alt="A real MARS navigating to, picking up, and dropping a blue sock" width="420"></td>
   </tr>
   <tr>
-    <td><strong>Physical skills on MARS</strong><br>Moving a chess piece and opening a door.<br><a href="https://docs.innate.bot/software/skills">Explore skills →</a></td>
-    <td><strong>Try the simulator</strong><br>Drive a virtual MARS and give its agent a goal in your browser.<br><a href="https://sim.innate.bot">Launch simulator →</a></td>
+    <td><strong>Move a chess piece. Open a door.</strong><br>Reusable skills on a real MARS.</td>
+    <td><strong>Find and pick up a sock.</strong><br>Give MARS a goal through the web app.</td>
   </tr>
 </table>
 
 MARS is the supported reference hardware today. Innate OS separates agents, skills, and inputs from the robot drivers; ports to other robots are welcome and require hardware integration. [Hardware and control →](#hardware-and-control)
 
-## Run locally
+## Try it without a robot
 
-Start the simulator on macOS, Linux, or WSL2:
+<p align="center">
+  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim-agent.gif" alt="The MARS simulator and agent interface in action" width="720"></a>
+</p>
 
-```bash
-curl -fsSL https://link.innate.bot/sim | sh
-
-cd innate-os
-./innate-sim up
-```
-
-Open [https://localhost](https://localhost), accept the local self-signed certificate, and use the web app to drive, run skills, or talk to the agent. See [simulator setup](https://docs.innate.bot/simulator/setup) for agent keys and platform requirements.
-
-Already cloned this repo? Run `sh scripts/install-sim.sh` from its root. A machine with 16 GB of RAM and four or more cores is comfortable; the first start downloads a few GB.
-
-```bash
-./innate-sim status
-./innate-sim sh
-./innate-sim logs startup
-./innate-sim down
-```
-
-Your `workspace/` is mounted into the simulator. Skills and agents hot-reload on save; deploy the same files to MARS when you are ready to test on hardware.
-
-**[Simulator guide →](sim/README.md)** · **[Build your first skill →](workspace/README.md)**
+**[Try the simulator →](https://sim.innate.bot)** — no install, no robot.
 
 ## How it works
 
