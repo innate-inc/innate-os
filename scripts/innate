@@ -1002,10 +1002,12 @@ def _foxglove_start():
     if is_sim_mode() and _foxglove_sim_window_exists():
         warn("Foxglove bridge already running (part of the sim stack)")
         print(f"  Connect Foxglove to {C.BOLD}{_foxglove_uri()}{C.NC}")
+        print(f"  Layout: sim/foxglove/mars-default.json ({C.BOLD}Layout → Import from file{C.NC} in Foxglove Studio)")
         return 0
     if tmux_session_exists(FOXGLOVE_TMUX_SESSION):
         warn(f"Foxglove bridge already running (tmux session '{FOXGLOVE_TMUX_SESSION}')")
         print(f"  Connect Foxglove to {C.BOLD}{_foxglove_uri()}{C.NC}")
+        print(f"  Layout: sim/foxglove/mars-default.json ({C.BOLD}Layout → Import from file{C.NC} in Foxglove Studio)")
         return 0
 
     env_cmd = f"source {INNATE_OS_ROOT}/config/dds/setup_dds.zsh && source {ROS_WS}/install/setup.zsh"
@@ -1029,6 +1031,7 @@ def _foxglove_start():
     )
     ok("Foxglove bridge starting")
     print(f"  Connect Foxglove to {C.BOLD}{_foxglove_uri()}{C.NC}")
+    print(f"  Layout: sim/foxglove/mars-default.json ({C.BOLD}Layout → Import from file{C.NC} in Foxglove Studio)")
     print(f"  Stop with {C.BOLD}innate foxglove stop{C.NC}")
     return 0
 
@@ -1060,6 +1063,7 @@ def _foxglove_status():
         print(f"  Start with {C.BOLD}innate foxglove start{C.NC}")
         return 1
     print(f"  Connect Foxglove to {C.BOLD}{_foxglove_uri()}{C.NC}")
+    print(f"  Layout: sim/foxglove/mars-default.json ({C.BOLD}Layout → Import from file{C.NC} in Foxglove Studio)")
     return 0
 
 

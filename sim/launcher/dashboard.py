@@ -933,6 +933,7 @@ def render_status(
             [
                 f"{DIM}rosbridge{NC} {config['rosbridge_url']}",
                 f"{DIM}foxglove{NC} ws://localhost:{config['foxglove_port']}",
+                f"{DIM}layout{NC} sim/foxglove/mars-default.json",
                 f"{DIM}logs{NC} {options.cli_sim} logs startup",
                 f"{DIM}shell{NC} {options.cli_sim} sh",
             ]
