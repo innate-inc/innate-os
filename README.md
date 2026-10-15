@@ -51,7 +51,7 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
 </table>
 
-MARS is the supported reference hardware today. Innate OS separates agents, skills, and inputs from the robot drivers; ports to other robots are welcome and require hardware integration. [Hardware and control →](#hardware-and-control)
+MARS is the supported reference hardware today. Innate OS separates agents, skills, and inputs from the robot drivers; ports to other robots are welcome and require hardware integration. [MARS quick start →](https://docs.innate.bot/get-started/mars-quick-start)
 
 ## Try it without a robot
 
@@ -61,84 +61,93 @@ MARS is the supported reference hardware today. Innate OS separates agents, skil
 
 **[Try the simulator →](https://sim.innate.bot)** — no install, no robot.
 
-## How it works
+Or clone and run it locally on macOS, Linux, or WSL2. This installer clones the repository and sets up the simulator:
 
-```mermaid
-flowchart LR
-    Goal[Your goal] --> Agent[Agent]
-    Observations[Perception and inputs] --> Agent
-    Agent <-->|Search remembered views| Memory[Spatial memory]
-    Agent --> Skills[Skills: code, motions, policies]
-    Skills --> Robot[Simulator or physical robot]
-    Robot --> Observations
-    Skills -->|Results and feedback| Agent
+```bash
+curl -fsSL https://link.innate.bot/sim | sh
+cd innate-os
+./innate-sim up
 ```
 
-The agent chooses skills from your Python workspace using camera observations, inputs, and skill feedback. It can search spatial memory for places outside the current view. Skills execute through the robot stack, built on ROS 2 Humble; the agent loop uses a vision-language model.
+Open [https://localhost](https://localhost) to drive, run skills, and talk to the agent. [Simulator setup →](https://docs.innate.bot/simulator/setup)
 
-## Build an agent that remembers places
+## Skills
 
-“Go to where you saw the guitar.” Give an agent memory search and navigation, then let it choose the calls:
+Skills are the unit of action on an Innate robot — a software call, a motion, or a learned policy.
+
+<p align="center">
+  <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Two standalone skills: moving a chess piece, then opening a door" width="520">
+</p>
+
+Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
 ```python
-from innate import Agent, InputRef, SkillRef
+from innate import Mobility, Skill, SkillReturn
+
+
+class MoveForward(Skill):
+    """Move the robot forward by a given distance."""
+
+    mobility: Mobility
+
+    def execute(self, distance_m: float = 0.5) -> SkillReturn:
+        speed = 0.2
+        duration = distance_m / speed
+        self.mobility.send_cmd_vel(linear_x=speed, duration=duration)
+        self.sleep(duration)
+        return f"Moved forward {distance_m} m"
+```
+
+Built-in skills live in `workspace/innate_skills/`. You can also [record a motion and train a policy](https://docs.innate.bot/training/overview), then deploy it as a skill.
+
+**[Skills documentation →](https://docs.innate.bot/software/skills)**
+
+## Agents
+
+Agents let the robot act on its own. One combines a set of skills, a prompt, inputs, and a loop that turns observations into actions.
+
+<p align="center">
+  <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent chaining pick-up and put-away skills to clean a room" width="520">
+</p>
+
+```python
 from innate_skills.navigate_to_position import NavigateToPosition
-from innate_skills.search_memory import SearchMemory
 from inputs.micro_input import MicroInput
 
+from innate import Agent, InputRef, SkillRef
 
-class FindPlaceAgent(Agent):
+
+class NavigateAgent(Agent):
     @property
     def id(self) -> str:
-        return "find_place_agent"
+        return "navigate_agent"
 
     @property
     def display_name(self) -> str:
-        return "Find a remembered place"
+        return "Navigate"
 
     def get_skills(self) -> list[SkillRef]:
-        return [SearchMemory, NavigateToPosition]
+        return [NavigateToPosition]
 
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]
 
     def get_prompt(self) -> str:
         return (
-            "When asked to find a place or object, search memory first. "
-            "Navigate to the returned map coordinates with local_frame=false. "
-            "If there is no match, ask the user to show you rather than guessing. "
-            "On arrival, check the camera and report what you see. "
-            "If the user says stop, stop immediately and do not retry."
+            "You are a helpful robot. When asked, navigate "
+            "to the requested location."
         )
 ```
 
-Save this as `workspace/custom_agents/find_place_agent.py`, select **Find a remembered place** in the web app's Agent page, and ask about somewhere the robot has already seen on its current map. Memory needs recorded views to search; it cannot locate a place it has never observed.
+List skills and inputs as the classes themselves, so your editor catches a typo before the robot does.
 
-This uses the same composition as the shipped [security guard agent](workspace/innate_agents/security_guard_agent.py). For manipulation, see the [demo agent](workspace/innate_agents/demo_agent.py), which adds pick-up, arm control, and drop-in-box skills.
-
-## Extend the workspace
-
-### Skills
-
-A skill is a software call, a robot motion, or a learned policy. Run it from an agent, the [web app](https://docs.innate.bot/robots/web-app), or the [phone app](https://docs.innate.bot/robots/innate-controller-app).
-
-Write your own in `workspace/custom_skills/`; built-in examples live in [`workspace/innate_skills/`](workspace/innate_skills/). Start with the [workspace guide](workspace/README.md), or explore:
-
-- [SearchMemory](workspace/innate_skills/search_memory.py): retrieve remembered views by a natural-language query.
-- [NavigateWithVision](workspace/innate_skills/navigate_with_vision.py): send a goal such as “walk to the red chair and stop” to the UniNavid cloud service, which streams movement commands back. Requires the navigation service to be configured and available.
-- [PickAnyObject](workspace/innate_skills/pick_any_object.py): use vision and arm control to pick up an object.
-
-**[Skills documentation →](https://docs.innate.bot/software/skills)**
-
-### Agents
-
-An agent combines skills, a prompt, inputs, and a loop that turns observations into actions. Put your agents in `workspace/custom_agents/`. List skills and inputs as classes, so your editor can catch reference errors before you run them.
+Save it in `workspace/custom_agents/`. Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
 **[Agents documentation →](https://docs.innate.bot/software/agents)**
 
-### Inputs
+## Inputs
 
-Stream new data into a running agent — a sensor, a webhook, or an API. Devices live in `workspace/inputs/` and are requested by class. For example, add arm telemetry to an agent:
+Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by class:
 
 ```python
 from inputs.arm_vitals_input import ArmVitalsInput
@@ -151,18 +160,6 @@ def get_inputs(self) -> list[InputRef]:
 ```
 
 **[Input devices →](https://docs.innate.bot/software/inputs)**
-
-## Hardware and control
-
-[MARS](https://innate.bot) is our reference implementation: a mobile robot with an arm, cameras, and onboard compute. The simulator runs the software that ships on MARS with simulated hardware in place of physical drivers. Other robots need a hardware integration; [contributions and ports are welcome](.github/CONTRIBUTING.md).
-
-<p align="center">
-  <img src="docs/assets/readme/mars-agent-demo.webp" alt="The web app controlling a physical MARS: chat, navigation, and picking up a blue sock" width="720">
-</p>
-
-See what the robot sees and tell it what to do from your browser or phone. On a physical robot, open `https://<robot-address>`, or use the [Android APK](https://cdn.innate.bot/innate-app-latest-1.4.0.apk) or [iOS TestFlight](https://testflight.apple.com/join/YeChe4A7).
-
-**[MARS quick start →](https://docs.innate.bot/get-started/mars-quick-start)** · **[Web app →](https://docs.innate.bot/robots/web-app)**
 
 ## LeRobot
 
