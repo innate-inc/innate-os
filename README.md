@@ -1,7 +1,11 @@
 <!-- markdownlint-disable MD033 MD046 -->
 <div align="center">
 
-# Innate OS
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/innate-os-repo-intro-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/innate-os-repo-intro.png">
+  <img src="docs/assets/readme/innate-os-repo-intro.png" alt="Innate OS" width="70%">
+</picture>
 
 **The open-source runtime for autonomous physical agents.**
 
