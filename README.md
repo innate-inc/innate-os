@@ -111,20 +111,26 @@ class Nod(Skill):
     <td valign="top">
 
 ```python
-from innate import Skill, SkillOutput, SpatialMemory
-
+from innate import (
+    Skill, SkillOutput, SpatialMemory,
+)
 class SearchMemory(Skill):
-    """Find a remembered place or object on the current map."""
+    """Find a remembered place."""
     memory: SpatialMemory
 
     def execute(self, query: str):
         recall = self.memory.begin(query)
-        verdict = self.wait_for(recall, timeout=150.0)
+        verdict = self.wait_for(
+            recall, timeout=150.0,
+        )
         if verdict is None:
-            self.fail("memory search timed out")
+            self.fail("search timed out")
         if verdict.error:
             self.fail(verdict.message)
-        return SkillOutput(verdict.message, image=verdict.image)
+        return SkillOutput(
+            verdict.message,
+            image=verdict.image,
+        )
 ```
 
 </td>
