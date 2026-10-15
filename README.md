@@ -39,18 +39,15 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
 </table>
 
-<br>
+## See it in action
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Physical robot skills: moving a chess piece and opening a door" width="420"></td>
-    <td width="50%"><a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="The simulated robot and its browser controls" width="420"></a></td>
-  </tr>
-  <tr>
-    <td><strong>Give the robot a new skill.</strong><br>Code, recorded motions, and learned policies share the same skill interface.</td>
-    <td><strong>Try it before you have hardware.</strong><br>Drive, run skills, and talk to an agent in the browser.</td>
-  </tr>
-</table>
+<p>
+  <a href="https://docs.innate.bot/software/skills"><img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Physical skills on MARS: moving a chess piece and opening a door" width="48%"></a>
+  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Try the simulator: a virtual MARS and its browser controls" width="48%"></a>
+</p>
+
+- **Physical skills on MARS (left).** Moving a chess piece and opening a door. [Explore skills →](https://docs.innate.bot/software/skills)
+- **Try the simulator (right).** Drive a virtual MARS and give its agent a goal in your browser. [Launch simulator →](https://sim.innate.bot)
 
 MARS is the supported reference hardware today. Innate OS separates agents, skills, and inputs from the robot drivers; ports to other robots are welcome and require hardware integration. [Hardware and control →](#hardware-and-control)
 
