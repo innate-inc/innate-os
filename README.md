@@ -57,11 +57,9 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   <a href="https://github.com/innate-inc/mars"><img src="docs/assets/readme/mars-compatible.png" alt="MARS, Innate's open-source mobile robot with an arm" width="360"></a>
 </p>
 
-Open-source robots from Innate:
+[MARS](https://github.com/innate-inc/mars), a $995 portable mobile manipulator, completely open source, with more embodiments coming soon.
 
-- **[MARS](https://github.com/innate-inc/mars)** — a mobile robot with an arm, and the reference hardware for Innate OS. [Hardware designs and build files →](https://github.com/innate-inc/mars) · [Quick start →](https://docs.innate.bot/get-started/mars-quick-start)
-
-Ports to other robots are welcome and require hardware integration.
+**We welcome ports to new robots.**
 
 ## Try it without a robot
 
