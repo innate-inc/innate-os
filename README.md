@@ -39,6 +39,8 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
 </table>
 
+<br>
+
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Physical robot skills: moving a chess piece and opening a door" width="420"></td>
