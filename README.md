@@ -31,10 +31,10 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
   <tr>
     <td align="left" width="50%">
-      <p align="center"><img src="docs/assets/readme/agent-task-execution-full.gif" alt="MARS agents coordinating sock pickup and drop-off" width="360"></p>
+      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/agent-task-execution-ab9bd7dc1576.gif" alt="MARS agents coordinating sock pickup and drop-off" width="360"></p>
       Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. <a href="workspace/innate_agents/demo_agent.py">See the demo agent →</a></td>
     <td align="left" width="50%">
-      <p align="center"><img src="docs/assets/readme/spatial-memory-full.gif" alt="Searching remembered views and navigating to the cabinet on the map" width="360"></p>
+      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/spatial-memory-6f51e73ec598.gif" alt="Searching remembered views and navigating to the cabinet on the map" width="360"></p>
       Ask about a place or object the robot has seen. Search remembered views for an image, map coordinates, and when it was seen, then navigate to the match. <a href="workspace/innate_skills/search_memory.py">See memory search →</a></td>
   </tr>
   <tr>
@@ -43,10 +43,10 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
   <tr>
     <td align="left" width="50%">
-      <p align="center"><img src="docs/assets/readme/learned-manipulation-full.gif" alt="Collecting MARS demonstrations with LeRobot and visualizing observations and actions" width="360"></p>
+      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/learned-manipulation-b466b54b0d43.gif" alt="Collecting MARS demonstrations with LeRobot and visualizing observations and actions" width="360"></p>
       Record demonstrations, train a LeRobot policy, and deploy it as a skill alongside Python code and recorded motions. <a href="https://docs.innate.bot/training/overview">Explore training →</a></td>
     <td align="left" width="50%">
-      <p align="center"><img src="docs/assets/readme/simulation-hardware-full.gif" alt="MARS opening a cabinet in the simulator" width="360"></p>
+      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/simulation-hardware-f74c1116c13e.gif" alt="MARS opening a cabinet in the simulator" width="360"></p>
       Build with the same agents, skills, and web app in the simulator and on MARS. Simulated hardware replaces physical drivers. <a href="https://docs.innate.bot/simulator/building-with-the-simulator">Build in simulation →</a></td>
   </tr>
 </table>
