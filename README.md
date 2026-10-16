@@ -1,20 +1,20 @@
 <!-- markdownlint-disable MD033 MD046 -->
 <div align="center">
 
-<a href="docs/assets/readme/innate-os-repo-intro.png#gh-light-mode-only">
-  <img src="docs/assets/readme/innate-os-repo-intro.png" alt="Innate OS" width="70%">
+<a href="https://github.com/user-attachments/assets/2d622164-5683-4a75-bd85-08e12087c8e9#gh-light-mode-only">
+  <img src="https://github.com/user-attachments/assets/2d622164-5683-4a75-bd85-08e12087c8e9" alt="Innate OS" width="70%">
 </a>
-<a href="docs/assets/readme/innate-os-repo-intro-dark.png#gh-dark-mode-only">
-  <img src="docs/assets/readme/innate-os-repo-intro-dark.png" alt="Innate OS" width="70%">
+<a href="https://github.com/user-attachments/assets/9117d472-a9f7-49d2-b0f3-45ac58c5f4e1#gh-dark-mode-only">
+  <img src="https://github.com/user-attachments/assets/9117d472-a9f7-49d2-b0f3-45ac58c5f4e1" alt="Innate OS" width="70%">
 </a>
 
 **The open-source runtime for autonomous physical agents.**
 
-<img src="docs/assets/readme/agent-clean-room.gif" alt="A physical robot chaining pick-up and put-away skills to tidy a room (sped-up footage)" width="720">
+<img src="https://github.com/user-attachments/assets/6e09f936-a7a6-4d47-ac91-4bfe2b028b65" alt="A physical robot chaining pick-up and put-away skills to tidy a room (sped-up footage)" width="720">
 
 Build autonomous robots from reusable skills, continuous perception, spatial memory, and learned policies. Run your agents in simulation, then on physical hardware.
 
-[![Try in browser](https://img.shields.io/badge/Try_in_browser-401FFB?style=for-the-badge)](https://sim.innate.bot)
+[![Try in browser](https://github.com/user-attachments/assets/8eddca7f-92f5-4a13-b084-c7a7a4f325f7)](https://sim.innate.bot)
 
 **No robot required to get started.**
 
@@ -31,10 +31,10 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
   <tr>
     <td align="left" width="50%">
-      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/agent-task-execution-ab9bd7dc1576.gif" alt="MARS agents coordinating sock pickup and drop-off" width="360"></p>
+      <p align="center"><img src="https://github.com/user-attachments/assets/d4c02be3-1099-4578-a27e-15403380220a" alt="MARS agents coordinating sock pickup and drop-off" width="360"></p>
       Combine navigation, pick-up, and put-away skills around a goal. The agent observes while skills run and can interrupt them as the world changes. <a href="workspace/innate_agents/demo_agent.py">See the demo agent →</a></td>
     <td align="left" width="50%">
-      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/spatial-memory-6f51e73ec598.gif" alt="Searching remembered views and navigating to the cabinet on the map" width="360"></p>
+      <p align="center"><img src="https://github.com/user-attachments/assets/a8e49a2d-fc63-4a43-b10f-c2390548b600" alt="Searching remembered views and navigating to the cabinet on the map" width="360"></p>
       Ask about a place or object the robot has seen. Search remembered views for an image, map coordinates, and when it was seen, then navigate to the match. <a href="workspace/innate_skills/search_memory.py">See memory search →</a></td>
   </tr>
   <tr>
@@ -43,10 +43,10 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
   </tr>
   <tr>
     <td align="left" width="50%">
-      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/learned-manipulation-b466b54b0d43.gif" alt="Collecting MARS demonstrations with LeRobot and visualizing observations and actions" width="360"></p>
+      <p align="center"><img src="https://github.com/user-attachments/assets/e689af91-0340-48d8-ba2d-2225569fcada" alt="Collecting MARS demonstrations with LeRobot and visualizing observations and actions" width="360"></p>
       Record demonstrations, train a LeRobot policy, and deploy it as a skill alongside Python code and recorded motions. <a href="https://docs.innate.bot/training/overview">Explore training →</a></td>
     <td align="left" width="50%">
-      <p align="center"><img src="https://cdn.innate.bot/innate-os/readme/simulation-hardware-f74c1116c13e.gif" alt="MARS opening a cabinet in the simulator" width="360"></p>
+      <p align="center"><img src="https://github.com/user-attachments/assets/5ed97c18-4d98-4e81-8243-b92a80ae7c02" alt="MARS opening a cabinet in the simulator" width="360"></p>
       Build with the same agents, skills, and web app in the simulator and on MARS. Simulated hardware replaces physical drivers. <a href="https://docs.innate.bot/simulator/building-with-the-simulator">Build in simulation →</a></td>
   </tr>
 </table>
@@ -54,7 +54,7 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
 ## Run on Innate Robots
 
 <p align="center">
-  <a href="https://github.com/innate-inc/mars"><img src="docs/assets/readme/mars-compatible.png" alt="MARS, Innate's open-source mobile robot with an arm" width="360"></a>
+  <a href="https://github.com/innate-inc/mars"><img src="https://github.com/user-attachments/assets/b4f1557d-ad05-4c84-acf0-932aee3d9e50" alt="MARS, Innate's open-source mobile robot with an arm" width="360"></a>
 </p>
 
 [MARS](https://github.com/innate-inc/mars), a $995 portable mobile manipulator, completely open source, with more embodiments coming soon.
@@ -64,7 +64,7 @@ Build autonomous robots from reusable skills, continuous perception, spatial mem
 ## Try it without a robot
 
 <p align="center">
-  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim-agent.gif" alt="The MARS simulator and agent interface in action" width="720"></a>
+  <a href="https://sim.innate.bot"><img src="https://github.com/user-attachments/assets/a7a9b13b-c53f-46d1-be0b-2ee055d04ffc" alt="The MARS simulator and agent interface in action" width="720"></a>
 </p>
 
 **[Try the simulator →](https://sim.innate.bot)** — no install, no robot.
