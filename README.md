@@ -101,9 +101,11 @@ class Nod(Skill):
     head: Head
 
     def execute(self):
-        self.head.set_position(10)
-        self.sleep(0.4)
-        self.head.set_position(0)
+        try:
+            self.head.set_position(10)
+            self.sleep(0.4)
+        finally:
+            self.head.set_position(0)
         return "Nodded"
 ```
 
