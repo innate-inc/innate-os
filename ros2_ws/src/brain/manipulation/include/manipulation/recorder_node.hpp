@@ -32,6 +32,7 @@
 #include "brain_messages/srv/copy_episode.hpp"
 
 #include "manipulation/episode_data.hpp"
+#include "manipulation/ee_kinematics.hpp"
 #include "manipulation/task_manager.hpp"
 
 namespace manipulation {
@@ -42,6 +43,9 @@ class RecorderNode : public rclcpp::Node {
     ~RecorderNode() override = default;
 
    private:
+    std::unique_ptr<EeKinematics> ee_kinematics_;
+    std::string recording_urdf_;
+
     // State enum
     enum class State { IDLE, TASK_ACTIVE, EPISODE_ACTIVE, EPISODE_STOPPED };
 

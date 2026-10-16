@@ -13,6 +13,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(kdl_parser REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -61,6 +63,8 @@ target_link_libraries(recorder_node_cpp
 
 ament_target_dependencies(recorder_node_cpp
   rclcpp
+  ament_index_cpp
+  kdl_parser
   sensor_msgs
   geometry_msgs
   nav_msgs
@@ -84,6 +88,9 @@ install(
 )
 
 if(BUILD_TESTING)
+  add_executable(record_ee_fixture test/record_ee_fixture.cpp src/episode_data.cpp)
+  target_link_libraries(record_ee_fixture ${HDF5_LIBRARIES} ${MPI_C_LIBRARIES})
+  ament_target_dependencies(record_ee_fixture kdl_parser OpenCV)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

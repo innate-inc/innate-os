@@ -13,6 +13,9 @@
 
   <!-- ROS core -->
   <depend>rclcpp</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>kdl_parser</depend>
+  <exec_depend>mars_sim</exec_depend>
   <depend>tf2_ros</depend>
 
   <!-- ROS messages -->
