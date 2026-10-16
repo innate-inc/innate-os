@@ -41,8 +41,7 @@ const THINKING_STALE_MS = 10_000;
  *   onRobotMessage?: (text: string, timestamp: number) => void,
  *   onSkillStatus?: (event: {skill: string, runId: string, status: string, timestamp: number}) => void,
  * }} opts
- *   enableMic connects the browser microphone in sim, where the robot has no
- *   physical microphone (see micStream.js).
+ *   enableMic makes this page's microphone the robot's (see micStream.js).
  * @returns {{
  *   destroy: () => void,
  *   startMic: () => Promise<void>,

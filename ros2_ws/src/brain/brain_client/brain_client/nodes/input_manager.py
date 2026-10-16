@@ -50,6 +50,8 @@ class InputManagerNode(Node):
         # Credentials come from env (INNATE_PROXY_URL, INNATE_SERVICE_KEY); config from params.
         self.declare_parameter("stt_backend", "elevenlabs")
         self.declare_parameter("stt_vad_engine", "silero")
+        # Demo branch: a robot on it is deaf until a web app page streams /mic/audio.
+        self.declare_parameter("stt_mic_source", "browser")
         self.declare_parameter("stt_language", "en")
         self.declare_parameter("stt_agc_max_db", 24.0)
         self.declare_parameter("stt_filter_background_audio", True)
@@ -65,6 +67,7 @@ class InputManagerNode(Node):
         proxy_config = {
             "stt_backend": self.get_parameter("stt_backend").value,
             "stt_vad_engine": self.get_parameter("stt_vad_engine").value,
+            "stt_mic_source": self.get_parameter("stt_mic_source").value,
             "stt_language": self.get_parameter("stt_language").value,
             "stt_agc_max_db": self.get_parameter("stt_agc_max_db").value,
             "stt_filter_background_audio": self.get_parameter("stt_filter_background_audio").value,

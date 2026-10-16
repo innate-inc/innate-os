@@ -10,6 +10,8 @@ import asyncio
 
 from aiohttp import ContentTypeError, web
 
+DEFAULT_MIC_SOURCE = "browser"  # input_manager_node's own stt_mic_source default
+
 
 async def settings_get(request: web.Request) -> web.Response:
     """GET /settings.json -> the live override values from config/settings.yaml."""
@@ -19,6 +21,17 @@ async def settings_get(request: web.Request) -> web.Response:
         return {"overrides": settings_store.read_overrides(), "exists": settings_store.settings_path().is_file()}
 
     return web.json_response(await asyncio.to_thread(read), headers={"Cache-Control": "no-cache"})
+
+
+def mic_source() -> str:
+    """The saved stt_mic_source — what input_manager_node hears through once it
+    has restarted on this file."""
+    import settings_store
+
+    node = settings_store.read_overrides().get("input_manager_node")
+    params = node.get("ros__parameters") if isinstance(node, dict) else None
+    source = params.get("stt_mic_source") if isinstance(params, dict) else None
+    return str(source or DEFAULT_MIC_SOURCE)
 
 
 async def settings_apply(request: web.Request) -> web.Response:

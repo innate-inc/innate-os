@@ -61,7 +61,7 @@ from media_routes import (
     run_log_response,
     thumb_response,
 )
-from settings_routes import settings_apply, settings_get
+from settings_routes import mic_source, settings_apply, settings_get
 
 HTTPS_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 443
 # Cleartext HTTP listener serving the SAME app as the TLS front door, so the site
@@ -365,11 +365,12 @@ async def sim_viewer_handler(request: web.Request) -> web.StreamResponse:
 async def config_handler(request: web.Request) -> web.Response:
     """Serve config.json with env-driven feature flags overlaid, so a deployment
     can flip flags without editing the committed file (the sim sets
-    WEBAPP_SIM_CONTROLS=1)."""
+    WEBAPP_SIM_CONTROLS=1), plus the saved microphone source."""
     try:
         cfg = json.loads((ROOT / "config.json").read_text())
     except Exception:
         cfg = {}
+    cfg["micSource"] = await asyncio.to_thread(mic_source)
     if WEBAPP_SIM_CONTROLS:
         cfg["simControls"] = True
         # The 3D view prefers a direct loopback socket over this relay.

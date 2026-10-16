@@ -5,8 +5,9 @@
 Microphone Input Device
 
 Connects to a microphone and a speech-to-text backend to get voice transcripts.
-The microphone is the machine's ALSA capture device, or — on a machine that has
-none, i.e. the sim — a client pushing PCM over ROS (``RosPcmStreamer``).
+The microphone is the machine's ALSA capture device or a web app page pushing
+PCM over ROS (``RosPcmStreamer``), picked by ``stt_mic_source`` — always the
+page on a machine with no ALSA, i.e. the sim.
 
 Three backends, selected by the ``stt_backend`` setting:
 
@@ -77,6 +78,10 @@ DEFAULT_STT_BACKEND = "elevenlabs"
 
 VAD_ENGINES = frozenset({"silero", "energy"})
 DEFAULT_VAD_ENGINE = "silero"
+
+# "browser" is the web app's microphone, streamed on MIC_AUDIO_TOPIC.
+MIC_SOURCES = frozenset({"robot", "browser"})
+DEFAULT_MIC_SOURCE = "browser"
 
 # One vad_status frame per this many mic chunks (20 ms each) — 5 Hz on the wire.
 VAD_STATUS_EVERY_CHUNKS = 10
@@ -194,6 +199,7 @@ class MicroInput(InputDevice):
         self.client = None
         self._backend = DEFAULT_STT_BACKEND
         self._vad_engine = DEFAULT_VAD_ENGINE
+        self._mic_source = DEFAULT_MIC_SOURCE
         self._vad_detector = None
         self._agc: SlowAgc | None = None
         self._endpointer: Endpointer | None = None
@@ -281,7 +287,8 @@ class MicroInput(InputDevice):
         try:
             self.mic = self._start_audio_source()
             self.logger.info(
-                f"🎙️ Microphone started (rate: {DEFAULT_SAMPLE_RATE}, channels: {DEFAULT_CHANNELS}, "
+                f"🎙️ Microphone started (source: {self._mic_source}, rate: {DEFAULT_SAMPLE_RATE}, "
+                f"channels: {DEFAULT_CHANNELS}, "
                 f"agc: {'off' if self._agc is None else f'≤+{max_gain_db:g} dB'})"
             )
             self._connect_via_proxy()
@@ -291,19 +298,32 @@ class MicroInput(InputDevice):
             raise
 
     def _start_audio_source(self):
-        device = self._detect_audio_device()
-
-        # No arecord at all, rather than arecord listing no cards: a robot whose
-        # microphone did not enumerate still has a working `default` to reach for.
-        if shutil.which("arecord") is None and self.node is not None:
+        self._mic_source = self._resolve_mic_source()
+        if self._mic_source == "browser":
             mic = RosPcmStreamer(self.node, self.logger)
             mic.start()
             return mic
 
+        device = self._detect_audio_device()
         self.logger.info(f"🎙️ Using audio device: {device or 'default'}")
         mic = ArecordStreamer(self.logger)
         mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
+
+    def _resolve_mic_source(self) -> str:
+        if self.node is None:
+            return "robot"  # browser audio arrives over ROS
+        # No arecord at all, rather than arecord listing no cards: a robot whose
+        # microphone did not enumerate still has a working `default` to reach for.
+        if shutil.which("arecord") is None:
+            return "browser"
+        source = str(self.proxy.config.get("stt_mic_source") or DEFAULT_MIC_SOURCE).strip().lower()
+        if source not in MIC_SOURCES:
+            self.logger.error(
+                f"❌ Unknown stt_mic_source {source!r} — using {DEFAULT_MIC_SOURCE!r} (options: {sorted(MIC_SOURCES)})"
+            )
+            source = DEFAULT_MIC_SOURCE
+        return source
 
     def _on_elevenlabs_message(self, ws, message: str):
         """Handle incoming messages from the ElevenLabs Scribe realtime API."""
@@ -484,6 +504,7 @@ class MicroInput(InputDevice):
             "kind": "vad_status",
             "backend": self._backend,
             "engine": self._vad_engine,
+            "mic_source": self._mic_source,
             "last_transcript": self._last_transcript,
         }
         status = self._endpointing_status(client)
@@ -899,7 +920,9 @@ class RosPcmStreamer:
         from std_msgs.msg import String
 
         self._sub = self._node.create_subscription(String, MIC_AUDIO_TOPIC, self._on_audio, 10)
-        self.logger.info(f"🎙️ No capture device — listening for browser audio on {MIC_AUDIO_TOPIC}")
+        self.logger.warning(
+            f"🎙️ Hearing through the web app on {MIC_AUDIO_TOPIC} — deaf until a page streams its microphone"
+        )
 
     def _on_audio(self, msg):
         try:

@@ -1,11 +1,13 @@
 // @ts-check
-// The browser as the sim robot's microphone, mirroring ttsAudio where it is the
-// speaker. Streams base64 PCM16 on /mic/audio, where MicroInput takes it in
-// place of arecord and runs the robot's own VAD + transcription. Never mounts
-// against a real robot, which listens with its own mic.
+// The browser as the robot's microphone, mirroring ttsAudio where it is the
+// sim's speaker. Streams base64 PCM16 on /mic/audio, where MicroInput takes it in
+// place of arecord and runs the robot's own VAD + transcription. Mounts in the
+// sim, which has no microphone, and against a real robot whose stt_mic_source is
+// "browser" (a laptop mic held near a visitor in a hall too loud for its own).
 //
 // Publishing pauses while a clip plays in this page: the sim's speaker is these
-// same speakers, and the robot must not transcribe itself.
+// same speakers, and the robot must not transcribe itself. A real robot speaks
+// from its own speaker and ducks this stream on its side (/tts/is_playing).
 
 import { MIC_AUDIO_TOPIC } from "../constants.js";
 import { isTtsPlaying } from "../micAudioState.js";

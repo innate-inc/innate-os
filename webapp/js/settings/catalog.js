@@ -94,6 +94,11 @@ const VOICE_OPTIONS = [
   { value: "79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e", label: "Nonfiction Man" },
 ];
 
+const MIC_SOURCE_OPTIONS = [
+  { value: "browser", label: "Web app microphone" },
+  { value: "robot", label: "Onboard microphone" },
+];
+
 const STT_BACKEND_OPTIONS = [
   { value: "elevenlabs_batch", label: "ElevenLabs Scribe (batch)" },
   { value: "gemini", label: "Gemini (batch)" },
@@ -151,8 +156,9 @@ export const SETTINGS_PAGES = [
       },
       {
         title: "Hearing",
-        note: "Which service turns the microphone into text. The backend picks which model knob applies.",
+        note: "Which microphone the robot hears through and which service turns it into text. The backend picks which model knob applies.",
         knobs: [
+          { path: ["input_manager_node", P, "stt_mic_source"], label: "Microphone", default: "browser", type: "string", options: MIC_SOURCE_OPTIONS, doc: "browser: the web app's microphone over rosbridge — hold to talk on the Agent page; the robot is deaf while no page streams · robot: the onboard mic" },
           { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone" },
           { path: ["input_manager_node", P, "stt_language"], label: "Language", default: "en", type: "string", doc: "Transcription language code" },
           { path: ["input_manager_node", P, "elevenlabs_stt_model"], label: "Scribe realtime model", default: "scribe_v2_realtime", type: "string", doc: "ElevenLabs model for the elevenlabs (realtime) backend" },

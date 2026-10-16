@@ -224,6 +224,9 @@
 # input_manager_node runs the voice / transcription loop; its model settings live
 # here. The TTS voice is shared globally — set it once under /** above (it
 # reaches both nodes; .env CARTESIA_VOICE_ID is the default).
+# stt_mic_source picks the ears: "browser" (this demo branch's default — the
+# web app's microphone over rosbridge; the robot is deaf until a page streams)
+# or "robot" (the onboard ALSA mic). Applies on restart.
 # stt_backend picks the transcription service; the default is "elevenlabs"
 # (Scribe realtime) — rollback is setting "elevenlabs_batch" here. Batch
 # backends cut utterances on the robot and send each one whole:
@@ -249,6 +252,7 @@
 # The model knobs of the backends you aren't using are simply unused.
 # input_manager_node:
 #   ros__parameters:
+#     stt_mic_source: "browser"     # "robot" listens with the onboard mic
 #     stt_backend: "elevenlabs"      # default; "elevenlabs_batch" is the rollback
 #     stt_vad_engine: "silero"
 #     stt_language: "en"

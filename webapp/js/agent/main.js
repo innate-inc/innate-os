@@ -14,8 +14,9 @@
 //
 // Connect/disconnect lifecycle and optimistic mount mirror teleop (see
 // pageMount.js): the view builds immediately and panels fill in once the socket
-// is up. The centered hold-to-talk control is the sim's voice input; robot
-// speech comes back through the shell's ttsAudio.
+// is up. The centered hold-to-talk control is the voice input wherever the robot
+// hears through this page (micStream.js); in sim, robot speech comes back
+// through the shell's ttsAudio.
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
@@ -40,6 +41,7 @@ import { createAgentMicControl } from "./agentMicControl.js";
 // it synchronously.
 /** @type {any} */
 const config = await getConfig();
+const browserMic = Boolean(config.simControls) || config.micSource === "browser";
 
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
@@ -171,7 +173,7 @@ function buildAgentView(root) {
   let recalledAt = 0;
   let turnedAt = 0;
   const panel = createAgentPanel(root, ros, agentState, {
-    enableMic: Boolean(config.simControls),
+    enableMic: browserMic,
     onMicState: (state) => {
       micControl?.setCaptureState(state);
       micControl?.setAudioFeedback({
@@ -249,7 +251,7 @@ function buildAgentView(root) {
   };
   root.addEventListener("pointerdown", onScenePointerDown);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
-  if (config.simControls) {
+  if (browserMic) {
     micControl = createAgentMicControl(panel.micMount, {
       startListening: panel.startMic,
       stopListening: panel.stopMic,
