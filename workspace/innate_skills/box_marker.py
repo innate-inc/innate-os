@@ -202,8 +202,14 @@ class MarkerPose:
             and candidates[1][0] - candidates[0][0] < 0.15
             and rotation_distance(candidates[0][1], candidates[1][1]) > math.radians(8)
         ):
-            self.last_diagnostic["reason"] = "ambiguous_planar_pose"
-            return None  # planar-pose ambiguity; wait for a better view
+            # The tag hangs on a vertical face: of the two mirror poses, keep the upright one.
+            # A still robot never gets the "better view" that waiting for would need.
+            upright, mirror = sorted(candidates, key=lambda c: abs(c[1][2, 2]))
+            if abs(upright[1][2, 2]) > math.sin(math.radians(15)) or abs(mirror[1][2, 2]) - abs(upright[1][2, 2]) < 0.08:
+                self.last_diagnostic["reason"] = "ambiguous_planar_pose"
+                return None
+            self.last_diagnostic["reason"] = "accepted_upright_of_two"
+            return upright[1]
         self.last_diagnostic["reason"] = "accepted"
         return candidates[0][1]
 
