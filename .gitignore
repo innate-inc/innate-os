@@ -151,3 +151,4 @@ lerobot/outputs/
 # Robot-specific demo endpoints and credentials
 /workspace/config/sock_detector.local.json
 /workspace/config/basket_features/runtime.local.json
+/workspace/config/typesafe.local.json

@@ -106,11 +106,17 @@ Other pickup skills and the original sock drop skills retain their joint-based c
 
 `keychain_assistant` (Keychain Assistant) uses `google:gemini-3.8-flash` and
 microphone input. A request such as "Can you please bring me the keychain?"
-starts one narrated `pick_up_sleeved_object_astra` → `drop_sleeved_object_in_box`
-cycle. It waits for pickup success before dropping, stops on failure, and waits
+starts one narrated `pick_up_sleeved_object_astra` → `give_sleeved_object`
+cycle. It waits for pickup success before giving, stops on failure, and waits
 for a new request after delivery. Startup and idle time must not trigger motion.
-Astra still performs pickup perception and wrist occupancy checks. The dedicated
-sleeve drop variant uses wrist vision for all three grip checks, retaining the
-ArUco approach, reachability, clearance and release behavior. Existing sock agents
-and their drop skill retain joint-based checks. Speech is brief at each stage;
-landing is not visually verified.
+Astra still performs pickup perception and wrist occupancy checks. The give skill
+docks on the taught tag (on the booth wall's inner face), holds the keychain out
+8 cm past it at 28 cm, and opens only after two consecutive wrist photos show an
+open palm under it within 15 s; otherwise it keeps the keychain and fails so the
+agent can ask once more. Existing sock agents and their drop skill retain
+joint-based checks. Speech is brief at each stage.
+
+The palm check uses TypeSafe Jev (`palm` probability ≥ 0.8 plus a centred `hand`
+box) when a key is set, either as `TYPESAFE_API_KEY` in the robot's environment or
+in `config/typesafe.local.json`: `{"api_key":"...","model":"jev-preview"}`.
+Without a key, or if TypeSafe rejects the key, it falls back to Astra true/false.
