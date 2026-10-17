@@ -69,7 +69,7 @@ def fetch(voice_id: str) -> np.ndarray:
     client = ProxyClient()
     raw = b"".join(
         client.cartesia.tts.bytes_stream(
-            model_id="sonic-2",
+            model_id="sonic-3.6",
             transcript=TRANSCRIPT,
             voice={"mode": "id", "id": voice_id},
             output_format={"container": "wav", "encoding": "pcm_s16le", "sample_rate": FETCH_RATE},
