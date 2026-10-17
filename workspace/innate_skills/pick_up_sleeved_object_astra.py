@@ -56,8 +56,11 @@ def visual_grip_held(host):
     started = time.monotonic()
     answer = host._grip_llm.ask(
         image,
-        'Is any object held between or hanging from the gripper fingers? '
-        'Ignore background objects. Return only true or false.',
+        'Is a keychain in a clear plastic sleeve held by the gripper, pinched between the fingers or '
+        'hanging from them? It is often only partly visible, cut off at an edge or in a corner of the '
+        'photo, and the sleeve is thin and transparent, so count any part of it touching the fingers, '
+        'even just a glint, edge or crease of clear plastic. Keychains lying in the bowl or on the floor '
+        'below are not held. Return only true or false.',
         logger=host.logger, retries=1,
     )
     host.check_cancelled()
