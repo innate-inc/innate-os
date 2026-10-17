@@ -95,8 +95,8 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(String, "/brain/skill_status_update", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
-        # Synthesized speech (base64 WAV) for clients to play. Sim-only: the sim
-        # has no audio device, so the webapp is the speaker.
+        # Synthesized speech (base64 WAV) for clients to play: always in the sim,
+        # which has no audio device, and on a robot with tts_in_browser set.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
         # Live agent state, so clients see a stop/start/directive change made
         # from another device without polling. Latched + heartbeat because
@@ -155,6 +155,7 @@ class BrainClientNode(Node):
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
             simulator_mode=self.config.simulator_mode,
+            browser_mirror=self.config.tts_in_browser,
         )
         if handler.is_available():
             self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {handler.voice_id})")
@@ -165,10 +166,11 @@ class BrainClientNode(Node):
     def _on_parameter_change(self, params: list[Parameter]) -> SetParametersResult:
         """Apply the parameters that take effect without a restart.
 
-        Only the TTS voice and the agent's timezone do: every other field was copied
-        into a collaborator at construction, so accepting a write would leave the robot
-        running the old value. Those are stored for the next boot, which is what the
-        Settings page's `live` flag says about them.
+        Only the TTS voice and browser mirror, the agent's timezone and its model
+        settings do: every other field was copied into a collaborator at construction,
+        so accepting a write would leave the robot running the old value. Those are
+        stored for the next boot, which is what the Settings page's `live` flag says
+        about them.
         """
         for param in params:
             if param.name == "timezone":
@@ -189,6 +191,10 @@ class BrainClientNode(Node):
                     self._follow_brain_model()
                     continue
                 return SetParametersResult(successful=False, reason=detail)
+            if param.name == "tts_in_browser":
+                if self._tts_handler is not None:
+                    self._tts_handler.set_browser_mirror(bool(param.value))
+                continue
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()

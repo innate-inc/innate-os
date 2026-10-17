@@ -36,6 +36,7 @@ class BrainConfig:
     send_arm_camera_image: bool
     log_everything: bool
     simulator_mode: bool
+    tts_in_browser: bool  # a real robot's speech also goes out on /tts/audio; the sim always does
 
     # --- Camera geometry (for pointed-pixel -> floor-target grounding) ---
     vertical_fov: float  # degrees
@@ -101,6 +102,8 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "send_arm_camera_image": True,
     "log_everything": False,
     "simulator_mode": False,
+    # Demo branch: the web app plays the robot's speech too (a loud hall drowns its speaker).
+    "tts_in_browser": True,
     # --- Camera geometry ---
     "vertical_fov": 80.0,
     "x_cam": 0.0197,

@@ -210,6 +210,7 @@
 #     height_cam: 0.19663           # camera height above the floor (m)
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
+#     tts_in_browser: true          # also play the robot's speech in the open web app (demo-branch default)
 #     log_everything: true          # log every turn's full input
 #     llm_model: "google:gemini-3.6-flash"  # provider:name — google | openai | anthropic; openai-chat + llm_base_url for a LAN server
 #     llm_thinking: "minimal"        # minimal | low | medium | high | xhigh | max; "" = model default

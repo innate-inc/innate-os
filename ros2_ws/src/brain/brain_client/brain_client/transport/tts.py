@@ -63,6 +63,7 @@ class TTSHandler:
         tts_status_pub=None,
         tts_audio_pub=None,
         simulator_mode: bool = False,
+        browser_mirror: bool = False,
     ):
         """
         Initialize the TTS handler.
@@ -76,6 +77,8 @@ class TTSHandler:
                 webapp plays the clip instead of the speaker.
             simulator_mode: When True, synthesized speech is published on
                 ``tts_audio_pub`` rather than played locally via aplay.
+            browser_mirror: Off the sim, also publish each clip on
+                ``tts_audio_pub`` once it has streamed into aplay.
         """
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self._proxy: ProxyClient = proxy
@@ -87,6 +90,7 @@ class TTSHandler:
         self.tts_status_pub = tts_status_pub
         self.tts_audio_pub = tts_audio_pub
         self._simulator_mode = simulator_mode
+        self._browser_mirror = browser_mirror
 
         # Initialize Cartesia client
         self._init_client()
@@ -142,6 +146,11 @@ class TTSHandler:
             return
         self.voice_id = voice_id
         self.logger.info(f"🗣️ TTS voice changed to {voice_id}")
+
+    def set_browser_mirror(self, on: bool) -> None:
+        """Also play the robot's speech in the web app, from the next utterance on."""
+        self._browser_mirror = on
+        self.logger.info(f"🗣️ TTS browser mirror {'on' if on else 'off'}")
 
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -282,6 +291,7 @@ class TTSHandler:
         writer = threading.Thread(target=_writer, daemon=True)
         writer.start()
 
+        mirror = bytearray() if self._browser_mirror else None
         try:
             total_bytes = 0
             chunk_count = 0
@@ -294,6 +304,8 @@ class TTSHandler:
                 chunk_count += 1
                 total_bytes += len(chunk)
                 q.put(chunk)
+                if mirror is not None:
+                    mirror.extend(chunk)
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
@@ -302,11 +314,10 @@ class TTSHandler:
 
             t_stream_done = time.perf_counter()
 
-            # Deliberately NOT mirrored to /tts/audio: the robot's own speaker is
-            # the voice. A webapp playing the clip too doubles the speech for
-            # anyone near the robot (and echoes through the mic for a remote
-            # operator). /tts/audio is the sim-only path, where there is no
-            # speaker (_synthesize_to_topic).
+            # Mirrored only on request: a web app playing the clip too doubles the
+            # speech near the robot, a stream's length behind its speaker.
+            if mirror:
+                self._publish_audio(_pcm_to_wav(bytes(mirror), self.SPEAKER_SAMPLE_RATE))
 
             # Signal writer to close stdin and wait for aplay to finish
             q.put(None)
@@ -563,6 +574,17 @@ def _finalize_wav(data: bytes) -> bytes:
     struct.pack_into("<I", out, 4, len(out) - 8)  # RIFF chunk size
     struct.pack_into("<I", out, data_idx + 4, len(out) - (data_idx + 8))  # data size
     return bytes(out)
+
+
+def _pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
+    """Wrap mono PCM16 in a WAV container for browser decoders."""
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return out.getvalue()
 
 
 def _wav_duration_s(data: bytes) -> float:

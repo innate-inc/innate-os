@@ -182,6 +182,7 @@ export const SETTINGS_PAGES = [
         title: "Speaking",
         note: "Saving swaps the voice on the next thing the robot says — a clip already playing finishes in the old one.",
         knobs: [
+          { path: ["brain_client_node", P, "tts_in_browser"], label: "Also speak in the web app", default: true, type: "bool", doc: "The robot's speech also plays in the open web app, a moment behind its own speaker. The sim always plays it there.", live: "/brain_client_node" },
           // `/**` in the file so a restart reaches every node that declares it, but the
           // live push goes to brain_client_node alone — it owns the only TTS that speaks.
           { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },

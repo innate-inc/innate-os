@@ -3,8 +3,8 @@
 // (base64 WAV) on /tts/audio whenever it speaks — "make the robot speak", agent
 // replies, skill narration — because the sim has no audio device, so the
 // browser is the speaker. The real robot plays speech out its own physical
-// speaker and publishes nothing here (a browser playing it too would double
-// the voice), so against a robot this module simply never fires.
+// speaker and publishes here only with tts_in_browser set — then each clip
+// arrives once it has streamed to that speaker, a moment behind it.
 // Mounted from the shell (which loads on every page), so speech plays no matter
 // which page is open.
 
