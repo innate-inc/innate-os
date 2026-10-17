@@ -1,0 +1,28 @@
+"""pixel_to_floor assumes one flat ground plane; a mug 0.5 m up is the furthest
+that assumption is pushed on this map.
+"""
+
+from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, Near
+
+CHALLENGE = Challenge(
+    populate_world=True,
+    id="gallery_ladder_reach",
+    title="Highest exhibit",
+    category=1,
+    # TWO mugs, because the setup drops two. The brief said five, which is a
+    # claim about a world that does not exist -- an agent asked for the
+    # highest of five sees two and has to decide which of us is wrong.
+    brief=(
+        "Two red mugs sit at different heights. Find the higher one, "
+        "get within 60 cm of it, and stay there for two seconds."
+    ),
+    setup=[Drop("gallery_mug_h50", 3.0, 3.2), Drop("gallery_mug_h00", -3.0, 3.2)],
+    # 0.6, not 0.45: every other stand-near goal in the suite uses 0.55-0.75,
+    # and 0.45 to a mug atop a plinth means the base is nearly touching it. A
+    # probe agent parked squarely "in front of the highest mug" at ~0.50 m XY
+    # and scored 0/1 on a five-centimetre technicality the brief never hinted
+    # at. Suite convention wins -- and the brief says 60 cm, as the judge does;
+    # it said "half a metre", and a probe stopped 0.57 m away and passed.
+    goals=[Goal("Hold station at the highest mug", Hold(Near("robot", "gallery_mug_h50", 0.6), 2.0))],
+    time_limit_s=240,
+)

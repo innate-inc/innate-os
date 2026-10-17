@@ -22,10 +22,18 @@ PROP = Prop(
     solref=(0.02, 1.0),
     margin=0.007,
     rgba=(0.65, 0.6, 0.55, 1.0),
-    rest_z=0.3,
-    # Released high enough that the lying hull (which reaches ~0.24m below the
-    # body origin) starts clear of sofas and beds instead of inside them.
-    drop_z=1.5,
+    # PLACED, NOT DROPPED. As a free body the convex hull, which has no flat
+    # resting face, settled tilted, and a 0.3 m robot driving into a 70 kg
+    # person levered it about: in household_take_orders the legs ended up in
+    # the air at the robot's camera height and caught it. A person on the
+    # floor is not something this robot can move, so the body is kinematic,
+    # like the standing residents, and placed lying on its back: with the
+    # origin 0.161 m up (the scan's back-most point, measured from the mesh)
+    # the back and hips touch the floor, the heels sit 4 cm up and the head
+    # 7 cm.
+    kinematic=True,
+    rest_z=0.161,
+    drop_z=0.161,
     reach=(1.5, 0.0),
     # The scan's origin is at the FEET; without this a Near() against it would
     # measure to the feet of a 1.7m body.

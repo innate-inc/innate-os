@@ -3,7 +3,12 @@ target-version = "py310"
 line-length = 120
 src = ["ros2_ws/src"]
 # Never lint generated/build artifacts (colcon build/install/log trees).
-extend-exclude = ["**/build", "**/install", "**/log"]
+# The benchmark room layouts are machine-generated geometry exported from
+# Roblox Studio ("Do not hand-edit: rebuild the map and re-run the exporter"),
+# one Geom per line. Formatting them would explode each ~150-char line into
+# eight and, worse, make the exporter's own output differ from the tree every
+# time it is re-run.
+extend-exclude = ["**/build", "**/install", "**/log", "sim/bundles/*/rooms/*.py"]
 
 [tool.ruff.lint]
 select = [

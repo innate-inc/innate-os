@@ -21,7 +21,7 @@ import {
  *   onBrainActive: (active: boolean, justStarted: boolean) => void,
  *   onCreate?: () => void,
  * }} opts
- * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, armedId: () => string, arm: (id: string) => void, ensureRunning: () => Promise<void>, destroy: () => void }}
+ * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, armedId: () => string, arm: (id: string) => void, setCompact: (on: boolean) => void, ensureRunning: () => Promise<void>, destroy: () => void }}
  */
 export function createDirectiveControls(agentState, opts) {
   const controls = document.createElement("div");
@@ -298,7 +298,9 @@ export function createDirectiveControls(agentState, opts) {
   async function ensureRunning() {
     if (agentState.get().brainActive) return;
     const id = selectedDirective || lastDirective;
-    if (id) await withApplying(() => agentState.setDirective(id));
+    if (!id) throw new Error("Choose an available agent before sending a message.");
+    await withApplying(() => agentState.setDirective(id));
+    if (!agentState.get().brainActive) throw new Error("The agent could not start. Check the connection and try again.");
   }
 
   return {

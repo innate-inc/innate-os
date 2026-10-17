@@ -12,6 +12,7 @@ config.compute_assets_image_inputs_hash, so there is no second copy.)
 
 import fnmatch
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -80,16 +81,25 @@ def test_the_launcher_looks_for_packs_where_the_driver_does():
     assert roots == config.ENVIRONMENT_MANIFEST_ROOTS
 
 
-def test_every_environment_manifest_names_installable_geometry():
+def test_every_environment_manifest_names_installable_geometry(tmp_path):
     """`up` gates on these paths (runtime.missing_geometry), so a manifest the
     launcher cannot read, or one naming geometry no asset unit carries, would
     refuse to start with nothing able to satisfy it."""
     import config
+    import runtime
 
     units = set(config.SIM_ASSET_UNITS)
     for environment_id in config.available_environment_ids(REPO_ROOT):
         required = config.read_environment_assets(REPO_ROOT, environment_id)
         assert required is not None, f"{environment_id}: the launcher cannot read its requirements"
+        path = config.environment_manifest_path(REPO_ROOT, environment_id)
+        manifest = json.loads(path.read_text())
+        if manifest.get("bundle"):
+            assert (REPO_ROOT / "sim" / manifest["bundle"] / "rooms").is_dir()
+            assert (path.parent / manifest["navigation"]["map_yaml"]).is_file()
+            assert required == config.EnvironmentAssets(assets=(), viewer=())
+            assert runtime.missing_geometry(REPO_ROOT, tmp_path, environment_id) == ()
+            continue
         assert required.viewer, f"{environment_id}: names no browser assets to check"
         named = {Path(path).parts[0] for path in required.assets}
         assert named <= units, f"{environment_id} wants {named - units}, which no asset unit carries"
