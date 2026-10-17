@@ -12,6 +12,7 @@ from innate import Llm, SkillReturn, Waypoint
 from innate.exceptions import SkillFailed
 from innate.geometry import IMG_H, IMG_W, pixel_to_floor
 from innate_skills.approach import FloorApproach, settled_frame
+from innate_skills.pick_sock_fast import PickSockFast
 from innate_skills.pick_up_pile_little_toy import PickUpPileLittleToy, encode_jpeg
 from innate_skills.yoloe_pickup_base import detection_candidates
 
@@ -93,7 +94,8 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         'grasp_attempts': 4,
     }
     # The handoff then spins in place, swinging the tail ~25 cm round over the keychains just picked from.
-    BACK_OFF_M = 0.15
+    BACK_OFF_M = 0.1125
+    BACK_OFF_KP = 0.5  # the default 0.3 crawls the last centimetres at the 2.5 cm/s floor
     requires_llm = True
     llm: Llm = Llm(
         'openai:gpt-6-astra', thinking='low',
@@ -113,10 +115,39 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
 
     def execute(self) -> SkillReturn:
         """Find the sleeved keychains on the floor with Astra, then pick one, from the middle of the group if they lie together."""
-        result = super().execute()
-        if not FloorApproach(self, self._p, self._detect_px).drive(-self.BACK_OFF_M):
+        self._grasps_left = self._p['grasp_attempts']
+        self._p = type(self)._p
+        while True:
+            try:
+                result = super().execute()
+                break
+            except SkillFailed as error:
+                # A miss caught after the carry fold ends a run; spend the rest of the grasp budget on fresh runs.
+                if self._grasps_left <= 0 or not str(error).startswith('Grasp missed'):
+                    raise
+                self.logger.info(f"[AstraSleevedPickup] {error}; {self._grasps_left} grasp(s) left, looking again")
+                # Still facing the keychains after the miss, so look ahead before turning round.
+                self._p = {**type(self)._p, 'search_turns_deg': (0, 90, 90, 90)}
+        self._p = type(self)._p
+        back_off = FloorApproach(self, {**self._p, 'drive_kp': self.BACK_OFF_KP}, self._detect_px)
+        if not back_off.drive(-self.BACK_OFF_M):
             self.logger.warning("[AstraSleevedPickup] could not back away from the keychains; holding position")
         return result
+
+    def _close_twist_lift(self, x, y, roll, pitch, yaw):
+        while True:
+            self.check_cancelled()
+            self._grasps_left -= 1
+            super(PickSockFast, self)._close_twist_lift(x, y, roll, pitch, yaw)
+            if self._object_held():
+                return
+            self._holding = False
+            if self._grasps_left <= 0:
+                raise SkillFailed(f"Empty grasp after {self._p['grasp_attempts']} attempts")
+            self.overlay.readout("empty grasp; retrying")
+            self._claw_open()
+            self.check_cancelled()
+            self._push_to_floor(x, y, self.manipulation.pose.z, roll, pitch, yaw)
 
     def _approach_grasp(self, x, y, z):
         # Folded, the claw sits ~7 cm off the floor in front of the base; a direct sweep from there
