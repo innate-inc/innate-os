@@ -117,7 +117,7 @@ class PickSockFast(PickAnyObject):
         self.manipulation.follow(
             [
                 Waypoint(x, y, z, pitch=self._p["arm_pitch"], duration=self._p["hover_s"]),
-                Waypoint(x, y, end_z, pitch=self._p["arm_pitch"], duration=0.60),
+                Waypoint(x, y, end_z, pitch=self._p["arm_pitch"], duration=self._p.get("descent_s", 0.60)),
             ],
             grip=self.manipulation.GRIPPER_OPEN,
         )

@@ -8,7 +8,7 @@ import time
 import cv2
 import numpy as np
 
-from innate import Llm, SkillReturn
+from innate import Llm, SkillReturn, Waypoint
 from innate.exceptions import SkillFailed
 from innate.geometry import IMG_H, IMG_W, pixel_to_floor
 from innate_skills.approach import settled_frame
@@ -74,7 +74,20 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
 
     detection_prompt = 'a keychain in a plastic sleeve in the bowl on the floor'
     # Each run starts where the last handoff left it, facing the wall, so look behind first.
-    _p = {**PickUpPileLittleToy._p, 'search_turns_deg': (180, 90, 90, 90)}
+    # Any keychain in the bowl will do, and a floor point 1.5 m out moves ~18 cm per degree of
+    # head sway, so use the range-scaled gate that re-anchors instead of the sock pile's 12 cm lock.
+    _p = {
+        **PickUpPileLittleToy._p,
+        'search_turns_deg': (180, 90, 90, 90),
+        'lock_target_identity': False,
+        'mem_gate_m': 0.35,
+        'mem_gate_frac': 0.4,
+        # Come in above the bowl's rim, then drop straight down onto the keychain and lift clear of it.
+        'hover_z': 0.26,
+        'hover_s': 0.8,
+        'descent_s': 1.0,
+        'lift_rad': 0.9,
+    }
     requires_llm = True
     llm: Llm = Llm(
         'openai:gpt-6-astra', thinking='low',
@@ -95,6 +108,20 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
     def execute(self) -> SkillReturn:
         """Find a sleeved keychain in the bowl on the floor with Astra, track it, then pick it up."""
         return super().execute()
+
+    def _approach_grasp(self, x, y, z):
+        # Folded, the claw sits ~7 cm off the floor in front of the base; a direct sweep from there
+        # crosses the bowl's near rim low, so rise close to the robot first.
+        pitch = self._p['arm_pitch']
+        rise = next(
+            (p for p in ((0.16, 0.077, 0.28), (0.18, 0.077, 0.28), (0.20, 0.0, 0.30))
+             if self.manipulation.reachable(*p, pitch=pitch)),
+            None,
+        )
+        if rise is not None:
+            self.manipulation.follow([Waypoint(*rise, pitch=pitch, duration=0.7)])
+            self.check_cancelled()
+        return super()._approach_grasp(x, y, z)
 
     def _detect_candidates(self, prompt):
         started = time.monotonic()
