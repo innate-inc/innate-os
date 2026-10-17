@@ -29,6 +29,7 @@ class DropInBoxAruco(DropInBoxFast):
     RIGHT_ROLL_JOINT4 = math.radians(60)
 
     DROP_RIGHT_M = 0.08
+    DOCK_SPEED = 1.0  # scales the tag search, approach and final docking speed limits
     FINAL_DISTANCE_M = 0.16  # base_link forward distance to the tag reference
     # Rehearsed box: 45 cm across, 15 cm deep, 10–12 cm rim. Leave
     # 2 cm to the far wall for the fingers; these are wrist coordinates.
@@ -204,13 +205,16 @@ class DropInBoxAruco(DropInBoxFast):
             self._clearance_z = self.CLEARANCE_Z
             self.overlay.begin("marker box", stages=["approach", "release"], frame=tuple(config["image_size"]))
             self.overlay.stage("approach")
-            dock_via_point(self, config)
+            dock_via_point(self, config, self.DOCK_SPEED)
             if not self._object_held():
                 raise SkillFailed("Sock slipped during approach; refusing an empty drop")
             final_dock.search_before_approach = True
             final_dock.approach_timeout = 50
             follower = MarkerFollower(self.mobility)
             follower.final_approach()
+            follower.max_linear *= self.DOCK_SPEED
+            follower.max_angular *= self.DOCK_SPEED
+            final_dock.search_speed *= self.DOCK_SPEED
             final_dock.run(follower)
             if not self._object_held():
                 raise SkillFailed("Sock slipped during final alignment; refusing an empty drop")

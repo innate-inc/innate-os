@@ -33,11 +33,11 @@ def in_odom(points, origin):
 class PointController:
     """Direct proportional distance/heading control with FollowAruco slew limits."""
 
-    def __init__(self, host):
+    def __init__(self, host, speed=1.0):
         self.host = host
         self.follower = MarkerFollower(host.mobility)
-        self.follower.max_linear = 0.30
-        self.follower.max_angular = 0.90
+        self.follower.max_linear = 0.30 * speed
+        self.follower.max_angular = 0.90 * speed
         self.follower.fast_approach()
         self.follower.linear_braking = 0.40
         self.follower.angular_braking = 1.80
@@ -107,18 +107,18 @@ class PointController:
         self.follower._stop()
 
 
-def dock_via_point(host, config):
+def dock_via_point(host, config, speed=1.0):
     dock = MarkerDock(host, config)
     follower = MarkerFollower(host.mobility)
     follower.fast_approach()
-    follower.max_angular = 0.70
-    dock.search_speed = -0.70
+    follower.max_angular = 0.70 * speed
+    dock.search_speed = -0.70 * speed
     dock.search_timeout = 175
     try:
         dock._find_marker(follower)
     finally:
         follower._stop()
-    session = PointController(host)
+    session = PointController(host, speed)
     try:
         x, y, yaw = observe_box_release(host, dock.detector, 0.0, 0.0, return_heading=True)
         # Compare the tag normal with the robot-to-tag ray, not robot heading.
