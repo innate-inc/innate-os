@@ -90,6 +90,7 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         'hover_s': 0.8,
         'descent_s': 1.0,
         'lift_rad': 0.9,
+        'grasp_attempts': 4,
     }
     # The handoff then spins in place, swinging the tail ~25 cm round over the keychains just picked from.
     BACK_OFF_M = 0.15

@@ -176,14 +176,15 @@ class PickSockFast(PickAnyObject):
         return fresh_sock_held(self)
 
     def _close_twist_lift(self, x, y, roll, pitch, yaw):
-        for attempt in range(3):
+        attempts = self._p.get("grasp_attempts", 3)
+        for attempt in range(attempts):
             self.check_cancelled()
             super()._close_twist_lift(x, y, roll, pitch, yaw)
             if self._object_held():
                 return
             self._holding = False
-            if attempt == 2:
-                raise SkillFailed("Empty sock grasp after three attempts")
+            if attempt == attempts - 1:
+                raise SkillFailed(f"Empty grasp after {attempts} attempts")
             self.overlay.readout("empty grasp; retrying")
             self._claw_open()
             self.check_cancelled()
