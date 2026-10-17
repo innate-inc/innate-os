@@ -75,7 +75,7 @@ class GiveSleevedObject(DropSleevedObjectInBox):
     # The tag sits on the wall's inner face, so "inset" reaches out over the wall to the visitor.
     _p = {**DropSleevedObjectInBox._p, "drop_inset": 0.08}
     DROP_RIGHT_M = 0.0
-    DOCK_SPEED = 0.65  # calmer next to visitors
+    DOCK_SPEED = 0.8  # calmer next to visitors
     RELEASE_Z = 0.32  # arc in well above the 20 cm wall
     LOWER_RELEASE_Z = 0.28  # held-out height: fingertips and sleeve stay above the wall
     CLEARANCE_Z = 0.32
