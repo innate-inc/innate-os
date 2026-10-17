@@ -59,8 +59,8 @@ def visual_grip_held(host):
         'Is a keychain in a clear plastic sleeve held by the gripper, pinched between the fingers or '
         'hanging from them? It is often only partly visible, cut off at an edge or in a corner of the '
         'photo, and the sleeve is thin and transparent, so count any part of it touching the fingers, '
-        'even just a glint, edge or crease of clear plastic. Keychains lying in the bowl or on the floor '
-        'below are not held. Return only true or false.',
+        'even just a glint, edge or crease of clear plastic. Keychains lying on the floor below are not '
+        'held. Return only true or false.',
         logger=host.logger, retries=1,
     )
     host.check_cancelled()
@@ -73,11 +73,11 @@ def visual_grip_held(host):
 
 
 class PickUpSleevedObjectAstra(PickUpPileLittleToy):
-    """Pick a sleeved keychain from the middle of the pile in the bowl on the floor using Astra Ultrafast."""
+    """Pick a sleeved keychain off the floor, from the middle of the group when several lie together, using Astra Ultrafast."""
 
-    detection_prompt = 'the pile of sleeved keychains in the bowl on the floor'
+    detection_prompt = 'the sleeved keychains on the floor'
     # Each run starts where the last handoff left it, facing the wall, so look behind first.
-    # Any keychain in the bowl will do, and a floor point 1.5 m out moves ~18 cm per degree of
+    # Any keychain will do, and a floor point 1.5 m out moves ~18 cm per degree of
     # head sway, so use the range-scaled gate that re-anchors instead of the sock pile's 12 cm lock.
     _p = {
         **PickUpPileLittleToy._p,
@@ -91,7 +91,7 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         'descent_s': 1.0,
         'lift_rad': 0.9,
     }
-    # The handoff then spins in place, swinging the tail ~25 cm round through the bowl just picked from.
+    # The handoff then spins in place, swinging the tail ~25 cm round over the keychains just picked from.
     BACK_OFF_M = 0.15
     requires_llm = True
     llm: Llm = Llm(
@@ -111,10 +111,10 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         return visual_grip_held(self)
 
     def execute(self) -> SkillReturn:
-        """Find the pile of sleeved keychains in the bowl with Astra, then pick one from its middle."""
+        """Find the sleeved keychains on the floor with Astra, then pick one, from the middle of the group if they lie together."""
         result = super().execute()
         if not FloorApproach(self, self._p, self._detect_px).drive(-self.BACK_OFF_M):
-            self.logger.warning("[AstraSleevedPickup] could not back away from the bowl; holding position")
+            self.logger.warning("[AstraSleevedPickup] could not back away from the keychains; holding position")
         return result
 
     def _approach_grasp(self, x, y, z):
@@ -144,9 +144,9 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
                 raise ValueError('Invalid sleeved-object camera JPEG')
             height, width = image.shape[:2]
             question = (
-                f'{width}x{height} image. Box the pile of keychains in plastic sleeves lying in the bowl on the floor: '
-                'one box around all of them together, not around the bowl. Exclude held objects. '
-                'Pixels [left,top,right,bottom]; null if absent.'
+                f'{width}x{height} image. Box the keychains in plastic sleeves lying on the floor ahead: if several '
+                'lie together, one box around that whole group; if they are spread apart, only the closest one. '
+                'Exclude held objects. Pixels [left,top,right,bottom]; null if absent.'
             )
             request_started = time.monotonic()
             text = self.llm.ask(frame, question, logger=self.logger, retries=1)
