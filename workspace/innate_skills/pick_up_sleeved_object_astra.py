@@ -70,9 +70,11 @@ def visual_grip_held(host):
 
 
 class PickUpSleevedObjectAstra(PickUpPileLittleToy):
-    """Pick the closest object in a protective sleeve on the floor ahead using Astra Ultrafast."""
+    """Pick one sleeved keychain out of the bowl on the floor using Astra Ultrafast."""
 
-    detection_prompt = 'an object in a protective sleeve on the floor in front of the robot'
+    detection_prompt = 'a keychain in a plastic sleeve in the bowl on the floor'
+    # Each run starts where the last handoff left it, facing the wall, so look behind first.
+    _p = {**PickUpPileLittleToy._p, 'search_turns_deg': (180, 90, 90, 90)}
     requires_llm = True
     llm: Llm = Llm(
         'openai:gpt-6-astra', thinking='low',
@@ -91,7 +93,7 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         return visual_grip_held(self)
 
     def execute(self) -> SkillReturn:
-        """Locate the nearest sleeved object ahead with Astra, track it, then pick it up."""
+        """Find a sleeved keychain in the bowl on the floor with Astra, track it, then pick it up."""
         return super().execute()
 
     def _detect_candidates(self, prompt):
@@ -107,8 +109,9 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
                 raise ValueError('Invalid sleeved-object camera JPEG')
             height, width = image.shape[:2]
             question = (
-                f'{width}x{height} image. Box the closest object in a protective sleeve on the floor ahead. '
-                'Exclude unsleeved objects, baskets and held objects. Pixels [left,top,right,bottom]; null if absent.'
+                f'{width}x{height} image. Box one keychain in a plastic sleeve lying in the bowl on the floor: '
+                'the one nearest the middle of the bowl that no other keychain covers. Box the keychain, not the bowl. '
+                'Exclude held objects. Pixels [left,top,right,bottom]; null if absent.'
             )
             request_started = time.monotonic()
             text = self.llm.ask(frame, question, logger=self.logger, retries=1)
