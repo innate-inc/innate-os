@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Hand the held sleeved object to a visitor over the booth wall, letting go only onto an open palm."""
+"""Hand the held sleeved object to a visitor over the booth wall, letting go once a hand reaches for it."""
 
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from innate_skills.drop_sleeved_object_in_box import DropSleevedObjectInBox
@@ -14,28 +15,28 @@ from innate import SkillReturn
 from innate.exceptions import SkillFailed
 
 PALM_QUESTION = (
-    "Is an open human hand held flat, palm up, directly below the object in the gripper, "
-    "close enough to catch it? Answer false for hands beside, above or touching the gripper. "
-    "Return only true or false."
+    "Is a person's hand reaching for, touching, grabbing or held open near the keychain in the gripper, "
+    "as if to take it? The hand may be at any side or edge of the photo. "
+    "Answer false only when no hand is near the keychain. Return only true or false."
 )
 
-JEV_PALM_QUESTIONS = {
-    "palm": {
-        "type": "noul",
-        "instructions": (
-            "Is an open human hand held flat, palm up, directly below the object in the gripper in `wrist`, "
-            "close enough to catch it?"
-        ),
-        "criteria": {
-            "true": "An open, flat, palm-up hand directly below the held object, close enough to catch it.",
-            "false": (
-                "No hand, or a hand beside, above or touching the gripper, "
-                "or a closed, sideways or distant hand that could not catch it."
+
+def reach_questions(camera: str) -> dict:
+    """Jev questions about one camera's photo, named `camera` in the request state."""
+    return {
+        "palm": {
+            "type": "noul",
+            "instructions": (
+                f"Is a person's hand in `{camera}` reaching for, touching, grabbing or held open near the keychain "
+                "in the robot's gripper, as if to take it? The hand may be at any side or edge of the photo."
             ),
+            "criteria": {
+                "true": "A hand near the held keychain: reaching for it, grabbing or touching it, or open under or beside it.",
+                "false": "No hand in the photo, or only a hand far away that is not reaching for the keychain.",
+            },
         },
-    },
-    "hand": {"type": "box", "instructions": "the open palm in `wrist`"},
-}
+        "hand": {"type": "box", "instructions": f"the human hand in `{camera}`"},
+    }
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ def rejected(error: urllib.error.HTTPError) -> bool:
 
 
 class GiveSleevedObject(DropSleevedObjectInBox):
-    """Dock on the taught tag, hold the object out over the wall, and open once a palm is under it."""
+    """Dock on the taught tag, hold the object out over the wall, and open once a hand reaches for it."""
 
     # The tag sits on the wall's inner face, so "inset" reaches out over the wall to the visitor.
     _p = {**DropSleevedObjectInBox._p, "drop_inset": 0.08}
@@ -80,18 +81,14 @@ class GiveSleevedObject(DropSleevedObjectInBox):
     PRESENT_S = 1.0
     PALM_TIMEOUT_S = 15.0
     PALM_CONFIRMATIONS = 2
-    PALM_P_MIN = 0.8
-    # A confident hand box must sit under the fingers, not beside them; image fractions.
-    PALM_BOX_CONFIDENCE = 0.5
-    PALM_CENTRE_X = (0.25, 0.75)
-    PALM_TOP_MIN = 0.35
+    PALM_P_MIN = 0.6
     JEV_TIMEOUT_S = 5.0
 
     _presenting = False
     _jev: Jev | None = None
 
     def execute(self) -> SkillReturn:
-        """Hand the held sleeved keychain to the visitor at the tagged spot; lets go only once an open hand is under it."""
+        """Hand the held sleeved keychain to the visitor at the tagged spot; lets go once their hand reaches for it."""
         self._presenting = False
         self._jev = jev_from_config()
         self.logger.info(f"[GivePalm] judge={self._jev.model if self._jev else 'astra'}")
@@ -125,41 +122,58 @@ class GiveSleevedObject(DropSleevedObjectInBox):
         return x, y, self.LOWER_RELEASE_Z
 
     def _await_palm(self) -> None:
-        self.overlay.readout("hold your hand flat under the keychain", busy=True)
+        self.overlay.readout("reach out and take the keychain", busy=True)
         deadline = time.monotonic() + self.PALM_TIMEOUT_S
         streak = 0
-        while time.monotonic() < deadline:
-            streak = streak + 1 if self._is_palm(self._palm_reading()) else 0
-            if streak >= self.PALM_CONFIRMATIONS:
-                return
-        raise SkillFailed("No hand under the keychain; still holding it")
+        pool = ThreadPoolExecutor(max_workers=2)
+        try:
+            while time.monotonic() < deadline:
+                streak = streak + 1 if self._is_palm(self._palm_reading(pool)) else 0
+                if streak >= self.PALM_CONFIRMATIONS:
+                    return
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        raise SkillFailed("No hand reached for the keychain; still holding it")
 
     def _is_palm(self, reading: PalmReading | None) -> bool:
-        if reading is None or reading.probability < self.PALM_P_MIN:
-            return False
-        if reading.box is None or reading.box_confidence < self.PALM_BOX_CONFIDENCE:
-            return True
-        centre_x = (reading.box["left"] + reading.box["right"]) / 2
-        low, high = self.PALM_CENTRE_X
-        return low <= centre_x <= high and reading.box["top"] >= self.PALM_TOP_MIN
+        return reading is not None and reading.probability >= self.PALM_P_MIN
 
-    def _palm_reading(self) -> PalmReading | None:
-        """One fresh wrist photo judged by Jev, or by Astra without a TypeSafe key; None when unclear."""
-        stale = self.wrist_image
-        image = self.wait_for(lambda: self.wrist_image if self.wrist_image is not stale else None, timeout=1.0)
-        self.check_cancelled()
-        if not image:
-            return None
+    def _palm_reading(self, pool: ThreadPoolExecutor) -> PalmReading | None:
+        """Fresh wrist and head photos judged in parallel by Jev, or by Astra without a TypeSafe key.
+        Either camera seeing a reaching hand is enough; None when neither gave a clear answer."""
+        images = self._fresh_images()
         started = time.monotonic()
         judge = "jev" if self._jev else "astra"
-        reading = self._jev_palm(self._jev, image) if self._jev else self._astra_palm(image)
+        jobs = {camera: pool.submit(self._judge, camera, image) for camera, image in images.items()}
+        readings = {camera: job.result() for camera, job in jobs.items()}
         self.check_cancelled()
-        self.logger.info(f"[GivePalm] {judge} {reading} seconds={time.monotonic() - started:.3f}")
-        return reading
+        summary = " ".join(f"{camera}:{reading}" for camera, reading in readings.items())
+        self.logger.info(f"[GivePalm] {judge} {summary} seconds={time.monotonic() - started:.3f}")
+        clear = [reading for reading in readings.values() if reading is not None]
+        return max(clear, key=lambda reading: reading.probability, default=None)
 
-    def _jev_palm(self, jev: Jev, image: str) -> PalmReading | None:
+    def _fresh_images(self) -> dict[str, str]:
+        """Waits up to 1 s for a new frame from both cameras and uses whichever arrived."""
+        stale = self._camera_frames()
+
+        def fresh() -> dict[str, str]:
+            return {camera: image for camera, image in self._camera_frames().items() if image is not stale.get(camera)}
+
+        self.wait_for(lambda: True if len(fresh()) == 2 else None, timeout=1.0)
+        self.check_cancelled()
+        return fresh()
+
+    def _camera_frames(self) -> dict[str, str]:
+        frames = {"wrist": self.wrist_image, "head": self.main_image}
+        return {camera: image for camera, image in frames.items() if image}
+
+    def _judge(self, camera: str, image: str) -> PalmReading | None:
+        jev = self._jev
+        return self._jev_palm(jev, camera, image) if jev else self._astra_palm(image)
+
+    def _jev_palm(self, jev: Jev, camera: str, image: str) -> PalmReading | None:
         try:
-            return jev_reading(ask_jev(jev, {"wrist": image}, JEV_PALM_QUESTIONS, self.sleep, self.JEV_TIMEOUT_S))
+            return jev_reading(ask_jev(jev, {camera: image}, reach_questions(camera), self.sleep, self.JEV_TIMEOUT_S))
         except urllib.error.HTTPError as error:
             self.logger.warning(f"[GivePalm] Jev HTTP {error.code}: {error.read()[:300]!r}")
             if rejected(error):
