@@ -11,7 +11,7 @@ import numpy as np
 from innate import Llm, SkillReturn, Waypoint
 from innate.exceptions import SkillFailed
 from innate.geometry import IMG_H, IMG_W, pixel_to_floor
-from innate_skills.approach import settled_frame
+from innate_skills.approach import FloorApproach, settled_frame
 from innate_skills.pick_up_pile_little_toy import PickUpPileLittleToy, encode_jpeg
 from innate_skills.yoloe_pickup_base import detection_candidates
 
@@ -73,9 +73,9 @@ def visual_grip_held(host):
 
 
 class PickUpSleevedObjectAstra(PickUpPileLittleToy):
-    """Pick one sleeved keychain out of the bowl on the floor using Astra Ultrafast."""
+    """Pick a sleeved keychain from the middle of the pile in the bowl on the floor using Astra Ultrafast."""
 
-    detection_prompt = 'a keychain in a plastic sleeve in the bowl on the floor'
+    detection_prompt = 'the pile of sleeved keychains in the bowl on the floor'
     # Each run starts where the last handoff left it, facing the wall, so look behind first.
     # Any keychain in the bowl will do, and a floor point 1.5 m out moves ~18 cm per degree of
     # head sway, so use the range-scaled gate that re-anchors instead of the sock pile's 12 cm lock.
@@ -91,6 +91,8 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         'descent_s': 1.0,
         'lift_rad': 0.9,
     }
+    # The handoff then spins in place, swinging the tail ~25 cm round through the bowl just picked from.
+    BACK_OFF_M = 0.15
     requires_llm = True
     llm: Llm = Llm(
         'openai:gpt-6-astra', thinking='low',
@@ -109,8 +111,11 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
         return visual_grip_held(self)
 
     def execute(self) -> SkillReturn:
-        """Find a sleeved keychain in the bowl on the floor with Astra, track it, then pick it up."""
-        return super().execute()
+        """Find the pile of sleeved keychains in the bowl with Astra, then pick one from its middle."""
+        result = super().execute()
+        if not FloorApproach(self, self._p, self._detect_px).drive(-self.BACK_OFF_M):
+            self.logger.warning("[AstraSleevedPickup] could not back away from the bowl; holding position")
+        return result
 
     def _approach_grasp(self, x, y, z):
         # Folded, the claw sits ~7 cm off the floor in front of the base; a direct sweep from there
@@ -139,9 +144,9 @@ class PickUpSleevedObjectAstra(PickUpPileLittleToy):
                 raise ValueError('Invalid sleeved-object camera JPEG')
             height, width = image.shape[:2]
             question = (
-                f'{width}x{height} image. Box one keychain in a plastic sleeve lying in the bowl on the floor: '
-                'the one nearest the middle of the bowl that no other keychain covers. Box the keychain, not the bowl. '
-                'Exclude held objects. Pixels [left,top,right,bottom]; null if absent.'
+                f'{width}x{height} image. Box the pile of keychains in plastic sleeves lying in the bowl on the floor: '
+                'one box around all of them together, not around the bowl. Exclude held objects. '
+                'Pixels [left,top,right,bottom]; null if absent.'
             )
             request_started = time.monotonic()
             text = self.llm.ask(frame, question, logger=self.logger, retries=1)
