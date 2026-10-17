@@ -167,7 +167,7 @@ export const SETTINGS_PAGES = [
           { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend" },
           { path: ["input_manager_node", P, "stt_vad_threshold"], label: "VAD threshold", default: 0.2, type: "float", doc: "Lower is more sensitive to speech (silero engine)" },
           { path: ["input_manager_node", P, "stt_energy_threshold"], label: "Energy threshold", default: 0.01, type: "float", doc: "RMS that counts as speech (energy engine only)" },
-          { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.5, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)" },
+          { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.7, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)" },
           { path: ["input_manager_node", P, "stt_agc_max_db"], label: "Mic gain ceiling", default: 24, type: "float", unit: "dB", doc: "Software AGC max boost toward -6 dBFS peak; 0 disables" },
           { path: ["input_manager_node", P, "stt_filter_background_audio"], label: "Filter background", default: true, type: "bool", doc: "Scribe realtime: server-side gate against nearby conversations and ambient noise" },
         ],

@@ -1,0 +1,35 @@
+{
+ "rows_written": 9162,
+ "visible_gain": 1.8,
+ "first_pass_valid": 0.9963981663392273,
+ "accepted_after_repair": 1.0,
+ "train_rows": 8750,
+ "train_replies": 3105,
+ "val_rows": 335,
+ "val_replies": 108,
+ "dev_rows": 75,
+ "dropped_duplicate_of_held": 2,
+ "median_segments": 3.0,
+ "median_duration_s": 2.6,
+ "median_energy": 1.0,
+ "median_idea_words": 8.0,
+ "sizes": {
+  "beat": 7132,
+  "continue": 426,
+  "peak": 1598,
+  "null": 6
+ },
+ "cues": {
+  "none": 6826,
+  "yes": 680,
+  "no": 335,
+  "hello": 118,
+  "bye": 129,
+  "look": 476,
+  "come": 135,
+  "think": 295,
+  "laugh": 162,
+  "null": 6
+ },
+ "rejections": []
+}

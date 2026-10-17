@@ -10,6 +10,20 @@ same modules:
   global costmap / traveled-path overlays, telemetry panels (pose, velocity,
   lidar, nav state, per-topic receive rates), and live strip charts (commanded
   vs measured velocity, nearest obstacle).
+- **Expression** (`/expression`) — the Expression Studio: type a feeling and
+  watch MARS perform it on the full-robot 3D model with no robot connected (a
+  JS port of the expressive core, held to its golden fixture by
+  `tests/expression.test.js`, mapping motion through brain_client's own
+  basis.json, served at `/expression/basis.json`). Recipes come from the
+  robot's generate path, the 5090 planner server or Gemini in the browser;
+  edit and re-expand the recipe, read the per-channel timeline, record a webm,
+  score the motion with blind VLM judges, and Apply it to the robot or sim
+  (`/brain/express/play`). Its Speech mode performs a whole spoken reply the
+  way the robot does: split into sentences and prompted per sentence exactly as
+  brain_client does (`js/expression/speech.js`, held to
+  `expressive/fixtures/speech_golden.json`), each sentence's clip starting as
+  the browser's voice starts that sentence; Send to robot puts the reply on
+  `/brain/tts`.
 - **Collect** (`collect/`) — record episodes (learned skills) and one-shot
   recorded movements; reuses the teleop cockpit with a recording HUD.
 - **Datasets** (`datasets/`) — browse a skill's episodes and replay them

@@ -1,0 +1,14 @@
+# 20 s of idle breathing and speech sway, no gestures: `uv run mars-express show demo/idle_speech.yaml out/demo/idle_speech.mp4`
+title: MARS · idle + speech, no gestures
+voice: Samantha
+rate: 172
+intro: 3.0
+outro: 0.0
+duration: 20.0
+beats:
+  - say: "When nobody is talking to me, I just breathe."
+    pause: 2.5
+  - say: "When I speak, my head and my wrist sway with my own voice, syllable by syllable. Nothing here is planned. It all comes from the sound."
+    pause: 2.0
+  - say: "And then, back to breathing."
+    pause: 2.0

@@ -24,14 +24,14 @@ function fingerprint(rows) {
 test("full roster: labeled groups bracketed, standalone pages cluster", () => {
   assert.equal(
     fingerprint(railRows(GROUPS, null)),
-    "teleop agent nav logging |AI Lab collect datasets training profiling |Maintenance armsdk calibration",
+    "teleop agent nav logging expression |AI Lab collect datasets training profiling |Maintenance armsdk calibration",
   );
 });
 
 test("sim roster: AI Lab vanishes with its label, Maintenance keeps Arm SDK", () => {
   assert.equal(
     fingerprint(railRows(GROUPS, SIM_SECTIONS)),
-    "teleop agent nav logging |Maintenance armsdk",
+    "teleop agent nav logging expression |Maintenance armsdk",
   );
 });
 

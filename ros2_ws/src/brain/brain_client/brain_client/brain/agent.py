@@ -35,7 +35,7 @@ from innate_llm.configure import DEFAULT_MODEL
 from brain_client.brain import grounding
 from brain_client.brain.context import ChatContext, Decision
 from brain_client.brain.loop import LoopThread
-from brain_client.brain.prompt import build_system_prompt, self_reference_turns
+from brain_client.brain.prompt import Emotes, build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
 from brain_client.brain.utils import (
     Event,
@@ -84,6 +84,7 @@ _HEARING_STALE_SEC = 1.0  # the mic reports every 0.2 s; quiet past this means i
 _MAX_HOLD_SEC = 10.0  # per utterance: background talk (a TV) must not hold the brain forever
 _TRANSCRIPT_GRACE_SEC = 0.8  # an utterance's transcript lands ~0.3 s after it closes
 _HOLD_POLL_SEC = 0.05
+_CONVERSATION_SEC = 20.0  # motion this soon after the user spoke is the same person, not news
 
 
 def _retry_note(error: Exception) -> str:
@@ -179,6 +180,7 @@ class BrainAgent:
         self._turn_in_flight = False
         self._speaker: SpeechStreamer | None = None  # the in-flight turn's streamer (the racing loop reads it)
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
+        self._last_user_at = -math.inf  # monotonic time of the latest user message
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
@@ -192,6 +194,8 @@ class BrainAgent:
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
         # published for nobody. Small events always publish.
         self.trace_has_audience: Callable[[], bool] = lambda: True
+        # Set by the composition root while the expression driver plays emote tags.
+        self.emotes = Emotes.OFF
 
         if self._context is not None:
             self._context.on_request = self._trace_request  # the monitor renders the exact request body
@@ -409,7 +413,8 @@ class BrainAgent:
         events = list(self._events)
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
-        speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
+        # Published before the first await, for the racing loop.
+        speaker = self._speaker = self._chat.stream_speech()
         try:
             await self._think(context, events, speaker)
         except asyncio.CancelledError:
@@ -430,6 +435,7 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            emotes=self.emotes,
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
@@ -768,6 +774,8 @@ class BrainAgent:
         """Queue something that happened; the loop wakes for an immediate turn."""
         if not self.available:
             return  # no transport, no loop: these would accumulate forever
+        if kind == EventKind.USER:
+            self._last_user_at = time.monotonic()
         self._events.append(Event(text, image, kind))
         self._runtime.post(self._wake, kind)
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
@@ -793,6 +801,9 @@ class BrainAgent:
 
     def on_user_message(self, text: str) -> None:
         self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
+
+    def in_conversation(self) -> bool:
+        return time.monotonic() - self._last_user_at < _CONVERSATION_SEC
 
     def on_custom_input(self, data: dict) -> None:
         device = data.get("input_device", "unknown")

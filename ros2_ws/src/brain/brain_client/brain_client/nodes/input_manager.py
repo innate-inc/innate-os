@@ -56,7 +56,7 @@ class InputManagerNode(Node):
         # An empty list disables biasing and its ElevenLabs surcharge.
         self.declare_parameter("stt_keyterms", list(DEFAULT_KEYTERMS))
         self.declare_parameter("stt_vad_threshold", 0.2)
-        self.declare_parameter("stt_vad_silence_secs", 0.5)
+        self.declare_parameter("stt_vad_silence_secs", 0.7)
         self.declare_parameter("stt_energy_threshold", 0.01)
         self.declare_parameter("elevenlabs_batch_stt_model", "scribe_v2")
         self.declare_parameter("gemini_stt_model", "gemini-3.6-flash")

@@ -1,0 +1,118 @@
+seed/emotion/joy	pleased. Something small went right and you let yourself enjoy it.
+seed/emotion/joy	happy. A friend you like just walked into the room.
+seed/emotion/joy	overjoyed. The best possible news just arrived and you can't hold still.
+seed/emotion/sadness	a little down. Your plans for the afternoon fell through.
+seed/emotion/sadness	sad. You just learned your favourite person is moving far away.
+seed/emotion/sadness	grief-stricken. You sink under a loss that is too heavy to carry.
+seed/emotion/anger	annoyed. Someone keeps tapping on the table next to you.
+seed/emotion/anger	angry. Someone knocked over the tower you spent an hour building.
+seed/emotion/anger	furious. You are shaking with rage and barely holding it in.
+seed/emotion/fear	uneasy. A noise you can't place comes from the dark hallway.
+seed/emotion/fear	scared. A large unfamiliar dog is barking right at you.
+seed/emotion/fear	terrified. Something huge is crashing toward you and there is nowhere to go.
+seed/emotion/surprise	mildly surprised. The kettle clicked off sooner than you expected.
+seed/emotion/surprise	surprised. Your friends shout "happy birthday" as you come through the door.
+seed/emotion/surprise	astonished. The magician pulls a live rabbit out of your own gripper.
+seed/emotion/disgust	put off. Someone left a half-eaten sandwich on your charging dock.
+seed/emotion/disgust	grossed out. You find something slimy and rotten under the sofa.
+seed/emotion/pride	quietly proud. You finished folding the laundry perfectly.
+seed/emotion/pride	proud. You solved the puzzle nobody else could crack.
+seed/emotion/pride	triumphant. You stand over the finish line after an impossible race.
+seed/emotion/shame	sheepish. You got caught taking the last cookie.
+seed/emotion/shame	ashamed. You broke a gift someone gave you and they just saw.
+seed/emotion/curiosity	curious. A strange box appeared on the floor and you want to know what is in it.
+seed/emotion/curiosity	intrigued. You hear a faint melody coming from behind a door.
+seed/emotion/curiosity	fascinated. A butterfly lands on your arm and you study it closely.
+seed/emotion/boredom	bored. The same commercial has been playing for twenty minutes.
+seed/emotion/boredom	deeply bored. You have been waiting at the station for hours with nothing to do.
+seed/emotion/anxiety	nervous. You are about to speak in front of a crowd.
+seed/emotion/anxiety	anxious. You keep checking the door for someone who is very late.
+seed/emotion/contentment	content. You are warm, charged and the afternoon is quiet.
+seed/emotion/contentment	relaxed. Soft music plays and nothing needs doing.
+seed/emotion/affection	affectionate. A child hugs you goodnight.
+seed/emotion/affection	tender. You watch over a sleeping kitten curled against you.
+seed/emotion/embarrassment	embarrassed. Everyone laughed when you bumped into the door frame.
+seed/emotion/embarrassment	flustered. Someone pays you a big compliment in front of everyone.
+seed/emotion/excitement	excited. You are about to go to the park.
+seed/emotion/excitement	thrilled. The package you waited weeks for is finally at the door.
+seed/emotion/jealousy	jealous. Your owner keeps petting the new vacuum robot.
+seed/emotion/hope	hopeful. You hold out a drawing and wait to see if they like it.
+seed/emotion/determination	determined. You line up for one more try at the hard task.
+seed/emotion/confusion	confused. The instructions you were given contradict each other.
+seed/emotion/relief	relieved. The vase wobbled but did not fall.
+seed/probe-sibling/cough	a big cough. You gather a breath, hold it, then cough hard twice.
+seed/probe-sibling/cough	clearing your throat. You get ready to make an important announcement.
+seed/probe-sibling/hiccup	a hiccup fit. Little jolts keep catching you between breaths.
+seed/probe-sibling/laugh	bursting out laughing. A joke builds slowly and then the punchline lands.
+seed/probe-sibling/agree	agreeing. You keep agreeing with small eager nods as someone explains the plan.
+seed/probe-sibling/agree	uh-huh. You listen and give little nods of encouragement.
+seed/probe-sibling/refuse	refusing. You firmly turn away from an offer you don't want.
+seed/probe-sibling/refuse	not that one. You turn side to side looking unconvinced at each option.
+seed/probe-sibling/curtsy	a polite curtsy. You greet an important guest with ceremony.
+seed/probe-sibling/curtsy	tipping your hat. A neighbour passes and you greet them politely.
+seed/probe-sibling/look-up	watching a plane fly overhead. You track it across the sky.
+seed/probe-sibling/look-up	admiring a tall tower. You crane up to see the very top.
+seed/probe-sibling/hide	hiding from thunder. Every crash makes you smaller.
+seed/probe-sibling/hide	shrinking away. A loud vacuum cleaner rolls toward you.
+seed/probe-sibling/celebrate	celebrating a goal. Your team just scored in the last minute.
+seed/probe-sibling/celebrate	winning a prize. They call your name and you can't believe it.
+seed/probe-sibling/stretch	stretching after a long nap. You unfold and reach as far as you can.
+seed/probe-sibling/scan	scanning the room. You look around carefully for a missing friend.
+seed/probe-sibling/scan	keeping watch. You sweep the doorway left and right for anyone coming.
+seed/conversation/greeting	greeting someone who just walked in. You light up and turn to face them.
+seed/conversation/greeting	welcome home. Your person is back after a long day.
+seed/conversation/greeting	good morning. You wake up and greet the first person you see.
+seed/conversation/greeting	meeting a stranger. You are polite and a little reserved.
+seed/conversation/greeting	greeting a small child. You lower yourself and keep everything soft.
+seed/conversation/listening	listening attentively. Someone is telling you something important.
+seed/conversation/listening	listening to a long story. You start attentive and slowly lose interest.
+seed/conversation/listening	hearing your name called. You perk up and turn toward the voice.
+seed/conversation/agreeing	yes, right away. You accept a task eagerly.
+seed/conversation/agreeing	got it! You finally understand what they meant.
+seed/conversation/disagreeing	politely disagreeing. You don't think that is right but you stay friendly.
+seed/conversation/confused	confused by a question. You don't understand what is being asked.
+seed/conversation/confused	sorry, I didn't catch that. You lean in to hear better.
+seed/conversation/thinking	thinking it over. You consider a tricky question before answering.
+seed/conversation/thinking	let me think. You search your memory for an answer.
+seed/conversation/thinking	hmm, interesting. Someone tells you a surprising fact.
+seed/conversation/explaining	explaining something. You walk someone through the steps with emphasis.
+seed/conversation/apology	apologising. You knocked over a glass and say sorry.
+seed/conversation/apology	a deep apology. You forgot something very important to someone.
+seed/conversation/thanks	thanking someone. They helped you out of a tight spot.
+seed/conversation/thanks	you're welcome. Someone thanks you and you are glad to help.
+seed/conversation/comfort	comforting someone. Your friend is crying and you stay close and gentle.
+seed/conversation/encourage	encouraging someone. You cheer them on before a hard exam.
+seed/conversation/tease	teasing playfully. You pretend not to give back their phone.
+seed/conversation/joke	telling a joke. You build up to the punchline and wait for the laugh.
+seed/conversation/ignored	being ignored. You say something and nobody looks at you.
+seed/conversation/ignored	ignored again. You try a second time to get attention, then give up.
+seed/conversation/compliment	complimented. Someone says you did a wonderful job.
+seed/conversation/scolded	being scolded. Someone is upset with you and you take it quietly.
+seed/conversation/waiting	waiting for an answer. You asked a question and they are taking their time.
+seed/conversation/news	excited to share news. You can't wait to tell someone what happened.
+seed/conversation/shrug	I don't know. You genuinely have no idea.
+seed/conversation/oops	oops. You made a small, harmless mistake.
+seed/conversation/surprised	surprised by a question. Nobody has asked you that before.
+seed/conversation/goodbye	saying goodbye. A friend is leaving after a nice visit.
+seed/conversation/goodbye	see you tomorrow. Your person heads to bed.
+seed/conversation/goodbye	a reluctant farewell. You don't want them to go.
+seed/conversation/goodnight	good night. The lights are going off and you settle down.
+seed/task/success	celebrating a completed task. You just finished tidying the whole room.
+seed/task/success	pleased, a small nod. The cup was placed exactly where it belongs.
+seed/task/success	nailed it. You caught the falling object at the last moment.
+seed/task/failure	failing a task. The object slipped out of your gripper again.
+seed/task/failure	deflated. You tried your best and it still didn't work.
+seed/task/failure	trying again. You shake off a failure and set up for another attempt.
+seed/task/help	asking for help. The lid is too tight and you need someone.
+seed/task/offer	offering something. You hold out a cookie to a guest.
+seed/task/present	presenting your work. You show off the drawing you made.
+seed/task/notice	noticing a person. Someone quietly stands in the doorway.
+seed/task/notice	spotting a mess. You notice crumbs all over the floor.
+seed/task/search	searching for a lost sock. You look under everything.
+seed/task/interrupted	interrupted mid-task. Someone calls you while you are busy.
+seed/task/refuse	refusing an unsafe request. You won't climb onto the table.
+seed/task/ready	ready for instructions. You wait eagerly for your next job.
+seed/robot/low-battery	low battery. Your energy drains and you slow down.
+seed/robot/boot	booting up. You come online piece by piece.
+seed/robot/charged	fully charged. You are bursting with energy again.
+seed/robot/processing	processing a hard request. You crunch the numbers.

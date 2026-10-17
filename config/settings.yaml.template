@@ -255,7 +255,7 @@
 #     stt_keyterms: ["MARS", "go forwards", "turn left"]   # [] disables biasing
 #     stt_energy_threshold: 0.01    # energy engine: RMS (0-1) that counts as speech
 #     stt_vad_threshold: 0.2        # silero: lower = more sensitive to speech
-#     stt_vad_silence_secs: 0.5     # silence that closes an utterance (every backend)
+#     stt_vad_silence_secs: 0.7     # silence that closes an utterance (every backend)
 #     stt_agc_max_db: 24.0          # software mic gain ceiling; 0.0 disables the AGC (a bare 0 is an int and rejected)
 #     stt_filter_background_audio: true     # Scribe realtime server-side noise gate
 #     elevenlabs_batch_stt_model: "scribe_v2"

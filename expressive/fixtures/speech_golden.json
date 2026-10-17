@@ -1,0 +1,754 @@
+{
+ "note": "Python reference for webapp/js/expression/speech.js: brain_client transport/chat.py _split_sentences and SpeechStreamer cues + close_with (replies), brain/context.py split_emotes + emote_spans (code-point offsets) + split_tool_narration, expressive/prompt.py speech_prompt, expressive/director.py prompts.",
+ "python": "3.10.18",
+ "texts": [
+  {
+   "text": "Hello there. How are you today? I'm great!",
+   "sentences": [
+    "Hello there.",
+    "How are you today?"
+   ],
+   "tail": "I'm great!",
+   "clean": "Hello there. How are you today? I'm great!",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "One sentence with no end",
+   "sentences": [],
+   "tail": "One sentence with no end",
+   "clean": "One sentence with no end",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Wait… what? Really?! No way.",
+   "sentences": [
+    "Wait…",
+    "what?",
+    "Really?!"
+   ],
+   "tail": "No way.",
+   "clean": "Wait… what? Really?! No way.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Line one.\nLine two.\n\nLine three.",
+   "sentences": [
+    "Line one.",
+    "Line two."
+   ],
+   "tail": "Line three.",
+   "clean": "Line one.\nLine two.\n\nLine three.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Dr. Smith paid $3.50 for it. Cheap!",
+   "sentences": [
+    "Dr.",
+    "Smith paid $3.50 for it."
+   ],
+   "tail": "Cheap!",
+   "clean": "Dr. Smith paid $3.50 for it. Cheap!",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "\"Hi.\" she said. Then she left.",
+   "sentences": [
+    "\"Hi.\" she said."
+   ],
+   "tail": "Then she left.",
+   "clean": "\"Hi.\" she said. Then she left.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Trailing space after the end. ",
+   "sentences": [
+    "Trailing space after the end."
+   ],
+   "tail": "",
+   "clean": "Trailing space after the end. ",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "<emote>startled. jumps back</emote> Whoa! What was that?",
+   "sentences": [
+    "<emote>startled. jumps back</emote> Whoa!"
+   ],
+   "tail": "What was that?",
+   "clean": "Whoa! What was that?",
+   "emotes": [
+    "startled. jumps back"
+   ],
+   "spans": [
+    [
+     0,
+     35
+    ]
+   ]
+  },
+  {
+   "text": "I did it! <emote>proud</emote>",
+   "sentences": [
+    "I did it!"
+   ],
+   "tail": "<emote>proud</emote>",
+   "clean": "I did it!",
+   "emotes": [
+    "proud"
+   ],
+   "spans": [
+    [
+     10,
+     30
+    ]
+   ]
+  },
+  {
+   "text": "<emote>proud<emote> I did it. Again.",
+   "sentences": [
+    "<emote>proud<emote> I did it."
+   ],
+   "tail": "Again.",
+   "clean": "I did it. Again.",
+   "emotes": [
+    "proud"
+   ],
+   "spans": [
+    [
+     0,
+     19
+    ]
+   ]
+  },
+  {
+   "text": "<emote>sleepy and still waiting for its closer. It never comes",
+   "sentences": [],
+   "tail": "<emote>sleepy and still waiting for its closer. It never comes",
+   "clean": "",
+   "emotes": [
+    "sleepy and still waiting for its closer. It never comes"
+   ],
+   "spans": [
+    [
+     0,
+     62
+    ]
+   ]
+  },
+  {
+   "text": "Sure. [emote: nods twice] Let's go. [emote: spins around",
+   "sentences": [
+    "Sure.",
+    "[emote: nods twice] Let's go."
+   ],
+   "tail": "[emote: spins around",
+   "clean": "Sure. Let's go.",
+   "emotes": [
+    "nods twice",
+    "spins around"
+   ],
+   "spans": [
+    [
+     6,
+     25
+    ],
+    [
+     36,
+     56
+    ]
+   ]
+  },
+  {
+   "text": "Nope. <EMOTE> shakes the head </Emote> Not today.",
+   "sentences": [
+    "Nope."
+   ],
+   "tail": "<EMOTE> shakes the head </Emote> Not today.",
+   "clean": "Nope. Not today.",
+   "emotes": [
+    "shakes the head"
+   ],
+   "spans": [
+    [
+     6,
+     38
+    ]
+   ]
+  },
+  {
+   "text": "Hmm. < emote >tilts. curious< / emote > What is it?",
+   "sentences": [
+    "Hmm."
+   ],
+   "tail": "< emote >tilts. curious< / emote > What is it?",
+   "clean": "Hmm. What is it?",
+   "emotes": [
+    "tilts. curious"
+   ],
+   "spans": [
+    [
+     5,
+     39
+    ]
+   ]
+  },
+  {
+   "text": "Oops <emote/> sorry. A lone </emote> closer.",
+   "sentences": [
+    "Oops <emote/> sorry."
+   ],
+   "tail": "A lone </emote> closer.",
+   "clean": "Oops sorry. A lone closer.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Look <emote>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</emote> at that. Wow.",
+   "sentences": [
+    "Look <emote>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</emote> at that."
+   ],
+   "tail": "Wow.",
+   "clean": "Look xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx at that. Wow.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "😀 Emoji first. <emote>happy 🎉. bounce</emote> Yay! Done.",
+   "sentences": [
+    "😀 Emoji first.",
+    "<emote>happy 🎉. bounce</emote> Yay!"
+   ],
+   "tail": "Done.",
+   "clean": "😀 Emoji first. Yay! Done.",
+   "emotes": [
+    "happy 🎉. bounce"
+   ],
+   "spans": [
+    [
+     15,
+     45
+    ]
+   ]
+  },
+  {
+   "text": "No break. Next one.After NEL. Tab\tend.﻿BOM is not Python whitespace.",
+   "sentences": [
+    "No break.",
+    "Next one.",
+    "After NEL."
+   ],
+   "tail": "Tab\tend.﻿BOM is not Python whitespace.",
+   "clean": "No break. Next one.After NEL. Tab\tend.﻿BOM is not Python whitespace.",
+   "emotes": [],
+   "spans": []
+  },
+  {
+   "text": "Spaced , out ! <emote>x</emote> punctuation ?",
+   "sentences": [
+    "Spaced , out !"
+   ],
+   "tail": "<emote>x</emote> punctuation ?",
+   "clean": "Spaced, out! punctuation?",
+   "emotes": [
+    "x"
+   ],
+   "spans": [
+    [
+     15,
+     31
+    ]
+   ]
+  },
+  {
+   "text": "<emote>excited</emote>",
+   "sentences": [],
+   "tail": "<emote>excited</emote>",
+   "clean": "",
+   "emotes": [
+    "excited"
+   ],
+   "spans": [
+    [
+     0,
+     22
+    ]
+   ]
+  },
+  {
+   "text": "Two tags <emote>happy</emote> in one <emote>proud</emote> sentence. Then plain.",
+   "sentences": [
+    "Two tags <emote>happy</emote> in one <emote>proud</emote> sentence."
+   ],
+   "tail": "Then plain.",
+   "clean": "Two tags in one sentence. Then plain.",
+   "emotes": [
+    "happy",
+    "proud"
+   ],
+   "spans": [
+    [
+     9,
+     29
+    ],
+    [
+     37,
+     57
+    ]
+   ]
+  },
+  {
+   "text": "[emote: wave] Hi! [emote:] Empty bracket. <emote>   </emote> Blank tag.",
+   "sentences": [
+    "[emote: wave] Hi!",
+    "[emote:] Empty bracket."
+   ],
+   "tail": "<emote>   </emote> Blank tag.",
+   "clean": "Hi! Empty bracket. Blank tag.",
+   "emotes": [
+    "wave"
+   ],
+   "spans": [
+    [
+     0,
+     13
+    ],
+    [
+     18,
+     26
+    ],
+    [
+     42,
+     60
+    ]
+   ]
+  },
+  {
+   "text": "Okay.<emote>shrug</emote> No space after the stop.",
+   "sentences": [],
+   "tail": "Okay.<emote>shrug</emote> No space after the stop.",
+   "clean": "Okay. No space after the stop.",
+   "emotes": [
+    "shrug"
+   ],
+   "spans": [
+    [
+     5,
+     25
+    ]
+   ]
+  },
+  {
+   "text": "",
+   "sentences": [],
+   "tail": "",
+   "clean": "",
+   "emotes": [],
+   "spans": []
+  }
+ ],
+ "prompts": [
+  {
+   "sentence": "Hello!",
+   "heard": null,
+   "before": null,
+   "prompt": "You say: \"Hello!\""
+  },
+  {
+   "sentence": "I found it.",
+   "heard": "Where are my keys?",
+   "before": null,
+   "prompt": "You say: \"I found it.\" to someone who said: \"Where are my keys?\""
+  },
+  {
+   "sentence": "It was under the couch.",
+   "heard": null,
+   "before": "I found it.",
+   "prompt": "You say: \"It was under the couch.\" right after: \"I found it.\""
+  },
+  {
+   "sentence": "It was under the couch.",
+   "heard": "Where are my keys?",
+   "before": "I found it.",
+   "prompt": "You say: \"It was under the couch.\" right after: \"I found it.\" to someone who said: \"Where are my keys?\""
+  },
+  {
+   "sentence": "He said \"stop\" twice.",
+   "heard": "You said \"go\".",
+   "before": "\"Fine.\"",
+   "prompt": "You say: \"He said 'stop' twice.\" right after: \"'Fine.'\" to someone who said: \"You said 'go'.\""
+  },
+  {
+   "sentence": "  lots   of\n\twhitespace  ",
+   "heard": "",
+   "before": "",
+   "prompt": "You say: \"lots of whitespace\""
+  },
+  {
+   "sentence": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+   "heard": null,
+   "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "prompt": "You say: \"word word word word word word word word word word word word word word word word word word word word word word word word word word word word…\" right after: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…\""
+  },
+  {
+   "sentence": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+   "heard": "🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉",
+   "before": "ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ",
+   "prompt": "You say: \"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…\" right after: \"ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü ü…\" to someone who said: \"🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉…\""
+  },
+  {
+   "sentence": "no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-",
+   "heard": null,
+   "before": null,
+   "prompt": "You say: \"no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-no-spaces-…\""
+  }
+ ],
+ "narration": [
+  {
+   "text": "Calling tool navigate",
+   "cut": [
+    "",
+    true
+   ]
+  },
+  {
+   "text": "ok Calling tool(x) more",
+   "cut": [
+    "ok",
+    true
+   ]
+  },
+  {
+   "text": "Calling toolé no",
+   "cut": [
+    "Calling toolé no",
+    false
+   ]
+  },
+  {
+   "text": "Calling tools",
+   "cut": [
+    "Calling tools",
+    false
+   ]
+  },
+  {
+   "text": "say Calling tool_x",
+   "cut": [
+    "say Calling tool_x",
+    false
+   ]
+  },
+  {
+   "text": "x  Calling tool y",
+   "cut": [
+    "x",
+    true
+   ]
+  }
+ ],
+ "replies": [
+  {
+   "reply": "Oh, hi! I didn't see you come in. Want to see what I found under the couch?",
+   "heard": "Hey MARS.",
+   "beats": [
+    {
+     "text": "Oh, hi!",
+     "emotes": [],
+     "before": null,
+     "heard": "Hey MARS.",
+     "prompt": "You say: \"Oh, hi!\" to someone who said: \"Hey MARS.\"",
+     "closing": []
+    },
+    {
+     "text": "I didn't see you come in.",
+     "emotes": [],
+     "before": "Oh, hi!",
+     "heard": null,
+     "prompt": "You say: \"I didn't see you come in.\" right after: \"Oh, hi!\"",
+     "closing": []
+    },
+    {
+     "text": "Want to see what I found under the couch?",
+     "emotes": [],
+     "before": "I didn't see you come in.",
+     "heard": null,
+     "prompt": "You say: \"Want to see what I found under the couch?\" right after: \"I didn't see you come in.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Oh no, I'm so sorry. That's really hard. Do you want to talk about it?",
+   "heard": "I lost my job today.",
+   "beats": [
+    {
+     "text": "Oh no, I'm so sorry.",
+     "emotes": [],
+     "before": null,
+     "heard": "I lost my job today.",
+     "prompt": "You say: \"Oh no, I'm so sorry.\" to someone who said: \"I lost my job today.\"",
+     "closing": []
+    },
+    {
+     "text": "That's really hard.",
+     "emotes": [],
+     "before": "Oh no, I'm so sorry.",
+     "heard": null,
+     "prompt": "You say: \"That's really hard.\" right after: \"Oh no, I'm so sorry.\"",
+     "closing": []
+    },
+    {
+     "text": "Do you want to talk about it?",
+     "emotes": [],
+     "before": "That's really hard.",
+     "heard": null,
+     "prompt": "You say: \"Do you want to talk about it?\" right after: \"That's really hard.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "<emote>proud</emote> I did it! The whole map is done. Took me three tries, though.",
+   "heard": "",
+   "beats": [
+    {
+     "text": "I did it!",
+     "emotes": [
+      "proud"
+     ],
+     "before": null,
+     "heard": null,
+     "prompt": "proud",
+     "closing": []
+    },
+    {
+     "text": "The whole map is done.",
+     "emotes": [],
+     "before": "I did it!",
+     "heard": null,
+     "prompt": "You say: \"The whole map is done.\" right after: \"I did it!\"",
+     "closing": []
+    },
+    {
+     "text": "Took me three tries, though.",
+     "emotes": [],
+     "before": "The whole map is done.",
+     "heard": null,
+     "prompt": "You say: \"Took me three tries, though.\" right after: \"The whole map is done.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Bye for now! <emote>waves goodbye</emote>",
+   "heard": "See you tomorrow.",
+   "beats": [
+    {
+     "text": "Bye for now!",
+     "emotes": [],
+     "before": null,
+     "heard": "See you tomorrow.",
+     "prompt": "waves goodbye",
+     "closing": [
+      "waves goodbye"
+     ]
+    }
+   ]
+  },
+  {
+   "reply": "<emote>startled. jumps back</emote> Whoa! What was that? Okay. Just the cat.",
+   "heard": "",
+   "beats": [
+    {
+     "text": "Whoa!",
+     "emotes": [
+      "startled. jumps back"
+     ],
+     "before": null,
+     "heard": null,
+     "prompt": "startled. jumps back",
+     "closing": []
+    },
+    {
+     "text": "What was that?",
+     "emotes": [],
+     "before": "Whoa!",
+     "heard": null,
+     "prompt": "You say: \"What was that?\" right after: \"Whoa!\"",
+     "closing": []
+    },
+    {
+     "text": "Okay.",
+     "emotes": [],
+     "before": "What was that?",
+     "heard": null,
+     "prompt": "You say: \"Okay.\" right after: \"What was that?\"",
+     "closing": []
+    },
+    {
+     "text": "Just the cat.",
+     "emotes": [],
+     "before": "Okay.",
+     "heard": null,
+     "prompt": "You say: \"Just the cat.\" right after: \"Okay.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Hmm. <emote>thinks</emote> Let me check. [emote: looks left] There it is!",
+   "heard": "Where is the remote?",
+   "beats": [
+    {
+     "text": "Hmm.",
+     "emotes": [],
+     "before": null,
+     "heard": "Where is the remote?",
+     "prompt": "You say: \"Hmm.\" to someone who said: \"Where is the remote?\"",
+     "closing": []
+    },
+    {
+     "text": "Let me check.",
+     "emotes": [
+      "thinks"
+     ],
+     "before": "Hmm.",
+     "heard": null,
+     "prompt": "thinks",
+     "closing": []
+    },
+    {
+     "text": "There it is!",
+     "emotes": [
+      "looks left"
+     ],
+     "before": "Let me check.",
+     "heard": null,
+     "prompt": "looks left",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "... !!! Sure.",
+   "heard": "Can you help?",
+   "beats": [
+    {
+     "text": "Sure.",
+     "emotes": [],
+     "before": null,
+     "heard": "Can you help?",
+     "prompt": "You say: \"Sure.\" to someone who said: \"Can you help?\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Two tags <emote>happy</emote> in one <emote>proud</emote> sentence. Then plain.",
+   "heard": "",
+   "beats": [
+    {
+     "text": "Two tags in one sentence.",
+     "emotes": [
+      "happy",
+      "proud"
+     ],
+     "before": null,
+     "heard": null,
+     "prompt": "proud",
+     "closing": []
+    },
+    {
+     "text": "Then plain.",
+     "emotes": [],
+     "before": "Two tags in one sentence.",
+     "heard": null,
+     "prompt": "You say: \"Then plain.\" right after: \"Two tags in one sentence.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "<emote>sleepy and still waiting for its closer. It never comes",
+   "heard": "",
+   "beats": []
+  },
+  {
+   "reply": "",
+   "heard": "Anyone there?",
+   "beats": []
+  },
+  {
+   "reply": "Sure. Calling tool navigate. Done.",
+   "heard": "Go to the kitchen.",
+   "beats": [
+    {
+     "text": "Sure.",
+     "emotes": [],
+     "before": null,
+     "heard": "Go to the kitchen.",
+     "prompt": "You say: \"Sure.\" to someone who said: \"Go to the kitchen.\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "On my way Calling tool navigate(kitchen) <emote>proud</emote>",
+   "heard": "",
+   "beats": [
+    {
+     "text": "On my way",
+     "emotes": [
+      "proud"
+     ],
+     "before": null,
+     "heard": null,
+     "prompt": "proud",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Okay! <emote>nods</emote> Calling tool wave. <emote>waves</emote>",
+   "heard": "",
+   "beats": [
+    {
+     "text": "Okay!",
+     "emotes": [],
+     "before": null,
+     "heard": null,
+     "prompt": "You say: \"Okay!\"",
+     "closing": []
+    }
+   ]
+  },
+  {
+   "reply": "Hi! <emote>happy</emote> <emote>waves</emote>",
+   "heard": "Hello?",
+   "beats": [
+    {
+     "text": "Hi!",
+     "emotes": [],
+     "before": null,
+     "heard": "Hello?",
+     "prompt": "waves",
+     "closing": [
+      "happy",
+      "waves"
+     ]
+    }
+   ]
+  },
+  {
+   "reply": "<emote>shy</emote>",
+   "heard": "Say something.",
+   "beats": []
+  }
+ ]
+}

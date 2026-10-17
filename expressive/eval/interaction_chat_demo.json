@@ -1,0 +1,181 @@
+[
+ {
+  "replies": [
+   {
+    "t": 4,
+    "says": "Hello! I am MARS",
+    "body_emotion": "neutral",
+    "fits": "partly",
+    "reason": "The robot remains still; a greeting gesture like a wave would fit better."
+   },
+   {
+    "t": 10,
+    "says": "Oh, it looks like I'm yellow!",
+    "body_emotion": "surprised",
+    "fits": "yes",
+    "reason": "It extends its arm and looks down at it, matching the realization."
+   },
+   {
+    "t": 13,
+    "says": "That's incredible news",
+    "body_emotion": "excited",
+    "fits": "yes",
+    "reason": "It raises its arm high and opens its claw as if cheering."
+   },
+   {
+    "t": 26,
+    "says": "Oh no, I'm so sorry",
+    "body_emotion": "sad",
+    "fits": "yes",
+    "reason": "It droops its head and arm downward, conveying empathy."
+   },
+   {
+    "t": 40,
+    "says": "Haha, good one!",
+    "body_emotion": "amused",
+    "fits": "yes",
+    "reason": "It bobs its body and arm up and down, simulating laughter."
+   },
+   {
+    "t": 54,
+    "says": "Hmm, I can't read minds",
+    "body_emotion": "thinking",
+    "fits": "yes",
+    "reason": "It brings its claw up to its head in a classic thinking pose."
+   },
+   {
+    "t": 109,
+    "says": "Goodbye! Have a wonderful day!",
+    "body_emotion": "friendly",
+    "fits": "yes",
+    "reason": "It extends its arm and waves."
+   }
+  ],
+  "expressive": 4,
+  "fit": 4,
+  "wrong": [
+   "0:56 - The robot starts a 'turn in place' action but continues spinning endlessly until the video ends."
+  ],
+  "seconds": 31.3
+ },
+ {
+  "replies": [
+   {
+    "t": 4,
+    "says": "Hello! I am MARS",
+    "body_emotion": "neutral",
+    "fits": "no",
+    "reason": "The robot remains completely still while greeting and offering help."
+   },
+   {
+    "t": 10,
+    "says": "Oh, it looks like I'm yellow",
+    "body_emotion": "neutral",
+    "fits": "no",
+    "reason": "The robot expresses surprise about its own color but makes no corresponding movement."
+   },
+   {
+    "t": 13,
+    "says": "That's incredible news",
+    "body_emotion": "excited",
+    "fits": "yes",
+    "reason": "The arm pumps up and down, matching the happy and congratulatory tone."
+   },
+   {
+    "t": 26,
+    "says": "Oh no, I'm so sorry",
+    "body_emotion": "sad",
+    "fits": "yes",
+    "reason": "The drooping head and lowered arm effectively convey sympathy and sadness."
+   },
+   {
+    "t": 40,
+    "says": "Haha, good one!",
+    "body_emotion": "amused",
+    "fits": "yes",
+    "reason": "The shaking arm and head bobbing mimic laughter well."
+   },
+   {
+    "t": 54,
+    "says": "Hmm, I can't read minds",
+    "body_emotion": "searching",
+    "fits": "partly",
+    "reason": "Turning side to side looks more like looking around than pondering a guess."
+   },
+   {
+    "t": 109,
+    "says": "Goodbye! Have a wonderful day!",
+    "body_emotion": "friendly",
+    "fits": "yes",
+    "reason": "The waving arm motion perfectly matches the farewell."
+   }
+  ],
+  "expressive": 4,
+  "fit": 4,
+  "wrong": [
+   "0:04 - No movement during the first greeting.",
+   "0:10 - No movement when expressing realization about its own color.",
+   "1:20 - The robot turns left for no reason after the conversation has already ended."
+  ],
+  "seconds": 36.7
+ },
+ {
+  "replies": [
+   {
+    "t": 4,
+    "says": "Hello! I am MARS",
+    "body_emotion": "attentive",
+    "fits": "yes",
+    "reason": "The robot lifts its arm and head slightly in a standard greeting posture."
+   },
+   {
+    "t": 10,
+    "says": "Oh, it looks like I'm yellow!",
+    "body_emotion": "curious",
+    "fits": "yes",
+    "reason": "The robot looks down at its own arm as if noticing its color for the first time."
+   },
+   {
+    "t": 13,
+    "says": "That's incredible news",
+    "body_emotion": "excited",
+    "fits": "yes",
+    "reason": "The robot raises its arm high and wiggles its body to show happiness."
+   },
+   {
+    "t": 26,
+    "says": "Oh no, I'm so sorry",
+    "body_emotion": "sad",
+    "fits": "yes",
+    "reason": "The robot lowers its head and covers its face with its arm, showing empathy."
+   },
+   {
+    "t": 40,
+    "says": "Haha, good one!",
+    "body_emotion": "sad",
+    "fits": "no",
+    "reason": "The robot is laughing but its body remains in the sad, face-covering pose."
+   },
+   {
+    "t": 54,
+    "says": "Hmm, I can't read minds",
+    "body_emotion": "thinking",
+    "fits": "yes",
+    "reason": "The robot brings its claw to its 'chin' as if pondering a question."
+   },
+   {
+    "t": 109,
+    "says": "Goodbye! Have a wonderful day!",
+    "body_emotion": "friendly",
+    "fits": "yes",
+    "reason": "The robot waves its arm to say farewell."
+   }
+  ],
+  "expressive": 4,
+  "fit": 4,
+  "wrong": [
+   "0:40 - The robot laughs at a joke but remains stuck in the sad animation from the previous message."
+  ],
+  "seconds": 40.4
+ }
+]

@@ -1,0 +1,45 @@
+# MARS explains its expressive harness, in its own voice: `uv run mars-express show demo/show.yaml out/demo/mars_explains.mp4`
+title: MARS · expressive harness
+voice: Samantha
+rate: 172
+intro: 1.2
+outro: 1.8
+beats:
+  - say: "Hi! I'm MARS."
+    emote: "a cheerful hello: perk up and lean toward the person"
+    pause: 0.3
+  - say: "I can't smile. I don't even have a face. So I talk with my whole body."
+    emote: "a sheepish little shrug, then opening up warmly"
+    pause: 0.2
+  - say: "First, approach. Leaning in means I'm interested in you."
+    recipe: "go .8 a=.85 p=.4 d=.06 g=.3 E=1 | hold 1.4 E=.6 | go .8 a=0 d=0 p=.1 g=.15 E=.8"
+    note: "approach: lean in"
+  - say: "Expand. Happy, I open up wide. Shy, I fold up small."
+    recipe: "go .4 x=.9 g=.8 z=.2 p=.4 E=2 | hold 1.1 E=1 | go .7 x=-.85 g=.05 z=-.3 a=-.3 p=-.4 E=.5 | hold 1.1 E=.3 | go .6 x=0 z=0 a=0 p=0 g=.15 E=.6"
+    note: "expand: open wide, fold small"
+  - say: "Rise. Proud, I stand tall. Sad, I sink low."
+    recipe: "go .7 z=.95 p=.5 x=.3 E=1 | hold 1.2 E=.6 | go 1.2 z=-.85 p=-.8 x=-.5 E=.3 | hold 1.1 E=.2 | go .7 z=0 p=0 x=0 E=.6"
+    note: "rise: tall and low"
+  - say: "Attend. My head only tilts, so it's my gaze: up to your face, or down at the floor."
+    recipe: "go .5 p=.9 a=.1 E=1 | hold 1.6 E=.5 | go .7 p=-.95 E=.5 | hold 1.4 E=.3 | go .5 p=.2 a=0 E=.6"
+    note: "attend: gaze up, gaze down"
+  - say: "And askew. A little tilt makes me look curious."
+    recipe: "go .4 k=.75 p=.4 a=.3 g=.3 E=1.5 | hold .8 E=.6 | go .4 k=-.75 E=1.5 | hold .8 E=.6 | go .5 k=0 a=0 p=.1 g=.15 E=.6"
+    note: "askew: the cocked head"
+  - say: "My gripper is my mouth, and my wheels are my stance."
+    recipe: "osc 1.2 chatter .35 .4 E=1 | go .5 b=20 | go .6 b=-20 | go .5 b=0 d=.08 | go .6 d=0"
+    note: "grip, orient, advance"
+  - say: "A language model turns each feeling into a short motion recipe. A generator adds the life: overshoot, jitter, breath."
+    emote: "thoughtful, explaining something carefully"
+    pause: 0.3
+  - say: "And when I talk, I sway with my own voice, like this."
+    pause: 0.4
+  - say: "Oh. Oh no..."
+    pause: 0.1
+  - say: "Ah... ah... ah... CHOO!"
+    emote: "a big sneeze is coming. Ah... ah... choo!"
+    sync: release
+    pause: 0.6
+  - say: "Excuse me. Anyway, that's how I talk without a face. Pretty good, right?"
+    emote: "proud of yourself: chest out, chin up"
+    pause: 0.5

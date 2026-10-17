@@ -442,6 +442,25 @@ async def armsdk_model(request: web.Request) -> web.StreamResponse:
     return await _serve_static(target, request)
 
 
+# The Expression Studio (/expression) previews motion through the same basis.json the
+# robot's expressive driver loads: the installed brain_client package's copy, else the
+# source checkout's (a sim that has not built yet).
+BRAIN_CLIENT_INSTALL = ROOT.parent / "ros2_ws" / "install" / "brain_client"
+BASIS_SOURCE = ROOT.parent / "ros2_ws" / "src" / "brain" / "brain_client" / "brain_client" / "expressive" / "basis.json"
+
+
+def _basis_path() -> "Path | None":
+    installed = sorted(BRAIN_CLIENT_INSTALL.glob("**/python3*/*-packages/brain_client/expressive/basis.json"))
+    return next((p for p in (*installed, BASIS_SOURCE) if p.is_file()), None)
+
+
+async def expression_basis(request: web.Request) -> web.StreamResponse:
+    target = await asyncio.to_thread(_basis_path)
+    if target is None:
+        raise web.HTTPNotFound(text="basis.json not found: is brain_client built?")
+    return await _serve_static(target, request)
+
+
 async def _pump(src: "web.WebSocketResponse | aiohttp.ClientWebSocketResponse", dst) -> None:
     """Relay every frame from src to dst until either side closes."""
     async for msg in src:
@@ -531,6 +550,7 @@ def build_app() -> web.Application:
         app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)
+    app.router.add_get("/expression/basis.json", expression_basis)
     # Prefix routes must precede the catch-all so /models/foo.glb doesn't fall to
     # the SPA shell — first matching resource wins in add order.
     for prefix in SIM_VIEWER_ROUTES:

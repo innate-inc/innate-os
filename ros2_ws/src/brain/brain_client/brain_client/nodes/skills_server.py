@@ -34,7 +34,7 @@ from brain_client.robot.manipulation import Manipulation
 from brain_client.robot.mobility import Mobility
 from brain_client.robot.spatial_memory import SpatialMemory
 from brain_client.skills import overlay
-from brain_client.skills.catalog import SkillRepository
+from brain_client.skills.catalog import BODY_PARTS, SkillRepository, declared_body
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
 from brain_client.skills.invoker import SkillInvoker
 from brain_client.skills.robot_state import RobotStateProvider
@@ -300,7 +300,9 @@ class SkillsActionServer(Node):
         else:
             name = skill_type
         run_id = uuid.uuid4().hex
-        self._publish_skill_status(run_id, skill_type, name, "running", args=inputs)
+        # Which parts the run may move, for the expression layer to yield only those.
+        body = sorted(declared_body(entry.skill_class)) if entry is not None else list(BODY_PARTS)
+        self._publish_skill_status(run_id, skill_type, name, "running", args=inputs, body=body)
         try:
             if entry is not None:
                 result = self._execute_code_skill(goal_handle, skill_type, inputs, entry)
@@ -350,6 +352,7 @@ class SkillsActionServer(Node):
         status: str,
         reason: str | None = None,
         args: dict | None = None,
+        body: list[str] | None = None,
     ) -> None:
         payload = {
             "primitive_name": name,
@@ -365,6 +368,8 @@ class SkillsActionServer(Node):
         # emotion, so clients show them alongside the name.
         if args:
             payload["args"] = args
+        if body is not None:
+            payload["body"] = body
         self._skill_status_pub.publish(String(data=json.dumps(payload)))
 
     def _create_run_node(self):
