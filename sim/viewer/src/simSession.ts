@@ -17,6 +17,7 @@ import type {
 import type { PropInfo } from "./props";
 import type { SimulationClock } from "./slowdown";
 import { interpolateTraffic } from "./trafficState";
+import type { RoomInfo } from "./roomManifest";
 import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
@@ -102,6 +103,7 @@ export class SimSession {
     joints: Record<string, number>;
     objects: Record<string, number[]>;
     traffic: TrafficState | null;
+    fire: import("./fire").FireState | null;
   }[] = [];
   #gaps: number[] = []; // recent inter-arrival gaps: sizes the playback delay
   #lastArrival = 0;
@@ -134,6 +136,10 @@ export class SimSession {
   // Traffic is a separate environment-owned system, not a manipulation prop:
   // Clear/objectsPresent/challenges must never remove or count these cars.
   #trafficManifest: TrafficManifest = [];
+
+  // A primitive-authored world's geometry (statics.py), in the same roster
+  // frame; empty for a mesh world. Drawn by the scene, never by the stage.
+  #rooms: RoomInfo[] = [];
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -212,6 +218,10 @@ export class SimSession {
       this.#trafficManifest = manifest;
       this.#propsDirty = true;
     };
+    this.#controller.onRooms = (rooms) => {
+      this.#rooms = rooms;
+      this.#propsDirty = true;
+    };
     this.#controller.onChallenges = (challenges) => {
       // Arrives ahead of the stream, so the merge below has titles and briefs
       // before the first block; on a reconnect it just replaces them.
@@ -252,6 +262,7 @@ export class SimSession {
         joints: s.joints,
         objects: s.objects,
         traffic: s.traffic,
+        fire: s.fire ?? null,
       };
       if (last !== undefined && s.worldEpoch !== last.worldEpoch) {
         // Any reset is a hard generation boundary even if it happened before
@@ -407,8 +418,8 @@ export class SimSession {
   }
 
   /** Start a challenge by id (resets the world and drops its props). */
-  startChallenge(id: string): void {
-    this.#controller?.send({ op: "start_challenge", id });
+  startChallenge(id: string): boolean {
+    return this.#controller?.send({ op: "start_challenge", id }) ?? false;
   }
 
   /** Abort the active challenge (or dismiss a finished one). */
@@ -473,6 +484,7 @@ export class SimSession {
       this.#propsDirty = false;
       scene.setPropManifest(this.#props);
       scene.setTrafficManifest(this.#trafficManifest);
+      scene.setRoomManifest(this.#rooms);
     }
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;
@@ -494,6 +506,7 @@ export class SimSession {
     else this.#playT += dt + (target - this.#playT) * Math.min(1, dt * 4);
 
     const [a, b, u] = bracket(this.#samples, this.#playT);
+    scene.setFireState(b.fire ?? null, a.t + (b.t - a.t) * u);
     const x = a.x + (b.x - a.x) * u;
     const y = a.y + (b.y - a.y) * u;
     const dyaw = Math.atan2(Math.sin(b.yaw - a.yaw), Math.cos(b.yaw - a.yaw));

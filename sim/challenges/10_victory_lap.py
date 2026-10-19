@@ -18,6 +18,7 @@ CHALLENGE = Challenge(
         "running its victory_spin skill."
     ),
     setup=[],
+    prompt="We won the championship! Celebrate with a victory spin!",
     goals=[
         Goal("Run a victory lap to celebrate", SkillDone("victory_spin")),
     ],

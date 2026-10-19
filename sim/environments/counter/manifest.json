@@ -1,0 +1,21 @@
+{
+  "display_name": "Counter",
+  "bundle": "bundles/counter",
+  "navigation": {
+    "map_yaml": "map/counter.yaml"
+  },
+  "viewer": {
+    "type": "primitives"
+  },
+  "spawn": {
+    "x": 0.0,
+    "y": -1.35,
+    "yaw_degrees": 90.0
+  },
+  "attribution": {
+    "name": "Counter",
+    "author": "innate benchmark (authored in Roblox Studio, exported as MuJoCo primitives)",
+    "license": "Apache-2.0",
+    "source": "sim/bundles/counter"
+  }
+}
