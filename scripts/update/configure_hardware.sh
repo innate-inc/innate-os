@@ -41,16 +41,43 @@ REBOOT_REQUIRED=false
 # -----------------------------------------------------------------------------
 log "Checking I2S audio configuration..."
 
+# Jetson-IO keeps old LABEL stanzas when NVIDIA updates reset DEFAULT to
+# primary. Only the explicitly selected stanza describes the next boot.
+i2s_boot_entry_configured() {
+    awk '
+        { sub(/#.*/, ""); key = toupper($1) }
+        key == "DEFAULT" { default_label = $2; defaults++; next }
+        key == "LABEL" { label = $2; labels[label]++; next }
+        label == "" { next }
+        key == "MENU" && toupper($2) == "LABEL" && tolower($0) ~ /uda1334/ {
+            audio_title[label] = 1
+        }
+        key == "FDT" && NF == 2 { dtb[label] = 1 }
+        (key == "FDT" || key == "FDTOVERLAYS" || key == "OVERLAYS") &&
+            tolower($0) ~ /uda1334/ { audio_path[label] = 1 }
+        END {
+            # Jetson-IO may bake the overlay into a generically named custom
+            # FDT, recording the hardware name in MENU LABEL instead.
+            exit !(defaults == 1 && default_label != "" &&
+                labels[default_label] == 1 && (audio_path[default_label] ||
+                (audio_title[default_label] && dtb[default_label])))
+        }
+    ' /boot/extlinux/extlinux.conf 2>/dev/null
+}
+
 # Only run on Jetson (check if jetson-io exists)
 if [ -f "/opt/nvidia/jetson-io/config-by-hardware.py" ]; then
-    # Check if Adafruit UDA1334A overlay is already configured
-    if grep -q "UDA1334" /boot/extlinux/extlinux.conf 2>/dev/null; then
-        log "  I2S audio overlay already configured"
+    if i2s_boot_entry_configured; then
+        log "  I2S audio overlay already configured in the default boot entry"
     else
-        log "  Configuring I2S audio overlay (Adafruit UDA1334A for MAX98357A)..."
+        log "  Configuring I2S audio overlay in the default boot entry (Adafruit UDA1334A for MAX98357A)..."
         if /opt/nvidia/jetson-io/config-by-hardware.py -n "Adafruit UDA1334A" 2>&1; then
-            log "  I2S audio overlay configured successfully"
-            REBOOT_REQUIRED=true
+            if i2s_boot_entry_configured; then
+                log "  I2S audio overlay configured successfully in the default boot entry (reboot required)"
+                REBOOT_REQUIRED=true
+            else
+                log "  WARNING: Jetson-IO completed but the default boot entry still lacks the I2S audio overlay"
+            fi
         else
             log "  WARNING: Failed to configure I2S audio overlay"
         fi
