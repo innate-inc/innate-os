@@ -882,6 +882,7 @@ LLM_KEY=""
 draw_llm_options() {
     llm_row=0
     for llm_label in "Your own Gemini key   get one at https://aistudio.google.com/api-keys" \
+        "Your own OpenAI key   get one at https://platform.openai.com/api-keys" \
         "Innate service key    from your robot, or ask on https://discord.gg/innate" \
         "None                  run the simulator without an agent"; do
         llm_row=$((llm_row + 1))
@@ -911,14 +912,14 @@ ask_llm_backend() {
     hide_cursor
     llm_redraw=0
     while :; do
-        [ "$llm_redraw" -eq 1 ] && printf '\033[3A'
+        [ "$llm_redraw" -eq 1 ] && printf '\033[4A'
         draw_llm_options "$llm_choice"
         llm_redraw=1
         read_key
         case "$key" in
-            up | k) llm_choice=$(((llm_choice + 1) % 3 + 1)) ;;
-            down | j) llm_choice=$((llm_choice % 3 + 1)) ;;
-            1 | 2 | 3) llm_choice=$key ;;
+            up | k) llm_choice=$(((llm_choice + 2) % 4 + 1)) ;;
+            down | j) llm_choice=$((llm_choice % 4 + 1)) ;;
+            1 | 2 | 3 | 4) llm_choice=$key ;;
             interrupt)
                 stty "$stty_saved" <&3
                 show_cursor
@@ -933,7 +934,8 @@ ask_llm_backend() {
 
     case "$llm_choice" in
         1) LLM_BACKEND=gemini ;;
-        2) LLM_BACKEND=innate ;;
+        2) LLM_BACKEND=openai ;;
+        3) LLM_BACKEND=innate ;;
         *) LLM_BACKEND=none ;;
     esac
     [ "$LLM_BACKEND" = "none" ] && return 0
@@ -949,7 +951,11 @@ draw_llm_key() {
 }
 
 read_llm_key() {
-    [ "$LLM_BACKEND" = "gemini" ] && llm_prompt="Paste your Gemini API key" || llm_prompt="Paste your Innate service key"
+    case "$LLM_BACKEND" in
+        gemini) llm_prompt="Paste your Gemini API key" ;;
+        openai) llm_prompt="Paste your OpenAI API key" ;;
+        *) llm_prompt="Paste your Innate service key" ;;
+    esac
     stty_saved=$(stty -g <&3)
     stty raw -echo <&3
     hide_cursor
