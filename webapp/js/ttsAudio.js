@@ -13,6 +13,9 @@ import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
 
 const TTS_AUDIO_TOPIC = "/tts/audio";
 
+// How long a clip the browser refused waits for the click that unblocks it.
+const BLOCKED_HOLD_MS = 30_000;
+
 let started = false;
 
 // One speaker across tabs: rosbridge fans /tts/audio out to every client, so
@@ -101,10 +104,28 @@ function play(b64) {
   audio.addEventListener("ended", done, { once: true });
   audio.addEventListener("error", done, { once: true });
   audio.play().catch((err) => {
-    // Browser autoplay policies block playback until the user has interacted
-    // with the page; after any click/keypress this succeeds.
-    console.warn("[tts] autoplay blocked (interact with the page first):", err?.message || err);
-    done();
+    // Autoplay policies block playback until this document has been interacted
+    // with, and the first thing the robot says arrives before anyone has
+    // clicked: hold that clip for the first gesture instead of losing it.
+    console.warn("[tts] autoplay blocked, holding the clip for the first interaction:", err?.message || err);
+    // Released while we wait: a held clip must not mute the microphone.
+    setTtsPlaying(false);
+    const stopWaiting = () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+    const onGesture = () => {
+      stopWaiting();
+      setTtsPlaying(true);
+      audio.play().catch(done);
+    };
+    const timer = setTimeout(() => {
+      stopWaiting();
+      done(); // nobody came; the rest of the reply must not wait forever
+    }, BLOCKED_HOLD_MS);
+    window.addEventListener("pointerdown", onGesture);
+    window.addEventListener("keydown", onGesture);
   });
 }
 
