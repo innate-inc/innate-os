@@ -4,11 +4,15 @@
 // Camera Calibration page — drives the mars_cam stereo_calibrator's interactive
 // ChArUco stereo calibration over the RunStereoCalibration action. Start opens
 // the goal and keeps it running while the operator moves the board in view of
-// the live feed and clicks Capture (one enter_events publish per click); live
+// the live feed and clicks Capture / presses Space (one enter_events publish
+// per trigger) or enables auto-capture (one publish per second); live
 // feedback after each capture shows progress + whether the board was seen, plus
-// the two coverage-dot debug images. The goal resolves (RMS errors) once enough
-// images are captured, Stop cancels it, or the server's capture watchdog times
-// out. Only MODE_MANUAL exists today, so the goal always sends mode: 0.
+// the two coverage-dot debug images (red-tinted cells = not yet covered). The
+// goal resolves (RMS errors) once enough images are captured AND every
+// coverage-grid cell has seen a corner in both cameras (the image count is a
+// floor, so captures keep counting past the target until coverage completes),
+// Stop cancels it, or the server's capture watchdog times out. Only
+// MODE_MANUAL exists today, so the goal always sends mode: 0.
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
@@ -97,7 +101,9 @@ function buildView(root) {
   const controls = document.createElement("div");
   controls.className = "calib-panel";
 
-  const numField = fieldRow("Images to capture", String(STEREO_CALIB_DEFAULT_NUM_IMAGES));
+  // A minimum, not a cap: the server keeps accepting captures past this count
+  // until the coverage grid is complete in both cameras.
+  const numField = fieldRow("Images to capture (min)", String(STEREO_CALIB_DEFAULT_NUM_IMAGES));
   const minField = fieldRow("Min corners per capture", String(STEREO_CALIB_DEFAULT_MIN_CORNERS));
 
   const saveRow = document.createElement("label");
@@ -109,6 +115,14 @@ function buildView(root) {
   saveText.textContent =
     "Save calibration when done (backs up the existing calibration file, then writes the new one)";
   saveRow.append(saveCheckbox, saveText);
+
+  const autoRow = document.createElement("label");
+  autoRow.className = "calib-checkbox-row";
+  const autoCheckbox = document.createElement("input");
+  autoCheckbox.type = "checkbox";
+  const autoText = document.createElement("span");
+  autoText.textContent = "Auto-capture every second while calibration is running";
+  autoRow.append(autoCheckbox, autoText);
 
   const boardLink = document.createElement("a");
   boardLink.className = "calib-board-link";
@@ -160,7 +174,7 @@ function buildView(root) {
   const statusLine = document.createElement("p");
   statusLine.className = "calib-status microlabel";
 
-  controls.append(boardLink, numField.row, minField.row, saveRow, actionRow, statusLine);
+  controls.append(boardLink, numField.row, minField.row, saveRow, autoRow, actionRow, statusLine);
 
   // ---- live feedback --------------------------------------------------------
   const feedback = document.createElement("div");
@@ -372,10 +386,40 @@ function buildView(root) {
     );
   }
 
-  captureBtn.addEventListener("click", () => {
+  function doCapture() {
     if (!activeRun || activeRun.canceling) return;
     ros.publish(STEREO_CALIB_CAPTURE_TOPIC, { data: true });
-  });
+  }
+
+  captureBtn.addEventListener("click", doCapture);
+
+  // Space triggers a capture while a run is active (unless typing in a field).
+  // preventDefault stops the page from scrolling and a focused button from
+  // firing its own click on keyup, which would double-capture.
+  /** @param {KeyboardEvent} e */
+  function onKeydown(e) {
+    if (e.code !== "Space" || e.repeat || !activeRun) return;
+    const t = e.target;
+    if (t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    e.preventDefault();
+    doCapture();
+  }
+  document.addEventListener("keydown", onKeydown);
+
+  // Auto-capture: one publish per second while a run is active and the box is
+  // checked. Synced from render(), which runs on every state transition (start,
+  // stop, cancel, result) and checkbox change.
+  /** @type {number | null} */
+  let autoTimer = null;
+  function syncAutoCapture() {
+    const shouldRun = !!activeRun && !activeRun.canceling && autoCheckbox.checked;
+    if (shouldRun && autoTimer === null) autoTimer = setInterval(doCapture, 1000);
+    else if (!shouldRun && autoTimer !== null) {
+      clearInterval(autoTimer);
+      autoTimer = null;
+    }
+  }
+  autoCheckbox.addEventListener("change", () => render());
 
   stopBtn.addEventListener("click", () => {
     if (!activeRun || activeRun.canceling) return;
@@ -451,9 +495,12 @@ function buildView(root) {
     captureBtn.disabled = !activeRun || activeRun.canceling;
     stopBtn.disabled = !activeRun || activeRun.canceling;
     stopBtn.textContent = activeRun?.canceling ? "Stopping…" : "Stop";
+    syncAutoCapture();
 
     statusLine.textContent = activeRun
-      ? "Calibration running — move the board and click Capture"
+      ? autoCheckbox.checked
+        ? "Calibration running — auto-capturing every second"
+        : "Calibration running — move the board and click Capture or press Space"
       : ros.state === "connected"
         ? "Idle"
         : "Not connected";
@@ -538,6 +585,8 @@ function buildView(root) {
     destroy() {
       unsubState();
       unsubDepthCheck();
+      document.removeEventListener("keydown", onKeydown);
+      if (autoTimer !== null) clearInterval(autoTimer);
       clearInterval(countdownTicker);
       if (calibCheckTimer !== null) clearTimeout(calibCheckTimer);
       // A run left going while the operator navigates away must not keep
