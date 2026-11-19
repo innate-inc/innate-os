@@ -35,7 +35,8 @@ void MarsArmNode::controlTimerCallback() {
         std::vector<double> velocities_rad;
         for (size_t j = 0; j < positions.size(); ++j) {
             positions_rad.push_back(jointRad(positions[j], j));
-            const double vel = (velocities[j] * 2 * M_PI) / 4096.0;
+            // X-series Present Velocity unit is 0.229 rev/min per count
+            const double vel = (velocities[j] * 0.229 * 2 * M_PI) / 60.0;
             velocities_rad.push_back(flippedJoint(j) ? -vel : vel);
         }
 
